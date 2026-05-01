@@ -28,17 +28,17 @@ import (
 )
 
 var (
-	addr                    string
-	healthProbeBindAddress  string
-	metricsBindAddress      string
-	webhookBindAddress      string
-	chartsDir               string
-	gitDir                  string
-	leaderElect             bool
-	logLevel                string
-	logFormat               string
-	allowedOrigin           string
-	catalogRefreshDuration  time.Duration
+	addr                   string
+	healthProbeBindAddress string
+	metricsBindAddress     string
+	webhookBindAddress     string
+	chartsDir              string
+	gitDir                 string
+	leaderElect            bool
+	logLevel               string
+	logFormat              string
+	allowedOrigin          string
+	catalogRefreshDuration time.Duration
 )
 
 func main() {

@@ -30,10 +30,10 @@ const (
 type StrategyType string
 
 const (
-	StrategyTypeRollingUpdate      StrategyType = "RollingUpdate"
-	StrategyTypeBlueGreen          StrategyType = "BlueGreen"
-	StrategyTypeCanary             StrategyType = "Canary"
-	StrategyTypeAutomaticRecovery  StrategyType = "AutomaticRecovery"
+	StrategyTypeRollingUpdate     StrategyType = "RollingUpdate"
+	StrategyTypeBlueGreen         StrategyType = "BlueGreen"
+	StrategyTypeCanary            StrategyType = "Canary"
+	StrategyTypeAutomaticRecovery StrategyType = "AutomaticRecovery"
 )
 
 // DeployStrategyType defines the deployment method

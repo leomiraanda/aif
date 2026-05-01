@@ -1,0 +1,23 @@
+run:
+  timeout: 5m
+  tests: false
+
+linters:
+  disable-all: true
+  enable:
+    - gofmt
+    - govet
+    - errcheck
+    - ineffassign
+    - unused
+
+issues:
+  exclude-files:
+    - ".*\\.pb\\.go$"
+    - "zz_generated.*\\.go$"
+  exclude-dirs:
+    - dashboard
+    - harvester-ui-extension
+    - suse-ai-lifecycle-manager
+    - hack
+    - ui

@@ -27,13 +27,13 @@ func Register(mux *http.ServeMux, logger *slog.Logger, allowedOrigin string) {
 	// Health endpoint (separate from controller-runtime health)
 	mux.HandleFunc("/healthz", corsHandler(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+		_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 	}))
 
 	// API version endpoint
 	mux.HandleFunc("/api/v1/version", corsHandler(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]string{
+		_ = json.NewEncoder(w).Encode(map[string]string{
 			"version": "0.1.0",
 			"service": "aif-operator",
 		})

@@ -8,9 +8,9 @@ import (
 type BundlePhase string
 
 const (
-	BundlePhaseDraft             BundlePhase = "Draft"
-	BundlePhaseSubmitted         BundlePhase = "Submitted"
-	BundlePhaseChangesRequested  BundlePhase = "ChangesRequested"
+	BundlePhaseDraft            BundlePhase = "Draft"
+	BundlePhaseSubmitted        BundlePhase = "Submitted"
+	BundlePhaseChangesRequested BundlePhase = "ChangesRequested"
 )
 
 // TestDeployResult represents the outcome of a test deployment

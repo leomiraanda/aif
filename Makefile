@@ -1,5 +1,8 @@
 .PHONY: help build test run docker-build docker-push helm-install helm-uninstall charts-package lint manifests generate install-tools
 
+# Force bash shell on Windows (supports Unix commands like mkdir -p)
+SHELL := bash
+
 # Variables
 BINARY_NAME=aif-operator
 DOCKER_IMAGE=aif
@@ -25,7 +28,7 @@ help:
 
 build:
 	@echo "Building $(BINARY_NAME)..."
-	@mkdir -p $(BIN_DIR)
+	@bash -c "mkdir -p $(BIN_DIR)"
 	go build -o $(BIN_DIR)/$(BINARY_NAME) ./cmd/operator
 
 test:
@@ -58,34 +61,29 @@ charts-package:
 
 lint:
 	@echo "Running linters..."
-	@which golangci-lint > /dev/null || (echo "golangci-lint not found. Run 'make install-tools'" && exit 1)
 	golangci-lint run ./...
 
 manifests:
 	@echo "Generating CRD manifests..."
-	@which controller-gen > /dev/null || (echo "controller-gen not found. Run 'make install-tools'" && exit 1)
-	@mkdir -p charts/aif-operator/crds
-	controller-gen crd paths=./api/... output:crd:artifacts:config=charts/aif-operator/crds
+	@bash -c "mkdir -p charts/aif-operator/crds"
+	controller-gen crd paths=./api/v1alpha1 output:crd:artifacts:config=charts/aif-operator/crds
 
 generate:
 	@echo "Running code generators..."
-	@which controller-gen > /dev/null || (echo "controller-gen not found. Run 'make install-tools'" && exit 1)
-	controller-gen object:headerFile=hack/boilerplate.go.txt paths=./api/...
+	controller-gen object:headerFile=hack/boilerplate.go.txt paths=./api/v1alpha1
 
 install-tools:
-	@echo "Installing development tools from go.mod..."
-	@echo "Installing controller-gen..."
-	@GOBIN=$(GOBIN) go install sigs.k8s.io/controller-tools/cmd/controller-gen
-	@echo "Installing kubebuilder (for envtest binaries)..."
-	@GOBIN=$(GOBIN) go install sigs.k8s.io/kubebuilder/v3/cmd
-	@echo ""
-	@echo "Installing additional tools from go.mod pinned versions..."
-	@echo "Installing golangci-lint..."
-	@GOBIN=$(GOBIN) go install github.com/golangci/golangci-lint/cmd/golangci-lint
-	@echo "Installing mockgen..."
-	@GOBIN=$(GOBIN) go install go.uber.org/mock/mockgen
-	@echo "Installing ginkgo..."
-	@GOBIN=$(GOBIN) go install github.com/onsi/ginkgo/v2/ginkgo
+	@echo "Installing development tools with pinned versions..."
+	@echo "Installing controller-gen v0.20.1..."
+	go install sigs.k8s.io/controller-tools/cmd/controller-gen@v0.20.1
+	@echo "Installing golangci-lint v1.64.8..."
+	go install github.com/golangci/golangci-lint/cmd/golangci-lint@v1.64.8
+	@echo "Installing mockgen v0.4.0..."
+	go install go.uber.org/mock/mockgen@v0.4.0
+	@echo "Installing ginkgo v2.27.4..."
+	go install github.com/onsi/ginkgo/v2/ginkgo@v2.27.4
 	@echo ""
 	@echo "All tools installed successfully to $(GOBIN)"
 	@echo "Make sure $(GOBIN) is in your PATH"
+	@echo ""
+	@echo "Note: kubebuilder/envtest setup is deferred to Phase 1 (P1-8)"
