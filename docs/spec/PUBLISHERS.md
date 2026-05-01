@@ -74,7 +74,7 @@ subjects:
     name: platform-engineering
     apiGroup: rbac.authorization.k8s.io
   - kind: Group
-    name: ai-platform-leads
+    name: aif-leads
     apiGroup: rbac.authorization.k8s.io
 ```
 
@@ -139,20 +139,20 @@ to confirm the binding is in place.
 
 When Rancher is configured with OIDC, group membership flows through the Rancher proxy as the `Impersonate-Group` header. AIF's `SubjectAccessReview` honours this naturally — no AIF-side configuration is required.
 
-Step-by-step example with a Keycloak group called `ai-platform-publishers`:
+Step-by-step example with a Keycloak group called `aif-publishers`:
 
 1. In Keycloak, ensure the `groups` claim is included in the ID token for the OIDC client Rancher uses.
 2. In Rancher, go to **Users & Authentication** → **Auth Provider** (Keycloak) → confirm group claim mapping is enabled.
-3. Add the `ai-platform-publishers` group to relevant Keycloak users.
+3. Add the `aif-publishers` group to relevant Keycloak users.
 4. Run:
 
 ```bash
 kubectl create clusterrolebinding aif-publishers \
   --clusterrole=aif-blueprint-publisher \
-  --group=ai-platform-publishers
+  --group=aif-publishers
 ```
 
-5. A user logged in to Rancher as a member of `ai-platform-publishers` will now see Approve / Request Changes enabled in AIF.
+5. A user logged in to Rancher as a member of `aif-publishers` will now see Approve / Request Changes enabled in AIF.
 
 ---
 

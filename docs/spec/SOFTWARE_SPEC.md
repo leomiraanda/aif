@@ -251,7 +251,7 @@ A Reference Blueprint chart can technically be deployed via the Apps page Instal
 
 #### What stays on the Apps page regardless
 
-The fact that something is a Helm chart doesn't qualify it to be hidden — only charts the mirror process has classified as Reference Blueprints (via the `ai-platform.suse.com/role: reference-blueprint` annotation) are filtered out. NIM model charts, building-block components, and SUSE Application Collection apps all continue to appear in the Apps catalog as normal.
+The fact that something is a Helm chart doesn't qualify it to be hidden — only charts the mirror process has classified as Reference Blueprints (via the `ai.suse.com/role: reference-blueprint` annotation) are filtered out. NIM model charts, building-block components, and SUSE Application Collection apps all continue to appear in the Apps catalog as normal.
 
 ### App Install and Bundle Composition
 

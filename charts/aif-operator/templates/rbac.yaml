@@ -6,7 +6,7 @@ metadata:
     {{- include "aif-operator.labels" . | nindent 4 }}
 rules:
   - apiGroups:
-      - ai-platform.suse.com
+      - ai.suse.com
     resources:
       - blueprints
       - bundles
@@ -22,7 +22,7 @@ rules:
       - patch
       - delete
   - apiGroups:
-      - ai-platform.suse.com
+      - ai.suse.com
     resources:
       - blueprints/status
       - bundles/status
@@ -102,7 +102,7 @@ metadata:
     {{- include "aif-operator.labels" . | nindent 4 }}
 rules:
   - apiGroups:
-      - ai-platform.suse.com
+      - ai.suse.com
     resources:
       - blueprints
     verbs:
@@ -110,7 +110,7 @@ rules:
       - update
       - patch
   - apiGroups:
-      - ai-platform.suse.com
+      - ai.suse.com
     resources:
       - blueprints/status
     verbs:

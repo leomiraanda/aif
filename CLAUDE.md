@@ -44,7 +44,7 @@ aif/
 ```
 
 **Key directories:**
-- `api/v1alpha1/` — All five CRD Go types (group `ai-platform.suse.com`); run `make manifests generate` after edits
+- `api/v1alpha1/` — All five CRD Go types (group `ai.suse.com`); run `make manifests generate` after edits
 - `charts/aif-operator/` — Operator Helm chart; CRDs in `crds/`, templates in `templates/`
 - `internal/controller/` — Reconcilers; each touches exactly one CRD; imports only from `pkg/`
 - `pkg/` — Business logic; interfaces in `interface.go` per package
@@ -144,7 +144,7 @@ yarn test                         # Vue component tests
 **Checklist:**
 - [ ] CRD YAML generated in `charts/aif-operator/crds/`
 - [ ] Deepcopy methods generated
-- [ ] Controller reconciles with finalizer `ai-platform.suse.com/cleanup`
+- [ ] Controller reconciles with finalizer `ai.suse.com/cleanup`
 - [ ] Condition Types use constants from `pkg/conditions/types.go`
 - [ ] REST endpoints registered in routes.go (not main.go)
 

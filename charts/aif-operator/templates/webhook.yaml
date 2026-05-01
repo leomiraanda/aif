@@ -42,16 +42,16 @@ metadata:
     cert-manager.io/inject-ca-from: "{{ .Release.Namespace }}/aif-webhook-cert"
   {{- end }}
 webhooks:
-  - name: blueprint-immutability.ai-platform.suse.com
+  - name: blueprint-immutability.ai.suse.com
     clientConfig:
       service:
         name: {{ include "aif-operator.fullname" . }}
         namespace: {{ .Release.Namespace }}
-        path: /validate-ai-platform-suse-com-v1alpha1-blueprint
+        path: /validate-ai-suse-com-v1alpha1-blueprint
         port: {{ .Values.service.ports.webhook }}
     rules:
       - apiGroups:
-          - ai-platform.suse.com
+          - ai.suse.com
         apiVersions:
           - v1alpha1
         operations:

@@ -128,7 +128,7 @@ These are the floors. Newer versions are supported unless explicitly called out 
        │ Kubernetes API (controller-runtime)   │ External HTTPS
        ▼                                       ▼
   Kubernetes Cluster                  ┌─ SUSE Registry
-  ┌─ CRDs (ai-platform.suse.com)     │  registry.suse.com
+  ┌─ CRDs (ai.suse.com)     │  registry.suse.com
   │  Bundle (namespaced)              │   (incl. mirrored NVIDIA assets at
   │  Blueprint (cluster-scoped)       │    ai/charts/nvidia/, ai/containers/nvidia/)
   │  Workload (namespaced)            │
@@ -273,10 +273,10 @@ The Harvester extension (`harvester-ui-extension/`) is the most complete real-wo
 | Entry point | `ui/ai-factory/pkg/ai-factory/index.ts` | `harvester-ui-extension/pkg/harvester/index.ts` |
 | Product registration | `pkg/ai-factory/config/aif-product.js` | `pkg/harvester/config/harvester-cluster.js` |
 | Type constants | `pkg/ai-factory/config/types.ts` | `pkg/harvester/config/types.ts` |
-| Resource model (CRD) | `pkg/ai-factory/models/ai-platform.suse.com.bundle.js` | `pkg/harvester/models/kubevirt.io.virtualmachine.js` |
-| List page | `pkg/ai-factory/list/ai-platform.suse.com.bundle.vue` | `pkg/harvester/pages/c/_cluster/_resource/index.vue` |
-| Detail page (Tabbed) | `pkg/ai-factory/detail/ai-platform.suse.com.bundle/index.vue` | `pkg/harvester/detail/harvesterhci.io.host/index.vue` |
-| Edit page (CruResource) | `pkg/ai-factory/edit/ai-platform.suse.com.bundle.vue` | `pkg/harvester/edit/harvesterhci.io.addon/index.vue` |
+| Resource model (CRD) | `pkg/ai-factory/models/ai.suse.com.bundle.js` | `pkg/harvester/models/kubevirt.io.virtualmachine.js` |
+| List page | `pkg/ai-factory/list/ai.suse.com.bundle.vue` | `pkg/harvester/pages/c/_cluster/_resource/index.vue` |
+| Detail page (Tabbed) | `pkg/ai-factory/detail/ai.suse.com.bundle/index.vue` | `pkg/harvester/detail/harvesterhci.io.host/index.vue` |
+| Edit page (CruResource) | `pkg/ai-factory/edit/ai.suse.com.bundle.vue` | `pkg/harvester/edit/harvesterhci.io.addon/index.vue` |
 | Steve store | `pkg/ai-factory/store/index.ts` | `pkg/harvester/store/harvester-store/index.ts` |
 | Routing | `pkg/ai-factory/routing/aif-routing.js` | `pkg/harvester/routing/harvester-routing.js` |
 | Validators | `pkg/ai-factory/validators/index.js` | `pkg/harvester/validators/index.js` |
@@ -286,7 +286,7 @@ The Harvester extension (`harvester-ui-extension/`) is the most complete real-wo
 
 ## 4. Custom Resource Definitions
 
-All CRDs belong to group `ai-platform.suse.com`, version `v1alpha1`.
+All CRDs belong to group `ai.suse.com`, version `v1alpha1`.
 
 ### 4.1 Common Patterns
 
@@ -358,7 +358,7 @@ Standard condition types used across CRDs:
 | `Progressing` | Reconciliation is actively making progress |
 | `Degraded` | The resource is running but in a degraded state |
 
-**Finalizer:** Every controller adds the finalizer `ai-platform.suse.com/cleanup` on first reconcile and removes it only after cleanup logic completes.
+**Finalizer:** Every controller adds the finalizer `ai.suse.com/cleanup` on first reconcile and removes it only after cleanup logic completes.
 
 **Phase enum:** All phase fields use typed Go string constants, not bare strings.
 
@@ -473,9 +473,9 @@ One CRD instance per published version. Object name is auto-generated as `{bluep
 metadata:
   name: rag-with-llama.1.2.0
   labels:
-    ai-platform.suse.com/blueprint-name: rag-with-llama
-    ai-platform.suse.com/blueprint-version: "1.2.0"
-    ai-platform.suse.com/blueprint-source: published   # or "wraps-vendor-chart"
+    ai.suse.com/blueprint-name: rag-with-llama
+    ai.suse.com/blueprint-version: "1.2.0"
+    ai.suse.com/blueprint-source: published   # or "wraps-vendor-chart"
 ```
 
 The UI groups Blueprint CRs by the `blueprint-name` label to present a single card per lineage with a version selector. The user-facing column on the Blueprint card is labelled **Origin** (not "Source") with values `Published from Bundle` or `Wraps vendor chart` — see `SOFTWARE_SPEC.md §6` Blueprint Gallery. The internal Go field name remains `source` for code-level concision; "Origin" is the UI presentation label.
@@ -1010,7 +1010,7 @@ Standard error codes: `NOT_FOUND`, `INVALID_INPUT`, `INVALID_TRANSITION` (lifecy
 
 `App`: `{id, name, displayName, description, publisher, version, logoURL, source, assetType, categories[], tags[], chartRef:{repo,chart,version}, projectURL, referenceBlueprint: bool}`
 
-The `referenceBlueprint` field is `true` when the chart's `Chart.yaml` carries the annotation `ai-platform.suse.com/role: reference-blueprint` (see §13.1 for the annotation contract). This drives both the **Reference Blueprint** badge in the UI and the toggle-based filtering above.
+The `referenceBlueprint` field is `true` when the chart's `Chart.yaml` carries the annotation `ai.suse.com/role: reference-blueprint` (see §13.1 for the annotation contract). This drives both the **Reference Blueprint** badge in the UI and the toggle-based filtering above.
 
 **Degraded App schema (P5-8 OCI-fallback mode):** when `Settings.spec.catalogDiscovery.applicationCollectionMode == "registry-fallback"` AND the App Collection HTTP API is unreachable (network error or 5xx), the source_collection client falls back to listing the OCI catalog directly. The OCI catalog carries chart names + versions but NOT the rich metadata the API provides. Apps in fallback mode are emitted with these fixed sentinels:
 
@@ -1436,7 +1436,7 @@ type ChartMetadata struct {
     Version     string
     AppVersion  string
     Description string
-    Annotations map[string]string         // includes ai-platform.suse.com/role for §13.1 wrapper detection
+    Annotations map[string]string         // includes ai.suse.com/role for §13.1 wrapper detection
 }
 ```
 
@@ -1790,9 +1790,9 @@ When `Workload.spec.deployStrategy == "fleet"`, the operator writes a directory 
 ```yaml
 namespace: aif-workloads
 labels:
-  ai-platform.suse.com/workload: "{workloadID}"
-  ai-platform.suse.com/cluster:  "{clusterID}"
-  ai-platform.suse.com/source-kind: "{App|Blueprint|BundleTest}"
+  ai.suse.com/workload: "{workloadID}"
+  ai.suse.com/cluster:  "{clusterID}"
+  ai.suse.com/source-kind: "{App|Blueprint|BundleTest}"
 helm:
   releaseName: "{workloadID}"
 defaultNamespace: aif-workloads
@@ -1824,19 +1824,19 @@ ui/ai-factory/
     │   └── aif-product.js              # DSL product/nav registration (see §7.3)
     ├── models/
     │   ├── aif.js                      # base SteveModel subclass
-    │   ├── ai-platform.suse.com.bundle.js
-    │   ├── ai-platform.suse.com.blueprint.js
-    │   └── ai-platform.suse.com.workload.js
+    │   ├── ai.suse.com.bundle.js
+    │   ├── ai.suse.com.blueprint.js
+    │   └── ai.suse.com.workload.js
     ├── list/
-    │   ├── ai-platform.suse.com.bundle.vue
-    │   ├── ai-platform.suse.com.blueprint.vue
-    │   └── ai-platform.suse.com.workload.vue
+    │   ├── ai.suse.com.bundle.vue
+    │   ├── ai.suse.com.blueprint.vue
+    │   └── ai.suse.com.workload.vue
     ├── detail/
-    │   ├── ai-platform.suse.com.bundle/index.vue
-    │   ├── ai-platform.suse.com.blueprint/index.vue
-    │   └── ai-platform.suse.com.workload/index.vue
+    │   ├── ai.suse.com.bundle/index.vue
+    │   ├── ai.suse.com.blueprint/index.vue
+    │   └── ai.suse.com.workload/index.vue
     ├── edit/
-    │   └── ai-platform.suse.com.bundle.vue
+    │   └── ai.suse.com.bundle.vue
     ├── pages/
     │   ├── c/_cluster/
     │   │   ├── index.vue
@@ -1955,7 +1955,7 @@ export function init(store, $plugin) {
 ### 7.4 Bundle Model (action methods)
 
 ```javascript
-// models/ai-platform.suse.com.bundle.js
+// models/ai.suse.com.bundle.js
 import SteveModel from '@shell/plugins/steve/steve-class';
 import { AIF } from '../config/types';
 
@@ -2268,21 +2268,21 @@ func NewManager(cfg *rest.Config, opts Options) (manager.Manager, error) {
             // CertName / KeyName default to "tls.crt" / "tls.key"
         }),
         LeaderElection:          true,
-        LeaderElectionID:        "aif-operator.ai-platform.suse.com",
+        LeaderElectionID:        "aif-operator.ai.suse.com",
     })
     if err != nil {
         return nil, err
     }
     // ... register reconcilers ...
     mgr.GetWebhookServer().Register(
-        "/validate-ai-platform-suse-com-v1alpha1-blueprint",
+        "/validate-ai-suse-com-v1alpha1-blueprint",
         &webhook.Admission{Handler: &blueprintwh.BlueprintImmutabilityWebhook{}},
     )
     return mgr, nil
 }
 ```
 
-The path `/validate-ai-platform-suse-com-v1alpha1-blueprint` MUST match the `clientConfig.service.path` in the `ValidatingWebhookConfiguration` template (§9.1.1).
+The path `/validate-ai-suse-com-v1alpha1-blueprint` MUST match the `clientConfig.service.path` in the `ValidatingWebhookConfiguration` template (§9.1.1).
 
 #### Certificate reload behaviour
 
@@ -2294,7 +2294,7 @@ The webhook configuration name is `aif-blueprint-immutability`. It registers ONE
 
 ```yaml
 rules:
-  - apiGroups:   [ai-platform.suse.com]
+  - apiGroups:   [ai.suse.com]
     apiVersions: [v1alpha1]
     operations:  [UPDATE]            # CREATE/DELETE flow through admission.Allowed in the handler too — see contract
     resources:   [blueprints]        # NOT blueprints/status — status updates are allowed
@@ -2316,11 +2316,11 @@ timeoutSeconds: 10
 Each controller file declares its RBAC requirements via kubebuilder markers:
 
 ```go
-//+kubebuilder:rbac:groups=ai-platform.suse.com,resources=bundles,verbs=get;list;watch;create;update;patch;delete
-//+kubebuilder:rbac:groups=ai-platform.suse.com,resources=bundles/status,verbs=get;update;patch
-//+kubebuilder:rbac:groups=ai-platform.suse.com,resources=blueprints,verbs=get;list;watch;create;update;patch;delete
-//+kubebuilder:rbac:groups=ai-platform.suse.com,resources=blueprints/status,verbs=get;update;patch
-//+kubebuilder:rbac:groups=ai-platform.suse.com,resources=workloads,verbs=get;list;watch;create;update;patch;delete
+//+kubebuilder:rbac:groups=ai.suse.com,resources=bundles,verbs=get;list;watch;create;update;patch;delete
+//+kubebuilder:rbac:groups=ai.suse.com,resources=bundles/status,verbs=get;update;patch
+//+kubebuilder:rbac:groups=ai.suse.com,resources=blueprints,verbs=get;list;watch;create;update;patch;delete
+//+kubebuilder:rbac:groups=ai.suse.com,resources=blueprints/status,verbs=get;update;patch
+//+kubebuilder:rbac:groups=ai.suse.com,resources=workloads,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups=core,resources=services;secrets;namespaces,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups=core,resources=events,verbs=create;patch
@@ -2345,7 +2345,7 @@ The auth endpoint is implemented as a stateless HTTP handler in `internal/api/au
 
 #### SAR enforcement design choice (P3-5, P5-6, P7-5)
 
-The `aif-blueprint-publisher` ClusterRole grants verbs on the synthetic subresource `bundles/approve` and `bundles/request-changes`. This subresource doesn't exist as a real K8s subresource (there's no `apiserver` endpoint at `/apis/ai-platform.suse.com/v1alpha1/namespaces/X/bundles/Y/approve`). The HTTP handler enforcement happens via `SubjectAccessReview`:
+The `aif-blueprint-publisher` ClusterRole grants verbs on the synthetic subresource `bundles/approve` and `bundles/request-changes`. This subresource doesn't exist as a real K8s subresource (there's no `apiserver` endpoint at `/apis/ai.suse.com/v1alpha1/namespaces/X/bundles/Y/approve`). The HTTP handler enforcement happens via `SubjectAccessReview`:
 
 ```yaml
 # Example ClusterRole binding pattern
@@ -2354,10 +2354,10 @@ kind: ClusterRole
 metadata:
   name: aif-blueprint-publisher
 rules:
-  - apiGroups: [ai-platform.suse.com]
+  - apiGroups: [ai.suse.com]
     resources: [bundles, bundles/approve, bundles/request-changes]
     verbs: [get, list, watch, update]
-  - apiGroups: [ai-platform.suse.com]
+  - apiGroups: [ai.suse.com]
     resources: [blueprints/status]
     verbs: [update]
 ```
@@ -2498,12 +2498,12 @@ metadata:
     cert-manager.io/inject-ca-from: "{{ .Release.Namespace }}/aif-webhook-cert"
     {{- end }}
 webhooks:
-  - name: blueprint-immutability.ai-platform.suse.com
+  - name: blueprint-immutability.ai.suse.com
     clientConfig:
       service:
         name: {{ include "aif-operator.fullname" . }}
         namespace: {{ .Release.Namespace }}
-        path: /validate-ai-platform-suse-com-v1alpha1-blueprint
+        path: /validate-ai-suse-com-v1alpha1-blueprint
         port: {{ .Values.service.ports.webhook }}
       {{- if eq .Values.webhook.tlsMode "manual" }}
       caBundle: {{ required "webhook.manual.caBundle required when tlsMode=manual" .Values.webhook.manual.caBundle }}
@@ -2512,7 +2512,7 @@ webhooks:
       {{- end }}
       # cert-manager mode: caBundle omitted; cert-manager's CA injector populates it via the annotation above
     rules:
-      - apiGroups:   [ai-platform.suse.com]
+      - apiGroups:   [ai.suse.com]
         apiVersions: [v1alpha1]
         operations:  [UPDATE]
         resources:   [blueprints]
@@ -2777,7 +2777,7 @@ func (m *AuthMiddleware) RequirePublisher(next http.HandlerFunc) http.HandlerFun
                 Groups: groups,
                 ResourceAttributes: &authzv1.ResourceAttributes{
                     Verb:     "update",
-                    Group:    "ai-platform.suse.com",
+                    Group:    "ai.suse.com",
                     Resource: "bundles",
                     Subresource: "approve",  // synthetic subresource convention; see §8.5
                 },
@@ -3205,10 +3205,10 @@ When the mirror process places a vendor **Reference Blueprint** Helm chart (e.g.
 # Chart.yaml (the mirror process injects these annotations into vendor charts
 # before pushing into SUSE Registry; vendors don't ship SUSE-specific annotations)
 annotations:
-  ai-platform.suse.com/role: reference-blueprint            # required: marks as Reference Blueprint
-  ai-platform.suse.com/use-case: rag                        # optional: rag | vision | fine-tuning | inference | other
-  ai-platform.suse.com/display-name: "NVIDIA RAG Blueprint" # optional: overrides the chart's `name` for UI display
-  ai-platform.suse.com/description: "End-to-end retrieval-augmented generation pipeline" # optional
+  ai.suse.com/role: reference-blueprint            # required: marks as Reference Blueprint
+  ai.suse.com/use-case: rag                        # optional: rag | vision | fine-tuning | inference | other
+  ai.suse.com/display-name: "NVIDIA RAG Blueprint" # optional: overrides the chart's `name` for UI display
+  ai.suse.com/description: "End-to-end retrieval-augmented generation pipeline" # optional
 ```
 
 This annotation is the **only** signal AIF uses to distinguish vendor Reference Blueprint charts from regular building-block Helm charts (NIMs, Milvus, vLLM, etc.). Default classification when the annotation is absent is `building-block` (a regular App, no auto-wrap).
@@ -3219,7 +3219,7 @@ This annotation is the **only** signal AIF uses to distinguish vendor Reference 
 For each chart in registry index:
   1. Fetch Chart.yaml metadata only (cache by digest; one HEAD per refresh, body fetch only on new digest).
   2. Read annotations.
-  3. If `ai-platform.suse.com/role == "reference-blueprint"`:
+  3. If `ai.suse.com/role == "reference-blueprint"`:
        a. Surface in /api/v1/apps with App.referenceBlueprint = true (filtered by default — see §5).
        b. Auto-create a wrapping Blueprint CR with source.type = WrapsVendorChart,
           spec.version = chart's version (1:1 mapping per §4.3 Version Mapping for Wrapped Blueprints),
@@ -3240,7 +3240,7 @@ The annotation contract is the **integration boundary** between AIF and the SUSE
 The mirror process described above is the SUSE-managed leg: NGC → SUSE Registry. **Air-gap customers operate a second mirror leg**: SUSE Registry → customer's local OCI registry (e.g., Harbor, Quay, Nexus). The customer's mirroring tool MUST:
 
 1. **Preserve all OCI manifest digests.** AIF and downstream Helm tooling rely on digest stability; a re-pushed chart with a different digest is treated as a new version (not a no-op).
-2. **Preserve all chart annotations.** Critically `ai-platform.suse.com/role: reference-blueprint` must survive the re-mirror — if it's stripped, AIF won't auto-wrap the chart as an AIF Blueprint. The companion annotations (`ai-platform.suse.com/use-case`, `ai-platform.suse.com/display-name`, `ai-platform.suse.com/description`) should also be preserved for the best UX.
+2. **Preserve all chart annotations.** Critically `ai.suse.com/role: reference-blueprint` must survive the re-mirror — if it's stripped, AIF won't auto-wrap the chart as an AIF Blueprint. The companion annotations (`ai.suse.com/use-case`, `ai.suse.com/display-name`, `ai.suse.com/description`) should also be preserved for the best UX.
 3. **Maintain a consistent path-prefix substitution.** Example: every `registry.suse.com/X` is mirrored to `harbor.example.com/suse/X`. AIF closes this path-prefix loop via `Settings.imageRewrite.rules` (see §4.5) — the rules apply the same prefix substitution at Helm values merge time so that pods reference the customer-internal registry.
 4. **Re-mirror on a cadence aligned with NIM and Reference Blueprint release notifications** — operational judgment, not enforced by AIF. A weekly cadence plus event-driven re-mirroring on NIM release is a reasonable baseline.
 
@@ -3342,7 +3342,7 @@ The fallback path produces a Degraded App per §5 with `source: "suse-oci-fallba
 ```yaml
 namespace: aif-workloads
 labels:
-  ai-platform.suse.com/workload: "{workloadID}"
+  ai.suse.com/workload: "{workloadID}"
 helm:
   releaseName: "{workloadID}"
 ```
@@ -3491,16 +3491,16 @@ Each publish action creates one new Blueprint CR. Over a multi-year deployment, 
 |------|------------|
 | **AIF** | SUSE AI Factory — the product covered by these specs. |
 | **App** | A Helm-chart-packaged AI application in the catalog, sourced from SUSE Application Collection or from SUSE Registry (including the mirrored-NVIDIA namespace and vendor Reference Blueprint charts). Apps are not CRDs — they are catalog data served at `/api/v1/apps`. The `App.referenceBlueprint` field distinguishes vendor Reference Blueprint charts (filtered out of the Apps catalog by default — see SOFTWARE_SPEC §5). |
-| **Bundle** | A mutable workshop CRD where an author composes Apps and existing Blueprints into a candidate AI stack. Namespaced. Phases: `Draft` → `Submitted` → `ChangesRequested`. CRD: `Bundle.ai-platform.suse.com/v1alpha1`. |
-| **Blueprint** *(AIF Blueprint)* | A published, immutable, versioned AI stack tied to a use case — an **AIF concept**, distinct from vendor Reference Blueprint charts (see "NVIDIA Blueprint" / "Reference Blueprint chart" below). Cluster-scoped. One CRD instance per `(blueprintName, version)` tuple. Created by (a) approving a Bundle (`source.type=Published`) or (b) auto-wrapping a vendor Reference Blueprint chart (`source.type=WrapsVendorChart`). Phases: `Active` → `Deprecated` / `Withdrawn`. CRD: `Blueprint.ai-platform.suse.com/v1alpha1`. |
-| **NVIDIA Blueprint** *(synonym: Reference Blueprint, Vendor Reference Blueprint, Reference Blueprint chart)* | A vendor-published reference workflow (e.g., NVIDIA RAG, NVIDIA AIQ) packaged as a Helm chart and mirrored into SUSE Registry. Detected by AIF via the chart annotation `ai-platform.suse.com/role: reference-blueprint` (see §13.1). NVIDIA Blueprints are **not** AIF Blueprints; they are charts that AIF wraps as single-component AIF Blueprints (`source.type=WrapsVendorChart`) so they appear on the Blueprints page with full lifecycle. AIF never claims authorship of vendor content. |
-| **Workload** | A running instance of an App, Blueprint, or test-deploy of a Bundle. CRD: `Workload.ai-platform.suse.com/v1alpha1`. Carries `spec.source` provenance. |
+| **Bundle** | A mutable workshop CRD where an author composes Apps and existing Blueprints into a candidate AI stack. Namespaced. Phases: `Draft` → `Submitted` → `ChangesRequested`. CRD: `Bundle.ai.suse.com/v1alpha1`. |
+| **Blueprint** *(AIF Blueprint)* | A published, immutable, versioned AI stack tied to a use case — an **AIF concept**, distinct from vendor Reference Blueprint charts (see "NVIDIA Blueprint" / "Reference Blueprint chart" below). Cluster-scoped. One CRD instance per `(blueprintName, version)` tuple. Created by (a) approving a Bundle (`source.type=Published`) or (b) auto-wrapping a vendor Reference Blueprint chart (`source.type=WrapsVendorChart`). Phases: `Active` → `Deprecated` / `Withdrawn`. CRD: `Blueprint.ai.suse.com/v1alpha1`. |
+| **NVIDIA Blueprint** *(synonym: Reference Blueprint, Vendor Reference Blueprint, Reference Blueprint chart)* | A vendor-published reference workflow (e.g., NVIDIA RAG, NVIDIA AIQ) packaged as a Helm chart and mirrored into SUSE Registry. Detected by AIF via the chart annotation `ai.suse.com/role: reference-blueprint` (see §13.1). NVIDIA Blueprints are **not** AIF Blueprints; they are charts that AIF wraps as single-component AIF Blueprints (`source.type=WrapsVendorChart`) so they appear on the Blueprints page with full lifecycle. AIF never claims authorship of vendor content. |
+| **Workload** | A running instance of an App, Blueprint, or test-deploy of a Bundle. CRD: `Workload.ai.suse.com/v1alpha1`. Carries `spec.source` provenance. |
 | **Settings** | Singleton CRD per cluster holding catalog credentials, sync intervals, Fleet config. |
 | **InstallAIExtension** | One-shot CRD that bootstraps the UI Helm chart and registers the UIPlugin. |
 | **Source (of a Workload)** | Provenance metadata: `kind` ∈ {`App`, `Blueprint`, `BundleTest`} + a typed reference. |
 | **Origin (of a Blueprint)** | The user-facing UI label for the Blueprint card column reflecting `Blueprint.spec.source.type`. Values: `Wraps vendor chart` (`source.type=WrapsVendorChart`) or `Published from Bundle` (`source.type=Published`). The internal Go field name is `source`; "Origin" is the UI presentation. |
 | **Publish action** | The act of approving a Submitted Bundle, which mints a new Blueprint version and resets the Bundle to Draft. |
-| **Vendor-chart wrapping** | The act of AIF auto-creating a single-component AIF Blueprint that references a vendor Reference Blueprint chart. Triggered by detection of the `ai-platform.suse.com/role: reference-blueprint` annotation during catalog sync. See §13.1 and §4.3 (Version Mapping for Wrapped Blueprints). |
+| **Vendor-chart wrapping** | The act of AIF auto-creating a single-component AIF Blueprint that references a vendor Reference Blueprint chart. Triggered by detection of the `ai.suse.com/role: reference-blueprint` annotation during catalog sync. See §13.1 and §4.3 (Version Mapping for Wrapped Blueprints). |
 | **Blueprint Publisher** | A role bound via the `aif-blueprint-publisher` ClusterRole, enforced by SubjectAccessReview at the HTTP handler. Designation is external to AIF (kubectl, Rancher Cluster RBAC UI, OIDC group mapping); see `PUBLISHERs.md`. |
 | **NIM** | NVIDIA Inference Microservices — containerized inference servers. AIF consumes them from SUSE Registry only. |
 | **NGC** | NVIDIA GPU Cloud. **AIF does not access NGC.** Mentioned only as the source the mirror process pulls from. |

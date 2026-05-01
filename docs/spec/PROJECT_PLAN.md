@@ -271,8 +271,8 @@ docker build -t aif:test . && docker inspect aif:test | grep -i user
 - [ ] `SettingsSpec` per §4.5 — base fields ONLY in this story (P0-2 lands the foundation): `applicationCollection.{userSecretRef, tokenSecretRef, categories}`, `suseRegistry.{userSecretRef, tokenSecretRef, refreshIntervalMinutes}`, `fleet.{repoURL, branch, authType, credSecretRef}`. The air-gap field groups (`registryEndpoints`, `imageRewrite`, `catalogDiscovery`, `blueprintClassification`) are added in **P5-7** (additive, optional). All credential fields use `corev1.SecretKeySelector` from `k8s.io/api/core/v1`.
 - [ ] **Phase enums use typed Go string constants** per `ARCHITECTURE.md §4.1` Common Patterns (e.g., `type BundlePhase string; const ( BundlePhaseDraft BundlePhase = "Draft"; ... )`). Plus the shared condition Type/Reason constants from `pkg/conditions/types.go` (lands here as part of P0-2; full enumeration in §4.1).
 - [ ] All Status structs use `[]metav1.Condition` (from `k8s.io/apimachinery/pkg/apis/meta/v1`) plus `ObservedGeneration int64`
-- [ ] Blueprint CRD has `+kubebuilder:resource:scope=Cluster`; all others `Namespaced`. Blueprint identity via labels `ai-platform.suse.com/blueprint-name`, `ai-platform.suse.com/blueprint-version`, `ai-platform.suse.com/blueprint-source` per §4.3.
-- [ ] `groupversion_info.go` registers group `ai-platform.suse.com`, version `v1alpha1`
+- [ ] Blueprint CRD has `+kubebuilder:resource:scope=Cluster`; all others `Namespaced`. Blueprint identity via labels `ai.suse.com/blueprint-name`, `ai.suse.com/blueprint-version`, `ai.suse.com/blueprint-source` per §4.3.
+- [ ] `groupversion_info.go` registers group `ai.suse.com`, version `v1alpha1`
 - [ ] `make manifests generate` produces CRD YAMLs in `charts/aif-operator/crds/` (directory pre-created in Makefile) plus deepcopy in `zz_generated_deepcopy.go`. The Makefile target ensures `mkdir -p charts/aif-operator/crds` before invoking controller-gen.
 
 **Validation:**
@@ -569,7 +569,7 @@ helm lint charts/aif-operator --set webhook.tlsMode=manual --set webhook.manual.
 
 **Acceptance Criteria:**
 - [ ] Controller in `internal/controller/bundle_controller.go`
-- [ ] Adds finalizer `ai-platform.suse.com/cleanup`; removes after cleanup
+- [ ] Adds finalizer `ai.suse.com/cleanup`; removes after cleanup
 - [ ] Validates `spec.useCase` enum (per `+kubebuilder:validation:Enum=rag;vision;fine-tuning;inference;other` from §4.2), `spec.targetBlueprint` DNS-1123 format, `spec.components[]` non-empty
 - [ ] On valid spec: sets `Ready=True Reason=Reconciled`, calls `bundleManager.Upsert(ctx, bundleFromCR(b))` (interface per `ARCHITECTURE.md §6.2 Interface Design`)
 - [ ] On invalid spec: sets `Ready=False Reason=InvalidSpec`, records `Warning` event
@@ -687,7 +687,7 @@ go test ./internal/controller/ -run TestSettingsReconciler -v
 - [ ] On UPDATE: deserializes old + new, compares `spec` with `equality.Semantic.DeepEqual` from `k8s.io/apimachinery/pkg/api/equality`. If different → `admission.Denied("Blueprint spec is immutable; mint a new version instead")`. If equal → `admission.Allowed("status / metadata change permitted")`.
 - [ ] On CREATE / DELETE / CONNECT: defensive `admission.Allowed("non-update operations are not gated by this webhook")` — the webhook configuration registers `operations: [UPDATE]` only (per §8.3), but the handler is defensive in case the configuration is later broadened
 - [ ] Webhook served on `:9443` per `webhook.NewServer(webhook.Options{Port: 9443, CertDir: "/tmp/k8s-webhook-server/serving-certs"})` per the §8.3 wiring snippet — port and CertDir constants MUST match the chart's deployment volumeMount path
-- [ ] Manager wiring in `internal/manager/setup.go`: `mgr.GetWebhookServer().Register("/validate-ai-platform-suse-com-v1alpha1-blueprint", &webhook.Admission{Handler: &BlueprintImmutabilityWebhook{}})` — path string MUST match the `clientConfig.service.path` in the chart template (P0-3 + P0-7)
+- [ ] Manager wiring in `internal/manager/setup.go`: `mgr.GetWebhookServer().Register("/validate-ai-suse-com-v1alpha1-blueprint", &webhook.Admission{Handler: &BlueprintImmutabilityWebhook{}})` — path string MUST match the `clientConfig.service.path` in the chart template (P0-3 + P0-7)
 - [ ] **Cert reload behaviour verified:** controller-runtime's webhook server hot-reloads on file change in `CertDir`; do NOT add a custom file watcher or pod restart — the framework handles it. Add a Godoc comment in `setup.go` pointing to §8.3 "Certificate reload behaviour"
 - [ ] **No mode-specific code in Go.** The webhook handler is identical for cert-manager / manual / helm-hook modes — only the chart templates differ (P0-3 ships the cert-manager template; P0-7 ships the helm-hook template). The Go side knows nothing about `tlsMode`.
 - [ ] Test: `internal/webhook/blueprint_immutability_test.go` exercises (a) spec mutation → denied, (b) status-only mutation → allowed, (c) CREATE → allowed, (d) DELETE → allowed, (e) malformed `req.Object.Raw` → `admission.Errored` with 400
@@ -941,7 +941,7 @@ go test ./pkg/source_collection/ -v
 - [ ] All three endpoints registered via `routes.Register`
 - [ ] Query parameter parsing for `?source=`, `?category=`, and `?includeReferenceBlueprints=true|false` (default `false`)
 - [ ] When `includeReferenceBlueprints=false` (default), filters out apps where `App.referenceBlueprint == true`
-- [ ] App schema includes the `referenceBlueprint: bool` field, populated from chart annotation `ai-platform.suse.com/role` (set to `true` when value equals `reference-blueprint`; see `ARCHITECTURE.md §5 Apps` and `§13.1`)
+- [ ] App schema includes the `referenceBlueprint: bool` field, populated from chart annotation `ai.suse.com/role` (set to `true` when value equals `reference-blueprint`; see `ARCHITECTURE.md §5 Apps` and `§13.1`)
 - [ ] HTTP integration test covers: (a) default request hides Reference Blueprints, (b) `?includeReferenceBlueprints=true` returns them, (c) per-app `referenceBlueprint` field populated correctly
 
 ---
@@ -953,12 +953,12 @@ go test ./pkg/source_collection/ -v
 **Effort:** M
 **Depends On:** P0-1, P2-1
 **Parallelizable With:** P2-2
-**Done When:** `pkg/blueprint.Wrapper.WrapDetectedCharts(ctx)` scans the SUSE Registry catalog, identifies charts bearing the annotation `ai-platform.suse.com/role: reference-blueprint`, and creates a wrapping Blueprint CR (`source.type=WrapsVendorChart`, `spec.version` = chart version 1:1, `spec.publishedBy="aif-system"`) for each one not already wrapped. The wrapping is idempotent and runs on the same cadence as NIM index refresh.
+**Done When:** `pkg/blueprint.Wrapper.WrapDetectedCharts(ctx)` scans the SUSE Registry catalog, identifies charts bearing the annotation `ai.suse.com/role: reference-blueprint`, and creates a wrapping Blueprint CR (`source.type=WrapsVendorChart`, `spec.version` = chart version 1:1, `spec.publishedBy="aif-system"`) for each one not already wrapped. The wrapping is idempotent and runs on the same cadence as NIM index refresh.
 
 **Acceptance Criteria:**
 - [ ] `pkg/blueprint/wrapper.go` implements the `Wrapper` interface (per `ARCHITECTURE.md §6.1` directory structure)
-- [ ] **Annotation detection**: Pulls each chart's `Chart.yaml` (cached by chart digest — only re-fetched on digest change) and reads `annotations["ai-platform.suse.com/role"]`. Wraps only charts where the value is `reference-blueprint`. Building-block charts (NIMs, Milvus, vLLM, …) are skipped.
-- [ ] Reads optional companion annotations and copies them into the Blueprint spec: `ai-platform.suse.com/use-case` → `spec.useCase` (default `other`), `ai-platform.suse.com/display-name` → spec field for UI override, `ai-platform.suse.com/description` → `spec.description`.
+- [ ] **Annotation detection**: Pulls each chart's `Chart.yaml` (cached by chart digest — only re-fetched on digest change) and reads `annotations["ai.suse.com/role"]`. Wraps only charts where the value is `reference-blueprint`. Building-block charts (NIMs, Milvus, vLLM, …) are skipped.
+- [ ] Reads optional companion annotations and copies them into the Blueprint spec: `ai.suse.com/use-case` → `spec.useCase` (default `other`), `ai.suse.com/display-name` → spec field for UI override, `ai.suse.com/description` → `spec.description`.
 - [ ] Builds Blueprint CR per `ARCHITECTURE.md §4.3`: `metadata.name = "{chart}.{version}"`, labels `blueprint-name`, `blueprint-version`, `blueprint-source: wraps-vendor-chart`. Spec: `source.type=WrapsVendorChart`, `source.vendorChartRef.{provider,repo,chart,version}`, `components[]` length 1 (the chart itself), `publishedBy="aif-system"`, `publishedAt=<sync timestamp>`, `changeDescription="Auto-wrapped from oci://…/<chart>:<version> at <ts>"`.
 - [ ] **Version mapping is 1:1** with the chart version (per `ARCHITECTURE.md §4.3 Version Mapping for Wrapped Blueprints`). Each new chart version mints a new Blueprint CR; same-version re-pushes are no-ops.
 - [ ] **Edge cases handled per §4.3:** non-SemVer chart versions are skipped with a warning log; charts removed from the registry trigger `Withdrawn` status on the wrapping Blueprint (spec untouched); pre-release versions (`-rc.N`) are wrapped but flagged.
@@ -974,7 +974,7 @@ grep -nE 'source\.type=External|ExternalBlueprintRef' pkg/blueprint/ && echo FAI
 ```
 
 **Agent Prompt:**
-> Implement `pkg/blueprint/wrapper.go` per `ARCHITECTURE.md §13.1 Reference Blueprint detection contract` and `§4.3 Blueprint CRD`. Use the SUSE Registry catalog client from `pkg/nvidia/discovery.go` (P2-1) to enumerate charts. For each chart, fetch `Chart.yaml` metadata (HEAD by digest first; full body only on cache miss). Inspect `annotations["ai-platform.suse.com/role"]`; wrap only when it equals `reference-blueprint`. Build the Blueprint CR with `source.type=WrapsVendorChart`, `source.vendorChartRef.{provider,repo,chart,version}`, `components[]` length 1, `publishedBy="aif-system"`, `changeDescription` per the format above. Spec.version MUST equal the chart's `Chart.yaml` `version:` field exactly (1:1; not `appVersion`). Reject non-SemVer chart versions with a warn log and skip. Same-version re-pushes are no-ops. When a previously-wrapped chart is no longer in the registry on a subsequent scan, set the wrapping Blueprint's `status.phase=Withdrawn` (spec is immutable; status is mutable). Add the manual `POST /api/v1/blueprints/wrap-vendor-chart` handler in `internal/api/blueprints.go` for the publisher escape-hatch case. Record `BlueprintWrappedFromVendorChart` events. Done when tests cover all six edge cases above and the `External` / `ExternalBlueprintRef` grep guard returns PASS.
+> Implement `pkg/blueprint/wrapper.go` per `ARCHITECTURE.md §13.1 Reference Blueprint detection contract` and `§4.3 Blueprint CRD`. Use the SUSE Registry catalog client from `pkg/nvidia/discovery.go` (P2-1) to enumerate charts. For each chart, fetch `Chart.yaml` metadata (HEAD by digest first; full body only on cache miss). Inspect `annotations["ai.suse.com/role"]`; wrap only when it equals `reference-blueprint`. Build the Blueprint CR with `source.type=WrapsVendorChart`, `source.vendorChartRef.{provider,repo,chart,version}`, `components[]` length 1, `publishedBy="aif-system"`, `changeDescription` per the format above. Spec.version MUST equal the chart's `Chart.yaml` `version:` field exactly (1:1; not `appVersion`). Reject non-SemVer chart versions with a warn log and skip. Same-version re-pushes are no-ops. When a previously-wrapped chart is no longer in the registry on a subsequent scan, set the wrapping Blueprint's `status.phase=Withdrawn` (spec is immutable; status is mutable). Add the manual `POST /api/v1/blueprints/wrap-vendor-chart` handler in `internal/api/blueprints.go` for the publisher escape-hatch case. Record `BlueprintWrappedFromVendorChart` events. Done when tests cover all six edge cases above and the `External` / `ExternalBlueprintRef` grep guard returns PASS.
 
 ---
 
@@ -1108,7 +1108,7 @@ go test ./internal/api/ -run TestSubmit -v
 
 **Acceptance Criteria:**
 - [ ] Handler in `internal/api/publish.go::approve`; workflow logic in `pkg/publish/workflow.go::Approve(ctx, ns, name, callerUser) error`
-- [ ] Authorization: `SubjectAccessReview` (verb `update`, resource `bundles/approve`, group `ai-platform.suse.com`) — same pattern as P3-4. On non-permitted: 403 `PUBLISHER_REQUIRED`.
+- [ ] Authorization: `SubjectAccessReview` (verb `update`, resource `bundles/approve`, group `ai.suse.com`) — same pattern as P3-4. On non-permitted: 403 `PUBLISHER_REQUIRED`.
 - [ ] **Per-Bundle mutex** (`map[types.NamespacedName]*sync.Mutex` on `Workflow`, accessor protected by an outer `sync.Mutex`):
   - Acquire-or-create the mutex for the Bundle's `NamespacedName` BEFORE any Bundle reads
   - Mutex entries persist for the lifetime of the operator (per `ARCHITECTURE.md §6.5.1` "Mutex lifetime")
@@ -1598,7 +1598,7 @@ curl -H "Impersonate-User: alice" http://localhost:8080/api/v1/auth/publishers
 ```
 
 **Agent Prompt:**
-> Implement `internal/api/auth.go` with the `GET /api/v1/auth/publishers` handler per `ARCHITECTURE.md §5 Auth`. Keep the handler stateless. Use the controller-runtime client to list `ClusterRoleBindings` filtered server-side by label selector or filtered client-side by `roleRef.name`. Compute `count` as the number of distinct subjects across all matching bindings. Compute `callerIsPublisher` by issuing a `SelfSubjectAccessReview` for verb `update`, resource `bundles/approve`, group `ai-platform.suse.com`. Cache the per-caller result for 30s using `sync.Map` keyed by the `Impersonate-User` header value. The handler must NEVER return 403 — that would defeat its purpose. Confirm the operator's existing ClusterRole grants `get`, `list`, `watch` on `clusterrolebindings.rbac.authorization.k8s.io`; if not, add the marker and regenerate. Done when the integration test passes against an envtest cluster planted with three scenarios (no bindings, caller is bound, caller is not bound).
+> Implement `internal/api/auth.go` with the `GET /api/v1/auth/publishers` handler per `ARCHITECTURE.md §5 Auth`. Keep the handler stateless. Use the controller-runtime client to list `ClusterRoleBindings` filtered server-side by label selector or filtered client-side by `roleRef.name`. Compute `count` as the number of distinct subjects across all matching bindings. Compute `callerIsPublisher` by issuing a `SelfSubjectAccessReview` for verb `update`, resource `bundles/approve`, group `ai.suse.com`. Cache the per-caller result for 30s using `sync.Map` keyed by the `Impersonate-User` header value. The handler must NEVER return 403 — that would defeat its purpose. Confirm the operator's existing ClusterRole grants `get`, `list`, `watch` on `clusterrolebindings.rbac.authorization.k8s.io`; if not, add the marker and regenerate. Done when the integration test passes against an envtest cluster planted with three scenarios (no bindings, caller is bound, caller is not bound).
 
 ---
 
@@ -1636,7 +1636,7 @@ curl -H "Impersonate-User: alice" http://localhost:8080/api/v1/auth/publishers
 make manifests
 go test ./internal/controller/ -run TestSettingsReconciler -v
 kubectl apply -f - <<EOF
-apiVersion: ai-platform.suse.com/v1alpha1
+apiVersion: ai.suse.com/v1alpha1
 kind: Settings
 metadata: {name: settings, namespace: aif}
 spec:
@@ -1778,9 +1778,9 @@ curl -X POST http://localhost:8080/api/v1/settings/test-connection | jq
 **Done When:** Bundles list page shows all Bundles with phase pills (`Draft`/`Submitted`/`ChangesRequested`) and context-sensitive actions per `SOFTWARE_SPEC.md §7`.
 
 **Acceptance Criteria:**
-- [ ] `models/ai-platform.suse.com.bundle.js` per `ARCHITECTURE.md §7.4`
+- [ ] `models/ai.suse.com.bundle.js` per `ARCHITECTURE.md §7.4`
 - [ ] `formatters/BundlePhaseState.vue` renders Draft/Submitted/ChangesRequested
-- [ ] `list/ai-platform.suse.com.bundle.vue` uses `ResourceTable`
+- [ ] `list/ai.suse.com.bundle.vue` uses `ResourceTable`
 - [ ] Action methods: `doSubmit`, `doWithdraw`, `doApprove`, `doRequestChanges`, `doTestDeploy` (per §7.4)
 - [ ] Action visibility driven by computed properties (`canEdit`, `canSubmit`, etc.)
 - [ ] Vitest unit test mocking `api.js` covers each action
@@ -1850,9 +1850,9 @@ curl -X POST http://localhost:8080/api/v1/settings/test-connection | jq
 **Done When:** Blueprints page shows one card per Blueprint name with a version selector dropdown; selecting a version reveals its components and status (Active/Deprecated/Withdrawn).
 
 **Acceptance Criteria:**
-- [ ] `models/ai-platform.suse.com.blueprint.js` with computed properties for grouping by `metadata.labels[blueprint-name]`
+- [ ] `models/ai.suse.com.blueprint.js` with computed properties for grouping by `metadata.labels[blueprint-name]`
 - [ ] `formatters/BlueprintPhaseState.vue` renders Active/Deprecated/Withdrawn
-- [ ] `list/ai-platform.suse.com.blueprint.vue` groups by lineage
+- [ ] `list/ai.suse.com.blueprint.vue` groups by lineage
 - [ ] `components/BlueprintVersionPicker.vue` is reusable
 - [ ] Per-card actions: Deploy, Start Bundle from Blueprint, View Versions
 - [ ] Publisher-only actions: Deprecate, Withdraw, Reactivate (gated by role check)
@@ -1871,10 +1871,10 @@ curl -X POST http://localhost:8080/api/v1/settings/test-connection | jq
 **Done When:** Workloads page renders the `Source` column per `SOFTWARE_SPEC.md §8` and shows Upgrade buttons on Blueprint-sourced rows.
 
 **Acceptance Criteria:**
-- [ ] `models/ai-platform.suse.com.workload.js`
+- [ ] `models/ai.suse.com.workload.js`
 - [ ] `formatters/WorkloadSource.vue` renders `App: <name>@<version>`, `Blueprint: <name>@<version>`, or `Bundle (test): <name>`
 - [ ] `formatters/WorkloadPhaseState.vue`
-- [ ] `list/ai-platform.suse.com.workload.vue` includes the Source column and conditional Upgrade action
+- [ ] `list/ai.suse.com.workload.vue` includes the Source column and conditional Upgrade action
 - [ ] Upgrade action opens a small modal with a version picker for the same Blueprint lineage; confirms → POST `/upgrade`
 - [ ] **Vendor-chart-unavailable indicator**: when a Workload's `Source` references a vendor chart that is no longer present in the configured registry (detected via the wrapping Blueprint's status — see `ARCHITECTURE.md §4.3` Withdrawn auto-flip), render a small warning chip on the Workload row: "vendor chart unavailable — Upgrade to a newer Blueprint version".
 - [ ] Pipeline visualization (`components/PipelineViz.vue`) per spec
@@ -1994,10 +1994,10 @@ curl -X POST http://localhost:8080/api/v1/settings/test-connection | jq
 - [ ] **`aif-blueprint-publisher` ClusterRole rules** match `ARCHITECTURE.md §8.5 "SAR enforcement design choice"` block exactly:
   ```yaml
   rules:
-    - apiGroups: [ai-platform.suse.com]
+    - apiGroups: [ai.suse.com]
       resources: [bundles, bundles/approve, bundles/request-changes]
       verbs: [get, list, watch, update]
-    - apiGroups: [ai-platform.suse.com]
+    - apiGroups: [ai.suse.com]
       resources: [blueprints/status]
       verbs: [update]
   ```
@@ -2125,7 +2125,7 @@ kubectl patch blueprint rag.1.0.0 --type=merge -p '{"spec":{"description":"y"}}'
 **Done When:** A non-publisher user calling `/approve`, `/request-changes`, `/blueprints/.../deprecate`, or `/blueprints/.../withdraw` receives `403 FORBIDDEN`.
 
 **Acceptance Criteria:**
-- [ ] **Reusable middleware** `RequirePublisher(next http.HandlerFunc) http.HandlerFunc` implementation matches **`ARCHITECTURE.md §10.1 "RequirePublisher middleware (P7-5 contract)"` snippet verbatim** — including the cache-key computation (`user + "|" + strings.Join(groups, ",")`), the 30s TTL, the SAR `ResourceAttributes` (`Verb=update Group=ai-platform.suse.com Resource=bundles Subresource=approve`), and the `errInsufficientPermissions` error envelope per `§6.4 ErrCodeForbidden`
+- [ ] **Reusable middleware** `RequirePublisher(next http.HandlerFunc) http.HandlerFunc` implementation matches **`ARCHITECTURE.md §10.1 "RequirePublisher middleware (P7-5 contract)"` snippet verbatim** — including the cache-key computation (`user + "|" + strings.Join(groups, ",")`), the 30s TTL, the SAR `ResourceAttributes` (`Verb=update Group=ai.suse.com Resource=bundles Subresource=approve`), and the `errInsufficientPermissions` error envelope per `§6.4 ErrCodeForbidden`
 - [ ] Helper `ExtractUser(r *http.Request) (user string, groups []string)` per `ARCHITECTURE.md §10.1 "Caller identity extraction"` — sorted groups for deterministic cache keys
 - [ ] **Applied to ALL publisher-only endpoints** — full enumeration:
   - `POST /api/v1/bundles/{ns}/{name}/approve`
@@ -2483,12 +2483,12 @@ cosign download sbom ghcr.io/suse/aif-operator:0.1.0 | jq -e '.SPDXID'
 - [ ] **Multi-arch preservation:** Phase 2 uses `skopeo copy --all --preserve-digests`. Validation step asserts the OCI tarball contains a manifest list (not a single-arch manifest) by inspecting the tarball with `skopeo inspect --raw oci-archive:images/aif-operator.tar | jq '.mediaType'` → expect `application/vnd.docker.distribution.manifest.list.v2+json` or the equivalent OCI index media type.
 - [ ] **Reproducible bundle:** Phase 6's tar flags (`--owner=0 --group=0 --mtime='UTC 2026-01-01'`) MUST produce a byte-identical tarball given the same git SHA. CI job `airgap-bundle-reproducibility` runs `make airgap-bundle` twice in clean workspaces and asserts both tarballs have identical sha256.
 - [ ] **`manifest.yaml` schema:** `hack/build-airgap-bundle.sh` synthesizes via `yq` per `ARCHITECTURE.md §16.2` schema. For every image: `name`, `sourceRef`, `file`, `digest` (OCI manifest digest from `skopeo inspect`), `platforms` (extracted from manifest list). For every chart: `name`, `version`, `file`, `digest` (sha256 of the .tgz). The schema MUST validate against `hack/airgap-manifest.schema.json` (a JSON Schema document committed in the same story).
-- [ ] **`mirror.sh` contract:** matches `ARCHITECTURE.md §16.3` exactly — flags `--dry-run`, `--parallel N` (default 4), `--skip-verify`, `--auth-file <path>`, `--insecure`. Uses `skopeo copy --all --preserve-digests` for images and `helm push` for charts. Verifies post-push digest against manifest by HEADing the destination. Re-runnable (idempotent for already-pushed digests). Preserves chart annotations including `ai-platform.suse.com/role: reference-blueprint`.
+- [ ] **`mirror.sh` contract:** matches `ARCHITECTURE.md §16.3` exactly — flags `--dry-run`, `--parallel N` (default 4), `--skip-verify`, `--auth-file <path>`, `--insecure`. Uses `skopeo copy --all --preserve-digests` for images and `helm push` for charts. Verifies post-push digest against manifest by HEADing the destination. Re-runnable (idempotent for already-pushed digests). Preserves chart annotations including `ai.suse.com/role: reference-blueprint`.
 - [ ] **`values-airgap-example.yaml`** sets these keys with explanatory comments: `image.registry: harbor.example.com/suse`, `imagePullSecrets: [{name: harbor-pull-secret}]`, `webhook.tlsMode: helm-hook`, `operator.logLevel: info`, plus a commented-out block for `webhook.tlsMode: manual` showing the `manual.tlsSecretName` + `manual.caBundle` fields.
 - [ ] **`README.md`** in the bundle root is one printed page (~60 lines) with: extract command, mirror.sh invocation, `helm install` command, `kubectl wait` to verify, link to `AIRGAP.md` for full ops guidance.
 - [ ] **CI publishing:** GitHub Actions workflow `release.yaml` adds a step after the multi-arch image push: `make airgap-bundle && gh release upload v${VERSION} dist/aif-airgap-bundle-*.tar.gz dist/aif-airgap-bundle-*.tar.gz.sha256` (and the cosign artifacts if `--sign` was passed). Workflow runs ONLY on tag push matching `v*`.
 - [ ] **E2E test** (`hack/airgap-e2e.sh`) implements the 10-step sequence in `ARCHITECTURE.md §16.6 "E2E test environment"` verbatim — including the egress-deny NetworkPolicy step (4) and the final log-grep assertion (10) that proves no operator log line indicates an attempted external connection. Runs in CI on `main` branch only (gated on `if: github.ref == 'refs/heads/main'`) because it consumes ~5 min of CI time.
-- [ ] **Reference Blueprint passthrough:** the bundle does NOT include vendor Reference Blueprint charts (per `ARCHITECTURE.md §16.5`) BUT `mirror.sh` MUST be tested against vendor charts (e.g., a stub NVIDIA RAG chart with the `ai-platform.suse.com/role: reference-blueprint` annotation) to verify the annotation survives the mirror cycle. This is a unit test on `mirror.sh` (skopeo copy + helm pull → assert annotation present).
+- [ ] **Reference Blueprint passthrough:** the bundle does NOT include vendor Reference Blueprint charts (per `ARCHITECTURE.md §16.5`) BUT `mirror.sh` MUST be tested against vendor charts (e.g., a stub NVIDIA RAG chart with the `ai.suse.com/role: reference-blueprint` annotation) to verify the annotation survives the mirror cycle. This is a unit test on `mirror.sh` (skopeo copy + helm pull → assert annotation present).
 - [ ] Tarball validation step (`hack/validate-airgap-bundle.sh`) extracts to a temp dir, parses `manifest.yaml`, verifies every declared digest matches the actual file, runs `helm template` against each chart with `values-airgap-example.yaml`, asserts zero failures. Invoked automatically by phase 7 of the build.
 
 **Validation:**
@@ -2532,7 +2532,7 @@ hack/airgap-e2e.sh
 ```
 
 **Agent Prompt:**
-> Implement `make airgap-bundle` per `ARCHITECTURE.md §16.6 "Build process"`. The driver is `hack/build-airgap-bundle.sh` (Bash; Linux/macOS only — print a clear error on Windows). Walk the 7-phase sequence verbatim. Use `skopeo copy --all --preserve-digests` for images (NOT `docker save` — `docker save` does not preserve multi-arch manifest lists). Use `helm package` for charts. Synthesize `manifest.yaml` with `yq`. Phase 6 MUST use `tar --owner=0 --group=0 --mtime='UTC 2026-01-01'` for reproducibility. Phase 7 invokes `hack/validate-airgap-bundle.sh` which extracts and verifies. Write `hack/mirror.sh` per `ARCHITECTURE.md §16.3` exactly — preserve the `ai-platform.suse.com/role: reference-blueprint` annotation through the mirror cycle (test this with a stub vendor chart). Write `hack/values-airgap-example.yaml`, `hack/airgap-README.md`, `hack/airgap-manifest.schema.json`. Add the GH Actions release-tag workflow step. Implement `hack/airgap-e2e.sh` per `ARCHITECTURE.md §16.6 "E2E test environment"` (kind + local registry + egress-deny netpol + log assertion). Done when all five Validation commands pass and the E2E test passes in CI on a `main` branch run.
+> Implement `make airgap-bundle` per `ARCHITECTURE.md §16.6 "Build process"`. The driver is `hack/build-airgap-bundle.sh` (Bash; Linux/macOS only — print a clear error on Windows). Walk the 7-phase sequence verbatim. Use `skopeo copy --all --preserve-digests` for images (NOT `docker save` — `docker save` does not preserve multi-arch manifest lists). Use `helm package` for charts. Synthesize `manifest.yaml` with `yq`. Phase 6 MUST use `tar --owner=0 --group=0 --mtime='UTC 2026-01-01'` for reproducibility. Phase 7 invokes `hack/validate-airgap-bundle.sh` which extracts and verifies. Write `hack/mirror.sh` per `ARCHITECTURE.md §16.3` exactly — preserve the `ai.suse.com/role: reference-blueprint` annotation through the mirror cycle (test this with a stub vendor chart). Write `hack/values-airgap-example.yaml`, `hack/airgap-README.md`, `hack/airgap-manifest.schema.json`. Add the GH Actions release-tag workflow step. Implement `hack/airgap-e2e.sh` per `ARCHITECTURE.md §16.6 "E2E test environment"` (kind + local registry + egress-deny netpol + log assertion). Done when all five Validation commands pass and the E2E test passes in CI on a `main` branch run.
 
 ---
 

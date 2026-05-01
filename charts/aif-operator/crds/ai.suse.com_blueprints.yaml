@@ -4,24 +4,27 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.20.1
-  name: bundles.ai-platform.suse.com
+  name: blueprints.ai.suse.com
 spec:
-  group: ai-platform.suse.com
+  group: ai.suse.com
   names:
-    kind: Bundle
-    listKind: BundleList
-    plural: bundles
+    kind: Blueprint
+    listKind: BlueprintList
+    plural: blueprints
     shortNames:
-    - bnd
-    singular: bundle
-  scope: Namespaced
+    - bp
+    singular: blueprint
+  scope: Cluster
   versions:
   - additionalPrinterColumns:
+    - jsonPath: .spec.blueprintName
+      name: Lineage
+      type: string
+    - jsonPath: .spec.version
+      name: Version
+      type: string
     - jsonPath: .status.phase
       name: Phase
-      type: string
-    - jsonPath: .spec.targetBlueprint
-      name: Target
       type: string
     - jsonPath: .spec.useCase
       name: Use Case
@@ -32,7 +35,7 @@ spec:
     name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: Bundle is the Schema for the bundles API
+        description: Blueprint is the Schema for the blueprints API
         properties:
           apiVersion:
             description: |-
@@ -52,15 +55,18 @@ spec:
           metadata:
             type: object
           spec:
-            description: BundleSpec defines the desired state of Bundle
+            description: BlueprintSpec defines the desired state of Blueprint
             properties:
-              authors:
-                description: Authors is a list of author display names
-                items:
-                  type: string
-                type: array
+              blueprintName:
+                description: BlueprintName is the lineage name
+                pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
+                type: string
+              changeDescription:
+                description: ChangeDescription describes what changed in this version
+                maxLength: 2048
+                type: string
               components:
-                description: Components are the Apps and/or Blueprints to include
+                description: Components are the pinned components
                 items:
                   description: ComponentRef references an App or Blueprint component
                   properties:
@@ -117,24 +123,76 @@ spec:
                 minItems: 1
                 type: array
               description:
-                description: Description is free-text description of the Bundle
+                description: Description is free-text description
                 maxLength: 1024
                 type: string
-              paused:
-                description: Paused suspends reconciliation when true
-                type: boolean
-              targetBlueprint:
-                description: TargetBlueprint is the Blueprint lineage name this Bundle
-                  publishes into
-                pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
+              publishedAt:
+                description: PublishedAt is the publish timestamp
+                format: date-time
                 type: string
-              title:
-                description: Title is the human-readable name of the Bundle
-                maxLength: 128
-                minLength: 1
+              publishedBy:
+                description: PublishedBy is the username of the approver (for Published)
+                  or "aif-system" (for WrapsVendorChart)
                 type: string
+              source:
+                description: Source indicates how this Blueprint was created
+                properties:
+                  publishedFrom:
+                    description: PublishedFrom is populated when Type=Published
+                    properties:
+                      bundleGeneration:
+                        description: BundleGeneration is the Bundle generation at
+                          submit time
+                        format: int64
+                        type: integer
+                      bundleName:
+                        description: BundleName is the name of the source Bundle
+                        type: string
+                      bundleNamespace:
+                        description: BundleNamespace is the namespace of the source
+                          Bundle
+                        type: string
+                    required:
+                    - bundleGeneration
+                    - bundleName
+                    - bundleNamespace
+                    type: object
+                  type:
+                    description: Type indicates the source type
+                    enum:
+                    - WrapsVendorChart
+                    - Published
+                    type: string
+                  vendorChartRef:
+                    description: VendorChartRef is populated when Type=WrapsVendorChart
+                    properties:
+                      chart:
+                        description: Chart is the chart name
+                        minLength: 1
+                        type: string
+                      provider:
+                        description: Provider identifies the vendor
+                        minLength: 1
+                        type: string
+                      repo:
+                        description: Repo is the Helm repository URL
+                        minLength: 1
+                        type: string
+                      version:
+                        description: Version is the chart version
+                        minLength: 1
+                        type: string
+                    required:
+                    - chart
+                    - provider
+                    - repo
+                    - version
+                    type: object
+                required:
+                - type
+                type: object
               useCase:
-                description: UseCase categorizes the Bundle's purpose
+                description: UseCase categorizes the Blueprint's purpose
                 enum:
                 - rag
                 - vision
@@ -145,21 +203,27 @@ spec:
               valueOverrides:
                 additionalProperties:
                   type: string
-                description: ValueOverrides contains per-component Helm values YAML,
-                  keyed by ComponentRef.name
+                description: ValueOverrides contains per-component Helm values YAML
                 type: object
+              version:
+                description: Version is the semantic version
+                pattern: ^\d+\.\d+\.\d+$
+                type: string
             required:
+            - blueprintName
             - components
-            - targetBlueprint
-            - title
+            - publishedAt
+            - publishedBy
+            - source
             - useCase
+            - version
             type: object
           status:
-            description: BundleStatus defines the observed state of Bundle
+            description: BlueprintStatus defines the observed state of Blueprint
             properties:
               conditions:
                 description: Conditions represent the latest available observations
-                  of the Bundle's state
+                  of the Blueprint's state
                 items:
                   description: Condition contains details for one aspect of the current
                     state of this API Resource.
@@ -218,6 +282,28 @@ spec:
                 x-kubernetes-list-map-keys:
                 - type
                 x-kubernetes-list-type: map
+              deploymentCount:
+                description: DeploymentCount is the number of currently-deployed Workloads
+                  sourced from this Blueprint version
+                format: int32
+                type: integer
+              deprecation:
+                description: Deprecation is set when phase != Active
+                properties:
+                  actionedAt:
+                    description: ActionedAt is when the action occurred
+                    format: date-time
+                    type: string
+                  actionedBy:
+                    description: ActionedBy is the username who actioned the deprecation/withdrawal
+                    type: string
+                  reason:
+                    description: Reason for the deprecation or withdrawal
+                    type: string
+                required:
+                - actionedAt
+                - actionedBy
+                type: object
               observedGeneration:
                 description: ObservedGeneration is the generation observed by the
                   controller
@@ -226,117 +312,10 @@ spec:
               phase:
                 description: Phase is the current lifecycle phase
                 enum:
-                - Draft
-                - Submitted
-                - ChangesRequested
+                - Active
+                - Deprecated
+                - Withdrawn
                 type: string
-              publishedVersions:
-                description: PublishedVersions is the history of published Blueprint
-                  versions
-                items:
-                  description: PublishedVersionRef tracks a published Blueprint version
-                  properties:
-                    blueprintName:
-                      description: BlueprintName is the lineage name
-                      type: string
-                    publishedAt:
-                      description: PublishedAt is when the version was published
-                      format: date-time
-                      type: string
-                    publishedBy:
-                      description: PublishedBy is the Rancher username who approved
-                        publication
-                      type: string
-                    version:
-                      description: Version is the semantic version
-                      type: string
-                  required:
-                  - blueprintName
-                  - publishedAt
-                  - publishedBy
-                  - version
-                  type: object
-                maxItems: 100
-                type: array
-              review:
-                description: Review is set when phase == ChangesRequested
-                properties:
-                  reviewedAt:
-                    description: ReviewedAt is the review timestamp
-                    format: date-time
-                    type: string
-                  reviewedBy:
-                    description: ReviewedBy is the Rancher username who reviewed
-                    type: string
-                  reviewerComment:
-                    description: ReviewerComment is the reviewer's feedback
-                    type: string
-                required:
-                - reviewedAt
-                - reviewedBy
-                - reviewerComment
-                type: object
-              submission:
-                description: Submission is set when phase != Draft
-                properties:
-                  changeDescription:
-                    description: ChangeDescription describes what changed in this
-                      version
-                    type: string
-                  generationAtSubmit:
-                    description: GenerationAtSubmit is the Bundle generation at submit
-                      time
-                    format: int64
-                    type: integer
-                  proposedVersion:
-                    description: ProposedVersion is the semantic version proposed
-                      for publication
-                    type: string
-                  submittedAt:
-                    description: SubmittedAt is the submission timestamp
-                    format: date-time
-                    type: string
-                  submittedBy:
-                    description: SubmittedBy is the Rancher username who submitted
-                    type: string
-                required:
-                - generationAtSubmit
-                - proposedVersion
-                - submittedAt
-                - submittedBy
-                type: object
-              testDeploys:
-                description: TestDeploys contains recent test deploy records (capped
-                  at 10)
-                items:
-                  description: TestDeployRecord tracks a single test deployment
-                  properties:
-                    result:
-                      description: Result is the test outcome
-                      enum:
-                      - Success
-                      - Failed
-                      - Running
-                      type: string
-                    startedAt:
-                      description: StartedAt is when the test deploy started
-                      format: date-time
-                      type: string
-                    targetCluster:
-                      description: TargetCluster is the cluster ID where the test
-                        was deployed
-                      type: string
-                    workloadRef:
-                      description: WorkloadRef is the namespace/name of the test Workload
-                      type: string
-                  required:
-                  - result
-                  - startedAt
-                  - targetCluster
-                  - workloadRef
-                  type: object
-                maxItems: 10
-                type: array
             type: object
         type: object
     served: true

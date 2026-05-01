@@ -22,7 +22,7 @@ This document walks you through the end-to-end procedure. See `docs/spec/SOFTWAR
 - **Single pull-secret pattern** — `suse-registry-creds` works against any docker-config-compliant registry; just point it at your local registry and adjust the auth.
 - **No NGC at runtime** — AIF never reaches NVIDIA NGC; vendor assets come from your local registry only.
 - **No internal OCI registry** — AIF doesn't host or proxy a registry; it consumes from the configured one. Your existing Harbor / Quay / Nexus is the registry.
-- **Reference Blueprint detection via chart annotation** — the annotation `ai-platform.suse.com/role: reference-blueprint` is preserved through any digest-aware mirror tool; auto-wrapping just works.
+- **Reference Blueprint detection via chart annotation** — the annotation `ai.suse.com/role: reference-blueprint` is preserved through any digest-aware mirror tool; auto-wrapping just works.
 
 ### What isn't air-gap-friendly out of the box (and how AIF handles it)
 
@@ -156,7 +156,7 @@ skopeo copy --all --preserve-digests \
 # Repeat for nvidia/aiq and any other Reference Blueprints you want to make available.
 ```
 
-> **Critical:** `skopeo copy --all --preserve-digests` preserves the `ai-platform.suse.com/role: reference-blueprint` chart annotation. AIF relies on this annotation to detect Reference Blueprints and auto-wrap them as AIF Blueprints. If your mirror tool strips chart annotations, vendor-chart wrapping won't work. See `docs/spec/ARCHITECTURE.md §13.1`.
+> **Critical:** `skopeo copy --all --preserve-digests` preserves the `ai.suse.com/role: reference-blueprint` chart annotation. AIF relies on this annotation to detect Reference Blueprints and auto-wrap them as AIF Blueprints. If your mirror tool strips chart annotations, vendor-chart wrapping won't work. See `docs/spec/ARCHITECTURE.md §13.1`.
 
 ### 4.5 Mirror SUSE Application Collection charts (optional)
 

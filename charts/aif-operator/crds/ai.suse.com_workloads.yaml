@@ -4,9 +4,9 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.20.1
-  name: workloads.ai-platform.suse.com
+  name: workloads.ai.suse.com
 spec:
-  group: ai-platform.suse.com
+  group: ai.suse.com
   names:
     kind: Workload
     listKind: WorkloadList

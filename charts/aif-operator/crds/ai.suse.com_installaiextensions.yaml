@@ -4,9 +4,9 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.20.1
-  name: installaiextensions.ai-platform.suse.com
+  name: installaiextensions.ai.suse.com
 spec:
-  group: ai-platform.suse.com
+  group: ai.suse.com
   names:
     kind: InstallAIExtension
     listKind: InstallAIExtensionList
