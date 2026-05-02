@@ -33,4 +33,15 @@ const (
 	// Pull-secret reconciler (P7-2)
 	ReasonPullSecretReconcileBlocked = "PullSecretReconcileBlocked"
 	ReasonSourceSecretMissing        = "SourceSecretMissing"
+
+	// Blueprint validation
+	ReasonBlueprintValidated = "BlueprintValidated"       // Blueprint spec validation passed
+	ReasonBlueprintInvalid   = "BlueprintInvalid"         // Blueprint spec validation failed
+
+	// Blueprint source events
+	ReasonBlueprintPublished              = "BlueprintPublished"              // Blueprint from Published source
+	ReasonBlueprintWrappedFromVendorChart = "BlueprintWrappedFromVendorChart" // Blueprint from WrapsVendorChart source
+
+	// Blueprint deletion
+	ReasonBlueprintHasActiveWorkloads = "BlueprintHasActiveWorkloads" // Deletion blocked due to active Workloads
 )
