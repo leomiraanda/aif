@@ -81,7 +81,10 @@ func main() {
 	appsCatalog := apps.New(logger, catalogRefreshDuration)
 	bundleManager := bundle.New(logger)
 	blueprintManager := blueprint.New(logger)
-	publishWorkflow := publish.New(logger)
+	// publish.Workflow takes Repository ports; the Repositories are constructed
+	// after ctrl.NewManager below (they need the manager's client). Defer
+	// construction until that's available.
+	var publishWorkflow publish.Workflow
 	workloadManager := workload.New(logger)
 
 	// Log manager creation (prevent unused variable warnings)
