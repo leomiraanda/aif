@@ -12,7 +12,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -37,7 +37,7 @@ const (
 type SettingsReconciler struct {
 	client.Client
 	Scheme   *runtime.Scheme
-	Recorder record.EventRecorder
+	Recorder events.EventRecorder
 }
 
 // Reconcile handles Settings reconciliation
@@ -126,7 +126,7 @@ func (r *SettingsReconciler) reconcile(ctx context.Context, settings *aifv1.Sett
 	}
 
 	// Emit event
-	r.Recorder.Event(settings, corev1.EventTypeNormal, eventSettingsApplied, "Settings applied successfully")
+	r.Recorder.Eventf(settings, nil, corev1.EventTypeNormal, eventSettingsApplied, conditions.ActionApplying, "Settings applied successfully")
 
 	return ctrl.Result{}, nil
 }
@@ -190,7 +190,7 @@ func (r *SettingsReconciler) handleSecretError(ctx context.Context, settings *ai
 	}
 
 	// Emit event
-	r.Recorder.Event(settings, corev1.EventTypeWarning, eventType, msg)
+	r.Recorder.Eventf(settings, nil, corev1.EventTypeWarning, eventType, conditions.ActionResolving, msg)
 
 	// Requeue after 30s to retry secret resolution
 	return ctrl.Result{RequeueAfter: 30 * time.Second}, nil

@@ -9,7 +9,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -24,7 +24,7 @@ const (
 type WorkloadReconciler struct {
 	client.Client
 	Scheme   *runtime.Scheme
-	Recorder record.EventRecorder
+	Recorder events.EventRecorder
 }
 
 // +kubebuilder:rbac:groups=ai.suse.com,resources=workloads,verbs=get;list;watch;update;patch
@@ -122,7 +122,7 @@ func (r *WorkloadReconciler) reconcile(ctx context.Context, w *aifv1.Workload) e
 		})
 
 		// Record event
-		r.Recorder.Event(w, "Warning", "WorkloadInvalid", err.Error())
+		r.Recorder.Eventf(w, nil, "Warning", "WorkloadInvalid", conditions.ActionValidating, err.Error())
 
 		// Set ObservedGeneration
 		w.Status.ObservedGeneration = w.Generation
@@ -145,7 +145,7 @@ func (r *WorkloadReconciler) reconcile(ctx context.Context, w *aifv1.Workload) e
 	})
 
 	// Record success event
-	r.Recorder.Event(w, "Normal", "WorkloadCreated", "Workload validated successfully")
+	r.Recorder.Eventf(w, nil, "Normal", "WorkloadCreated", conditions.ActionValidating, "Workload validated successfully")
 
 	// Set ObservedGeneration
 	w.Status.ObservedGeneration = w.Generation
