@@ -2,9 +2,11 @@ package controller
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	aifv1 "github.com/SUSE/aif/api/v1alpha1"
+	"github.com/SUSE/aif/pkg/bundle"
 	"github.com/SUSE/aif/pkg/conditions"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -56,11 +58,19 @@ func TestBundleReconciler_ValidBundle(t *testing.T) {
 		WithStatusSubresource(&aifv1.Bundle{}).
 		Build()
 
-	// Create reconciler (validation runs through bundle.Validate directly)
+	// Create fake manager
+	fakeManager := &fakeBundleManager{
+		upsertFunc: func(ctx context.Context, b bundle.Bundle) error {
+			return nil // Valid bundle passes validation
+		},
+	}
+
+	// Create reconciler
 	reconciler := &BundleReconciler{
 		Client:   fakeClient,
 		Scheme:   scheme,
 		Recorder: &fakeRecorder{},
+		Manager:  fakeManager,
 	}
 
 	// Reconcile
@@ -118,6 +128,28 @@ func TestBundleReconciler_ValidBundle(t *testing.T) {
 	}
 }
 
+// fakeBundleManager implements bundle.Manager for testing
+type fakeBundleManager struct {
+	upsertFunc func(ctx context.Context, b bundle.Bundle) error
+	getFunc    func(ctx context.Context, namespace, name string) (bundle.Bundle, bool)
+}
+
+func (f *fakeBundleManager) Upsert(ctx context.Context, b bundle.Bundle) error {
+	if f.upsertFunc != nil {
+		return f.upsertFunc(ctx, b)
+	}
+	return nil
+}
+
+func (f *fakeBundleManager) Get(ctx context.Context, namespace, name string) (bundle.Bundle, bool) {
+	if f.getFunc != nil {
+		return f.getFunc(ctx, namespace, name)
+	}
+	return bundle.Bundle{}, false
+}
+
+var _ bundle.Manager = (*fakeBundleManager)(nil)
+
 func TestBundleReconciler_InvalidSpec(t *testing.T) {
 	// Setup scheme
 	scheme := runtime.NewScheme()
@@ -161,13 +193,22 @@ func TestBundleReconciler_InvalidSpec(t *testing.T) {
 		WithStatusSubresource(&aifv1.Bundle{}).
 		Build()
 
-	// Create reconciler. Bundle.UseCase="invalid-use-case" deterministically
-	// fails bundle.Validate, so no fake validator is needed — the real one
-	// drives the negative path.
+	// Create fake manager that rejects invalid bundles
+	fakeManager := &fakeBundleManager{
+		upsertFunc: func(ctx context.Context, b bundle.Bundle) error {
+			if b.UseCase == "invalid-use-case" {
+				return fmt.Errorf("invalid useCase: must be one of [rag, vision, fine-tuning, inference, other]")
+			}
+			return nil
+		},
+	}
+
+	// Create reconciler
 	reconciler := &BundleReconciler{
 		Client:   fakeClient,
 		Scheme:   scheme,
 		Recorder: &fakeRecorder{},
+		Manager:  fakeManager,
 	}
 
 	// Reconcile
@@ -255,11 +296,19 @@ func TestBundleReconciler_Finalizer(t *testing.T) {
 		WithStatusSubresource(&aifv1.Bundle{}).
 		Build()
 
-	// Create reconciler (validation runs through bundle.Validate directly)
+	// Create fake manager
+	fakeManager := &fakeBundleManager{
+		upsertFunc: func(ctx context.Context, b bundle.Bundle) error {
+			return nil
+		},
+	}
+
+	// Create reconciler
 	reconciler := &BundleReconciler{
 		Client:   fakeClient,
 		Scheme:   scheme,
 		Recorder: &fakeRecorder{},
+		Manager:  fakeManager,
 	}
 
 	req := ctrl.Request{
@@ -398,11 +447,19 @@ func TestBundleReconciler_SelfHealing(t *testing.T) {
 		WithStatusSubresource(&aifv1.Bundle{}).
 		Build()
 
-	// Create reconciler (validation runs through bundle.Validate directly)
+	// Create fake manager
+	fakeManager := &fakeBundleManager{
+		upsertFunc: func(ctx context.Context, b bundle.Bundle) error {
+			return nil
+		},
+	}
+
+	// Create reconciler
 	reconciler := &BundleReconciler{
 		Client:   fakeClient,
 		Scheme:   scheme,
 		Recorder: &fakeRecorder{},
+		Manager:  fakeManager,
 	}
 
 	req := ctrl.Request{
@@ -510,11 +567,19 @@ func TestBundleReconciler_SelfHealing_MissingBP(t *testing.T) {
 		WithStatusSubresource(&aifv1.Bundle{}).
 		Build()
 
-	// Create reconciler (validation runs through bundle.Validate directly)
+	// Create fake manager
+	fakeManager := &fakeBundleManager{
+		upsertFunc: func(ctx context.Context, b bundle.Bundle) error {
+			return nil
+		},
+	}
+
+	// Create reconciler
 	reconciler := &BundleReconciler{
 		Client:   fakeClient,
 		Scheme:   scheme,
 		Recorder: &fakeRecorder{},
+		Manager:  fakeManager,
 	}
 
 	req := ctrl.Request{
@@ -638,11 +703,19 @@ func TestBundleReconciler_SelfHealing_NoMatch(t *testing.T) {
 		WithStatusSubresource(&aifv1.Bundle{}).
 		Build()
 
-	// Create reconciler (validation runs through bundle.Validate directly)
+	// Create fake manager
+	fakeManager := &fakeBundleManager{
+		upsertFunc: func(ctx context.Context, b bundle.Bundle) error {
+			return nil
+		},
+	}
+
+	// Create reconciler
 	reconciler := &BundleReconciler{
 		Client:   fakeClient,
 		Scheme:   scheme,
 		Recorder: &fakeRecorder{},
+		Manager:  fakeManager,
 	}
 
 	req := ctrl.Request{
