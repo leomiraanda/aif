@@ -1,4 +1,4 @@
-package controller
+package controller_test
 
 import (
 	"context"
@@ -80,7 +80,7 @@ var _ = Describe("BlueprintReconciler", func() {
 		// Verify finalizer
 		var fetched aifv1.Blueprint
 		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(bp), &fetched)).To(Succeed())
-		Expect(fetched.Finalizers).To(ContainElement(blueprintFinalizerName))
+		Expect(fetched.Finalizers).To(ContainElement("ai.suse.com/cleanup"))
 	})
 
 	It("should reject invalid semver at the CRD level", func() {
@@ -311,7 +311,7 @@ var _ = Describe("BlueprintReconciler", func() {
 		Consistently(func(g Gomega) {
 			var fetched aifv1.Blueprint
 			g.Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(bp), &fetched)).To(Succeed())
-			g.Expect(fetched.Finalizers).To(ContainElement(blueprintFinalizerName))
+			g.Expect(fetched.Finalizers).To(ContainElement("ai.suse.com/cleanup"))
 			g.Expect(fetched.DeletionTimestamp).NotTo(BeNil())
 		}, 2*time.Second, interval).Should(Succeed())
 

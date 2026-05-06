@@ -1,4 +1,4 @@
-package controller
+package controller_test
 
 import (
 	"context"
@@ -6,8 +6,8 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	aifv1 "github.com/SUSE/aif/api/v1alpha1"
@@ -68,7 +68,7 @@ var _ = Describe("BundleReconciler", func() {
 		// Verify finalizer
 		var fetched aifv1.Bundle
 		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(bundle), &fetched)).To(Succeed())
-		Expect(fetched.Finalizers).To(ContainElement(finalizerName))
+		Expect(fetched.Finalizers).To(ContainElement("ai.suse.com/cleanup"))
 	})
 
 	It("should reject invalid useCase at the CRD level", func() {
@@ -130,7 +130,7 @@ var _ = Describe("BundleReconciler", func() {
 		Eventually(func(g Gomega) {
 			var fetched aifv1.Bundle
 			g.Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(bundle), &fetched)).To(Succeed())
-			g.Expect(fetched.Finalizers).To(ContainElement(finalizerName))
+			g.Expect(fetched.Finalizers).To(ContainElement("ai.suse.com/cleanup"))
 		}, timeout, interval).Should(Succeed())
 
 		// Delete
@@ -208,7 +208,7 @@ var _ = Describe("BundleReconciler", func() {
 		Eventually(func(g Gomega) {
 			var fetched aifv1.Bundle
 			g.Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(bundle), &fetched)).To(Succeed())
-			g.Expect(fetched.Finalizers).To(ContainElement(finalizerName))
+			g.Expect(fetched.Finalizers).To(ContainElement("ai.suse.com/cleanup"))
 			rc := findReady(fetched.Status.Conditions)
 			g.Expect(rc).NotTo(BeNil())
 		}, timeout, interval).Should(Succeed())
@@ -279,7 +279,7 @@ var _ = Describe("BundleReconciler", func() {
 		Eventually(func(g Gomega) {
 			var fetched aifv1.Bundle
 			g.Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(bundle), &fetched)).To(Succeed())
-			g.Expect(fetched.Finalizers).To(ContainElement(finalizerName))
+			g.Expect(fetched.Finalizers).To(ContainElement("ai.suse.com/cleanup"))
 		}, timeout, interval).Should(Succeed())
 
 		// Set to Submitted phase
@@ -388,7 +388,7 @@ var _ = Describe("BundleReconciler", func() {
 		Eventually(func(g Gomega) {
 			var fetched aifv1.Bundle
 			g.Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(bundle), &fetched)).To(Succeed())
-			g.Expect(fetched.Finalizers).To(ContainElement(finalizerName))
+			g.Expect(fetched.Finalizers).To(ContainElement("ai.suse.com/cleanup"))
 		}, timeout, interval).Should(Succeed())
 
 		// Set to Submitted phase

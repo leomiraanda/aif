@@ -36,6 +36,10 @@ build:
 
 test:
 	@echo "Running tests..."
+	go test ./...
+
+test-verbose:
+	@echo "Running tests..."
 	go test -v ./...
 
 run: dev-certs
@@ -64,7 +68,7 @@ charts-package:
 
 lint:
 	@echo "Running linters..."
-	golangci-lint run ./...
+	golangci-lint run --concurrency=1 ./...
 
 manifests:
 	@echo "Generating CRD manifests..."
@@ -79,8 +83,11 @@ install-tools:
 	@echo "Installing development tools with pinned versions..."
 	@echo "Installing controller-gen v0.20.1..."
 	go install sigs.k8s.io/controller-tools/cmd/controller-gen@v0.20.1
-	@echo "Installing golangci-lint v2.11.4..."
-	go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.11.4
+	@echo "Installing golangci-lint v2.12.1..."
+	@# Force Go 1.26 toolchain — golangci-lint refuses to lint a project whose
+	@# go.mod requires a Go version newer than the toolchain it was built with.
+	@# v2.11.4 (built with Go 1.25) cannot lint this repo since go.mod is 1.26.
+	GOTOOLCHAIN=go1.26.0 go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.1
 	@echo "Installing mockgen v0.6.0..."
 	go install go.uber.org/mock/mockgen@v0.6.0
 	@echo "Installing ginkgo v2.28.1..."
@@ -120,6 +127,8 @@ dev-cluster-down:
 dev-install:
 	@echo "Installing CRDs..."
 	kubectl apply -f charts/aif-operator/crds/
+	@echo "Creating 'aif' namespace (Settings CR singleton lives here)..."
+	kubectl create namespace aif --dry-run=client -o yaml | kubectl apply -f -
 	@echo "CRDs installed. Use 'make run' to start the operator out-of-cluster."
 
 examples:
@@ -127,7 +136,8 @@ examples:
 	kubectl apply -f examples/bundle-smoke.yaml
 	kubectl apply -f examples/blueprint-smoke.yaml
 	kubectl apply -f examples/workload-smoke.yaml
-	@echo "Done. 'kubectl get bundles,blueprints,workloads -A' to see them."
+	kubectl apply -f examples/settings-smoke.yaml
+	@echo "Done. 'kubectl get bundles,blueprints,workloads,settings -A' to see them."
 
 # dev-certs generates a self-signed TLS cert at controller-runtime's default
 # webhook CertDir so 'make run' (out-of-cluster) doesn't fail at startup.

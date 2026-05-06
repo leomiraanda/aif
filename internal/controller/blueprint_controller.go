@@ -12,7 +12,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -32,7 +32,7 @@ const (
 type BlueprintReconciler struct {
 	client.Client
 	Scheme   *runtime.Scheme
-	Recorder record.EventRecorder
+	Recorder events.EventRecorder
 	Manager  blueprint.Manager
 }
 
@@ -106,7 +106,7 @@ func (r *BlueprintReconciler) reconcile(ctx context.Context, bp *aifv1.Blueprint
 		})
 
 		// Record event
-		r.Recorder.Event(bp, "Warning", conditions.ReasonBlueprintInvalid, err.Error())
+		r.Recorder.Eventf(bp, nil, "Warning", conditions.ReasonBlueprintInvalid, conditions.ActionValidating, err.Error())
 
 		// Set ObservedGeneration
 		bp.Status.ObservedGeneration = bp.Generation
@@ -140,7 +140,7 @@ func (r *BlueprintReconciler) reconcile(ctx context.Context, bp *aifv1.Blueprint
 	})
 
 	// Record success event
-	r.Recorder.Event(bp, "Normal", conditions.ReasonBlueprintValidated, "Blueprint validated successfully")
+	r.Recorder.Eventf(bp, nil, "Normal", conditions.ReasonBlueprintValidated, conditions.ActionValidating, "Blueprint validated successfully")
 
 	// Set ObservedGeneration
 	bp.Status.ObservedGeneration = bp.Generation
@@ -165,8 +165,8 @@ func (r *BlueprintReconciler) handleDeletion(ctx context.Context, bp *aifv1.Blue
 
 	if count > 0 {
 		// Cannot delete - active Workloads exist
-		r.Recorder.Event(bp, "Warning", "BlueprintHasActiveWorkloads",
-			fmt.Sprintf("Cannot delete Blueprint with %d active Workloads", count))
+		r.Recorder.Eventf(bp, nil, "Warning", "BlueprintHasActiveWorkloads", conditions.ActionDeleting,
+			"Cannot delete Blueprint with %d active Workloads", count)
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 	}
 

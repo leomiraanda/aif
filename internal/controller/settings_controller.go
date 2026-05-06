@@ -2,8 +2,8 @@ package controller
 
 import (
 	"context"
+	stderrors "errors"
 	"fmt"
-	"strings"
 	"time"
 
 	aifv1 "github.com/SUSE/aif/api/v1alpha1"
@@ -12,11 +12,19 @@ import (
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+)
+
+// Sentinel errors for Secret resolution. Callers classify failures with
+// errors.Is — never with strings.Contains on the message (that pattern is
+// in CLAUDE.md's Forbidden list).
+var (
+	ErrSecretNotFound   = stderrors.New("secret not found")
+	ErrInvalidSecretKey = stderrors.New("invalid secret key")
 )
 
 const (
@@ -37,7 +45,7 @@ const (
 type SettingsReconciler struct {
 	client.Client
 	Scheme   *runtime.Scheme
-	Recorder record.EventRecorder
+	Recorder events.EventRecorder
 }
 
 // Reconcile handles Settings reconciliation
@@ -126,7 +134,7 @@ func (r *SettingsReconciler) reconcile(ctx context.Context, settings *aifv1.Sett
 	}
 
 	// Emit event
-	r.Recorder.Event(settings, corev1.EventTypeNormal, eventSettingsApplied, "Settings applied successfully")
+	r.Recorder.Eventf(settings, nil, corev1.EventTypeNormal, eventSettingsApplied, conditions.ActionApplying, "Settings applied successfully")
 
 	return ctrl.Result{}, nil
 }
@@ -147,14 +155,14 @@ func (r *SettingsReconciler) resolveSecretKeyRef(ctx context.Context, ref *corev
 
 	if err := r.Get(ctx, secretName, &secret); err != nil {
 		if errors.IsNotFound(err) {
-			return "", fmt.Errorf("secret %s not found", ref.Name)
+			return "", fmt.Errorf("secret %s: %w", ref.Name, ErrSecretNotFound)
 		}
 		return "", fmt.Errorf("failed to get secret %s: %w", ref.Name, err)
 	}
 
 	value, ok := secret.Data[ref.Key]
 	if !ok {
-		return "", fmt.Errorf("key %s not found in secret %s", ref.Key, ref.Name)
+		return "", fmt.Errorf("key %s in secret %s: %w", ref.Key, ref.Name, ErrInvalidSecretKey)
 	}
 
 	return string(value), nil
@@ -190,20 +198,23 @@ func (r *SettingsReconciler) handleSecretError(ctx context.Context, settings *ai
 	}
 
 	// Emit event
-	r.Recorder.Event(settings, corev1.EventTypeWarning, eventType, msg)
+	r.Recorder.Eventf(settings, nil, corev1.EventTypeWarning, eventType, conditions.ActionResolving, msg)
 
 	// Requeue after 30s to retry secret resolution
 	return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 }
 
-// isSecretNotFound checks if an error indicates a missing Secret
+// isSecretNotFound checks if an error indicates a missing Secret.
+// Uses errors.Is on the package's sentinel; falls through to apierrors.IsNotFound
+// to also catch the "not yet wrapped" path (defensive, in case a caller adds a
+// new code path that returns the apiserver's NotFound directly).
 func isSecretNotFound(err error) bool {
-	return err != nil && (errors.IsNotFound(err) || strings.Contains(err.Error(), "not found"))
+	return err != nil && (stderrors.Is(err, ErrSecretNotFound) || errors.IsNotFound(err))
 }
 
-// isInvalidSecretKey checks if an error indicates a missing key in a Secret
+// isInvalidSecretKey checks if an error indicates a missing key in a Secret.
 func isInvalidSecretKey(err error) bool {
-	return err != nil && strings.Contains(err.Error(), "key") && strings.Contains(err.Error(), "not found")
+	return err != nil && stderrors.Is(err, ErrInvalidSecretKey)
 }
 
 // handleDeletion handles Settings deletion

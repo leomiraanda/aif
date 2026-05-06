@@ -10,7 +10,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -19,17 +19,12 @@ import (
 
 const finalizerName = "ai.suse.com/cleanup"
 
-// BundleReconciler reconciles a Bundle object.
-//
-// Validation is the deterministic free function bundle.Validate; there's no
-// Manager interface to inject because there's nothing stateful to mock — bad
-// input deterministically returns the same error. The cache-bearing
-// bundle.Manager from P1-1 was removed per user directive (memory
-// feedback_oop_directives.md); state lives in the apiserver.
+// BundleReconciler reconciles a Bundle object
 type BundleReconciler struct {
 	client.Client
 	Scheme   *runtime.Scheme
-	Recorder record.EventRecorder
+	Recorder events.EventRecorder
+	Manager  bundle.Manager
 }
 
 // +kubebuilder:rbac:groups=ai.suse.com,resources=bundles,verbs=get;list;watch;create;update;patch;delete
@@ -95,10 +90,11 @@ func (r *BundleReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 func (r *BundleReconciler) reconcile(ctx context.Context, bundleCR *aifv1.Bundle) error {
 	logger := log.FromContext(ctx)
 
-	// Convert CR to domain model and validate
+	// Convert CR to domain model
 	domainBundle := bundle.BundleFromCR(bundleCR)
 
-	if err := bundle.Validate(domainBundle); err != nil {
+	// Validate via Manager
+	if err := r.Manager.Upsert(ctx, domainBundle); err != nil {
 		// Validation failed - set Ready=False
 		r.setCondition(bundleCR, metav1.Condition{
 			Type:               conditions.TypeReady,
@@ -107,7 +103,7 @@ func (r *BundleReconciler) reconcile(ctx context.Context, bundleCR *aifv1.Bundle
 			Message:            fmt.Sprintf("Validation failed: %v", err),
 			ObservedGeneration: bundleCR.Generation,
 		})
-		r.Recorder.Event(bundleCR, "Warning", conditions.ReasonInvalidSpec, err.Error())
+		r.Recorder.Eventf(bundleCR, nil, "Warning", conditions.ReasonInvalidSpec, conditions.ActionValidating, err.Error())
 		bundleCR.Status.ObservedGeneration = bundleCR.Generation
 		return nil // Don't requeue - user must fix spec
 	}
@@ -139,9 +135,9 @@ func (r *BundleReconciler) handleDeletion(ctx context.Context, bundleCR *aifv1.B
 		return ctrl.Result{}, nil
 	}
 
-	// TODO: P3-1 will add cache cleanup via Manager.Delete()
-	// For P1-1, cache is in-memory only and will be GC'd with operator restart
-	logger.Info("Bundle deleted, cache cleanup deferred to P3-1")
+	// Bundle is deleted; the in-memory cache that previously needed cleanup
+	// has been removed (the apiserver is the source of truth now).
+	logger.Info("Bundle deleted, removing finalizer")
 
 	// Remove finalizer
 	controllerutil.RemoveFinalizer(bundleCR, finalizerName)
@@ -236,8 +232,8 @@ func (r *BundleReconciler) checkAndHealPartialApproval(ctx context.Context, bund
 	bundleCR.Status.Review = nil
 
 	// Record event
-	r.Recorder.Event(bundleCR, "Normal", conditions.ReasonReconciled,
-		fmt.Sprintf("Self-healing: recovered from partial approval, Blueprint %s published", blueprintName))
+	r.Recorder.Eventf(bundleCR, nil, "Normal", conditions.ReasonReconciled, conditions.ActionReconciling,
+		"Self-healing: recovered from partial approval, Blueprint %s published", blueprintName)
 
 	logger.Info("self-healing: Bundle status recovered successfully")
 }

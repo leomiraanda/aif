@@ -13,19 +13,19 @@ import (
 	"time"
 
 	aifv1alpha1 "github.com/SUSE/aif/api/v1alpha1"
-	"github.com/SUSE/aif/internal/controller"
 	"github.com/SUSE/aif/internal/manager"
 	"github.com/SUSE/aif/pkg/apps"
 	"github.com/SUSE/aif/pkg/blueprint"
+	"github.com/SUSE/aif/pkg/bundle"
 	"github.com/SUSE/aif/pkg/git"
 	"github.com/SUSE/aif/pkg/helm"
 	"github.com/SUSE/aif/pkg/nvidia"
 	"github.com/SUSE/aif/pkg/publish"
 	"github.com/SUSE/aif/pkg/workload"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/discovery"
+	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/healthz"
-	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
-	"sigs.k8s.io/controller-runtime/pkg/webhook"
 )
 
 var (
@@ -72,14 +72,21 @@ func main() {
 		"logFormat", logFormat,
 	)
 
+	// Get Kubernetes config
+	k8sConfig := ctrl.GetConfigOrDie()
+
 	// Create manager components
-	helmEngine := helm.New(logger, chartsDir)
+	helmEngine := helm.New(logger, k8sConfig)
+	discoveryClient, err := discovery.NewDiscoveryClientForConfig(k8sConfig)
+	if err != nil {
+		logger.Error("failed to create discovery client", slog.Any("error", err))
+		os.Exit(1)
+	}
 	gitEngine := git.NewFleetEngine(logger, gitDir)
 	nvidiaDiscovery := nvidia.NewDiscovery(logger)
 	nvidiaDeployer := nvidia.NewDeployer(logger)
 	appsCatalog := apps.New(logger, catalogRefreshDuration)
-	// bundle no longer has a Manager — validation is the free function
-	// bundle.Validate; persistence is bundle.Repository (per OOP refactor B2).
+	bundleManager := bundle.New(logger)
 	blueprintManager := blueprint.New(logger)
 	// publish.Workflow takes Repository ports; the Repositories are constructed
 	// after ctrl.NewManager below (they need the manager's client). Defer
@@ -90,106 +97,75 @@ func main() {
 	// Log manager creation (prevent unused variable warnings)
 	logger.Debug("Managers created",
 		"helmEngine", helmEngine != nil,
+		"discoveryClient", discoveryClient != nil,
 		"gitEngine", gitEngine != nil,
 		"nvidiaDiscovery", nvidiaDiscovery != nil,
 		"nvidiaDeployer", nvidiaDeployer != nil,
 		"appsCatalog", appsCatalog != nil,
+		"bundleManager", bundleManager != nil,
 		"blueprintManager", blueprintManager != nil,
 		"publishWorkflow", publishWorkflow != nil,
 		"workloadManager", workloadManager != nil,
 	)
 
-	// Setup controller-runtime manager
+	// Setup controller-runtime manager with all controllers and webhooks
 	logger.Info("Creating controller-runtime manager")
-	webhookServer := webhook.NewServer(webhook.Options{
-		Port: parsePort(webhookBindAddress),
-	})
-	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
-		LeaderElection:         leaderElect,
-		LeaderElectionID:       "aif-operator-leader",
-		HealthProbeBindAddress: healthProbeBindAddress,
-		Metrics: metricsserver.Options{
-			BindAddress: metricsBindAddress,
-		},
-		WebhookServer: webhookServer,
+	scheme := runtime.NewScheme()
+
+	// Register the standard Kubernetes built-in types (corev1, appsv1, batchv1,
+	// rbacv1, networkingv1, …). Without this, controller-runtime's typed client
+	// cannot Get/List/Watch any non-CRD object — most concretely, the
+	// SettingsReconciler's r.Get(ctx, secretName, &corev1.Secret{}) fails with
+	// "no kind is registered for the type v1.Secret in scheme".
+	if err := clientgoscheme.AddToScheme(scheme); err != nil {
+		logger.Error("Failed to add built-in Kubernetes types to scheme", "error", err)
+		os.Exit(1)
+	}
+	// Register the AIF CRDs.
+	if err := aifv1alpha1.AddToScheme(scheme); err != nil {
+		logger.Error("Failed to add AIF API types to scheme", "error", err)
+		os.Exit(1)
+	}
+
+	mgr, err := manager.NewManager(scheme, k8sConfig, manager.Options{
+		LeaderElection:   leaderElect,
+		LeaderElectionID: "aif-operator-leader",
+		MetricsAddr:      metricsBindAddress,
+		HealthAddr:       healthProbeBindAddress,
+		WebhookPort:      parsePort(webhookBindAddress),
+		BundleManager:    bundleManager,
+		BlueprintManager: blueprintManager,
+		HelmEngine:       helmEngine,
+		Discovery:        discoveryClient,
+		Logger:           logger,
 	})
 	if err != nil {
 		logger.Error("Failed to create manager", "error", err)
 		os.Exit(1)
 	}
-	logger.Info("Manager created successfully", "webhookPort", parsePort(webhookBindAddress))
+	logger.Info("Manager created successfully")
 
-	// Register API types with scheme
-	if err := aifv1alpha1.AddToScheme(mgr.GetScheme()); err != nil {
-		logger.Error("Failed to add API types to scheme", "error", err)
-		os.Exit(1)
-	}
-
-	// Setup WorkloadReconciler
-	workloadReconciler := &controller.WorkloadReconciler{
-		Client:   mgr.GetClient(),
-		Scheme:   mgr.GetScheme(),
-		Recorder: mgr.GetEventRecorderFor("workload-controller"), //nolint:staticcheck // GetEventRecorderFor deprecated but required for record.EventRecorder interface
-	}
-	if err := workloadReconciler.SetupWithManager(mgr); err != nil {
-		logger.Error("Failed to setup WorkloadReconciler", "error", err)
-		os.Exit(1)
-	}
-	logger.Info("WorkloadReconciler registered")
-
-	// Setup SettingsReconciler
-	settingsReconciler := &controller.SettingsReconciler{
-		Client:   mgr.GetClient(),
-		Scheme:   mgr.GetScheme(),
-		Recorder: mgr.GetEventRecorderFor("settings-controller"), //nolint:staticcheck // GetEventRecorderFor deprecated but required for record.EventRecorder interface
-	}
-	if err := settingsReconciler.SetupWithManager(mgr); err != nil {
-		logger.Error("Failed to setup SettingsReconciler", "error", err)
-		os.Exit(1)
-	}
-	logger.Info("SettingsReconciler registered")
-
-	// Setup BundleReconciler
-	bundleReconciler := &controller.BundleReconciler{
-		Client:   mgr.GetClient(),
-		Scheme:   mgr.GetScheme(),
-		Recorder: mgr.GetEventRecorderFor("bundle-controller"), //nolint:staticcheck // GetEventRecorderFor deprecated but required for record.EventRecorder interface
-	}
-	if err := bundleReconciler.SetupWithManager(mgr); err != nil {
-		logger.Error("Failed to setup BundleReconciler", "error", err)
-		os.Exit(1)
-	}
-	logger.Info("BundleReconciler registered")
-
-	// Setup BlueprintReconciler
-	blueprintReconciler := &controller.BlueprintReconciler{
-		Client:   mgr.GetClient(),
-		Scheme:   mgr.GetScheme(),
-		Recorder: mgr.GetEventRecorderFor("blueprint-controller"), //nolint:staticcheck // GetEventRecorderFor deprecated but required for record.EventRecorder interface
-		Manager:  blueprintManager,
-	}
-	if err := blueprintReconciler.SetupWithManager(mgr); err != nil {
-		logger.Error("Failed to setup BlueprintReconciler", "error", err)
-		os.Exit(1)
-	}
-	logger.Info("BlueprintReconciler registered")
-
-	// Setup webhooks
-	if err := manager.SetupWebhooks(mgr); err != nil {
-		logger.Error("Failed to setup webhooks", "error", err)
-		os.Exit(1)
-	}
-	logger.Info("Webhooks registered")
-
-	// Add health checks
-	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {
-		logger.Error("Failed to add healthz check", "error", err)
-		os.Exit(1)
-	}
-	if err := mgr.AddReadyzCheck("readyz", healthz.Ping); err != nil {
-		logger.Error("Failed to add readyz check", "error", err)
-		os.Exit(1)
-	}
+	// Construct the publish.Workflow now that the controller-runtime client
+	// is available (Repositories need it). The workflow has no consumer yet —
+	// REST handlers in P3-x will pick it up via manager.Register. AllowAllAuthorizer
+	// is a stub until pkg/authz lands a SubjectAccessReview-backed impl.
+	publishWorkflow = publish.New(publish.Deps{
+		Bundles:    bundle.NewK8sRepository(mgr.GetClient()),
+		Blueprints: blueprint.NewK8sRepository(mgr.GetClient()),
+		Authz:      publish.AllowAllAuthorizer{},
+		Logger:     logger,
+	})
+	// Loud, unmissable warning: AllowAllAuthorizer approves every publisher
+	// action. Safe in dev (no REST handlers consume the Workflow yet), but the
+	// moment a P3-x handler ships, this becomes a security hole unless the
+	// authorizer is swapped. Logged at Warn so it surfaces in any log
+	// aggregator that filters above Info, and so CI smoke tests can grep for
+	// the message to ensure prod builds replace it.
+	logger.Warn(
+		"publish.Workflow wired with AllowAllAuthorizer — INSECURE, DO NOT DEPLOY TO PRODUCTION",
+		"replacement", "pkg/authz with SubjectAccessReview-backed adapter (lands with P7-5)",
+		"ready", publishWorkflow != nil,
+	)
 
 	// Setup API server
 	mux := http.NewServeMux()

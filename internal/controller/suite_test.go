@@ -1,7 +1,8 @@
-package controller
+package controller_test
 
 import (
 	"context"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"testing"
@@ -19,8 +20,10 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
 	aifv1 "github.com/SUSE/aif/api/v1alpha1"
+	"github.com/SUSE/aif/internal/controller"
 	"github.com/SUSE/aif/internal/manager"
 	"github.com/SUSE/aif/pkg/blueprint"
+	"github.com/SUSE/aif/pkg/bundle"
 )
 
 var (
@@ -71,29 +74,32 @@ var _ = BeforeSuite(func() {
 	})
 	Expect(err).NotTo(HaveOccurred())
 
-	Expect((&BundleReconciler{
+	logger := slog.New(slog.NewTextHandler(GinkgoWriter, nil))
+
+	Expect((&controller.BundleReconciler{
 		Client:   mgr.GetClient(),
 		Scheme:   mgr.GetScheme(),
-		Recorder: mgr.GetEventRecorderFor("bundle-controller"),
+		Recorder: mgr.GetEventRecorder("bundle-controller"),
+		Manager:  bundle.New(logger),
 	}).SetupWithManager(mgr)).To(Succeed())
 
-	Expect((&BlueprintReconciler{
+	Expect((&controller.BlueprintReconciler{
 		Client:   mgr.GetClient(),
 		Scheme:   mgr.GetScheme(),
-		Recorder: mgr.GetEventRecorderFor("blueprint-controller"),
+		Recorder: mgr.GetEventRecorder("blueprint-controller"),
 		Manager:  blueprint.New(nil),
 	}).SetupWithManager(mgr)).To(Succeed())
 
-	Expect((&WorkloadReconciler{
+	Expect((&controller.WorkloadReconciler{
 		Client:   mgr.GetClient(),
 		Scheme:   mgr.GetScheme(),
-		Recorder: mgr.GetEventRecorderFor("workload-controller"),
+		Recorder: mgr.GetEventRecorder("workload-controller"),
 	}).SetupWithManager(mgr)).To(Succeed())
 
-	Expect((&SettingsReconciler{
+	Expect((&controller.SettingsReconciler{
 		Client:   mgr.GetClient(),
 		Scheme:   mgr.GetScheme(),
-		Recorder: mgr.GetEventRecorderFor("settings-controller"),
+		Recorder: mgr.GetEventRecorder("settings-controller"),
 	}).SetupWithManager(mgr)).To(Succeed())
 
 	Expect(manager.SetupWebhooks(mgr)).To(Succeed())
