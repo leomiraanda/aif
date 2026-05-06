@@ -33,6 +33,10 @@ build:
 
 test:
 	@echo "Running tests..."
+	go test ./...
+
+test-verbose:
+	@echo "Running tests..."
 	go test -v ./...
 
 run:
@@ -61,7 +65,7 @@ charts-package:
 
 lint:
 	@echo "Running linters..."
-	golangci-lint run ./...
+	golangci-lint run --concurrency=1 ./...
 
 manifests:
 	@echo "Generating CRD manifests..."

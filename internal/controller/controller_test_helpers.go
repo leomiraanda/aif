@@ -1,31 +1,25 @@
 package controller
 
 import (
+	"fmt"
 	"strings"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/tools/events"
 )
 
-// fakeRecorder implements record.EventRecorder for testing
+// fakeRecorder implements events.EventRecorder for testing
 type fakeRecorder struct {
 	events []string
 }
 
-func (f *fakeRecorder) Event(object runtime.Object, eventtype, reason, message string) {
+func (f *fakeRecorder) Eventf(regarding runtime.Object, related runtime.Object, eventtype, reason, action, note string, args ...interface{}) {
+	message := fmt.Sprintf(note, args...)
 	f.events = append(f.events, eventtype+":"+reason+":"+message)
 }
 
-func (f *fakeRecorder) Eventf(object runtime.Object, eventtype, reason, messageFmt string, args ...interface{}) {
-	// Not used in tests
-}
-
-func (f *fakeRecorder) AnnotatedEventf(object runtime.Object, annotations map[string]string, eventtype, reason, messageFmt string, args ...interface{}) {
-	// Not used in tests
-}
-
-var _ record.EventRecorder = &fakeRecorder{}
+var _ events.EventRecorder = &fakeRecorder{}
 
 // findCondition finds a condition by type in a condition list
 //
