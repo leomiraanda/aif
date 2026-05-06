@@ -10,7 +10,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -23,7 +23,7 @@ const finalizerName = "ai.suse.com/cleanup"
 type BundleReconciler struct {
 	client.Client
 	Scheme   *runtime.Scheme
-	Recorder record.EventRecorder
+	Recorder events.EventRecorder
 	Manager  bundle.Manager
 }
 
@@ -103,7 +103,7 @@ func (r *BundleReconciler) reconcile(ctx context.Context, bundleCR *aifv1.Bundle
 			Message:            fmt.Sprintf("Validation failed: %v", err),
 			ObservedGeneration: bundleCR.Generation,
 		})
-		r.Recorder.Event(bundleCR, "Warning", conditions.ReasonInvalidSpec, err.Error())
+		r.Recorder.Eventf(bundleCR, nil, "Warning", conditions.ReasonInvalidSpec, conditions.ActionValidating, err.Error())
 		bundleCR.Status.ObservedGeneration = bundleCR.Generation
 		return nil // Don't requeue - user must fix spec
 	}
@@ -242,8 +242,8 @@ func (r *BundleReconciler) checkAndHealPartialApproval(ctx context.Context, bund
 	bundleCR.Status.Review = nil
 
 	// Record event
-	r.Recorder.Event(bundleCR, "Normal", conditions.ReasonReconciled,
-		fmt.Sprintf("Self-healing: recovered from partial approval, Blueprint %s published", blueprintName))
+	r.Recorder.Eventf(bundleCR, nil, "Normal", conditions.ReasonReconciled, conditions.ActionReconciling,
+		"Self-healing: recovered from partial approval, Blueprint %s published", blueprintName)
 
 	logger.Info("self-healing: Bundle status recovered successfully")
 }

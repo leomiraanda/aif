@@ -13,7 +13,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/discovery"
-	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -35,7 +35,7 @@ type InstallAIExtensionReconciler struct {
 	Logger     *slog.Logger
 	HelmEngine helm.Engine
 	Discovery  discovery.DiscoveryInterface
-	Recorder   record.EventRecorder
+	Recorder   events.EventRecorder
 }
 
 // +kubebuilder:rbac:groups=ai.suse.com,resources=installaiextensions,verbs=get;list;watch;create;update;patch;delete
@@ -116,7 +116,7 @@ func (r *InstallAIExtensionReconciler) reconcile(ctx context.Context, ext *aifv1
 			ObservedGeneration: ext.Generation,
 		})
 		ext.Status.Phase = aifv1.InstallAIExtensionPhaseFailed
-		r.Recorder.Event(ext, "Warning", conditions.ReasonUIPluginCRDMissing, err.Error())
+		r.Recorder.Eventf(ext, nil, "Warning", conditions.ReasonUIPluginCRDMissing, conditions.ActionChecking, err.Error())
 		return ctrl.Result{}, nil // Don't requeue - this is a permanent error
 	}
 
@@ -130,7 +130,7 @@ func (r *InstallAIExtensionReconciler) reconcile(ctx context.Context, ext *aifv1
 			ObservedGeneration: ext.Generation,
 		})
 		ext.Status.Phase = aifv1.InstallAIExtensionPhaseFailed
-		r.Recorder.Event(ext, "Warning", conditions.ReasonInstallFailed, err.Error())
+		r.Recorder.Eventf(ext, nil, "Warning", conditions.ReasonInstallFailed, conditions.ActionInstalling, err.Error())
 		return ctrl.Result{}, err // Requeue to retry installation
 	}
 
@@ -145,7 +145,7 @@ func (r *InstallAIExtensionReconciler) reconcile(ctx context.Context, ext *aifv1
 		})
 		// Keep phase as Installing, not Failed - this is expected during async creation
 		ext.Status.Phase = aifv1.InstallAIExtensionPhaseInstalling
-		r.Recorder.Event(ext, "Normal", conditions.ReasonUIPluginNotCreated, "Waiting for UIPlugin to be created")
+		r.Recorder.Eventf(ext, nil, "Normal", conditions.ReasonUIPluginNotCreated, conditions.ActionWaiting, "Waiting for UIPlugin to be created")
 		// Requeue after 5s to check again - don't use error (which triggers exponential backoff)
 		return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
 	}
@@ -159,7 +159,7 @@ func (r *InstallAIExtensionReconciler) reconcile(ctx context.Context, ext *aifv1
 		ObservedGeneration: ext.Generation,
 	})
 	ext.Status.Phase = aifv1.InstallAIExtensionPhaseInstalled
-	r.Recorder.Event(ext, "Normal", conditions.ReasonInstalled, "AIExtension installed successfully")
+	r.Recorder.Eventf(ext, nil, "Normal", conditions.ReasonInstalled, conditions.ActionInstalling, "AIExtension installed successfully")
 
 	logger.Info("InstallAIExtension reconciled successfully")
 	return ctrl.Result{}, nil
