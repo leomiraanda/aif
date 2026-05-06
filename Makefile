@@ -76,8 +76,11 @@ install-tools:
 	@echo "Installing development tools with pinned versions..."
 	@echo "Installing controller-gen v0.20.1..."
 	go install sigs.k8s.io/controller-tools/cmd/controller-gen@v0.20.1
-	@echo "Installing golangci-lint v2.11.4..."
-	go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.11.4
+	@echo "Installing golangci-lint v2.12.1..."
+	@# Force Go 1.26 toolchain — golangci-lint refuses to lint a project whose
+	@# go.mod requires a Go version newer than the toolchain it was built with.
+	@# v2.11.4 (built with Go 1.25) cannot lint this repo since go.mod is 1.26.
+	GOTOOLCHAIN=go1.26.0 go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.1
 	@echo "Installing mockgen v0.6.0..."
 	go install go.uber.org/mock/mockgen@v0.6.0
 	@echo "Installing ginkgo v2.28.1..."

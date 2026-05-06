@@ -97,7 +97,7 @@ func setupControllers(mgr ctrlmanager.Manager, opts Options) error {
 	workloadReconciler := &controller.WorkloadReconciler{
 		Client:   mgr.GetClient(),
 		Scheme:   mgr.GetScheme(),
-		Recorder: mgr.GetEventRecorderFor("workload-controller"),
+		Recorder: mgr.GetEventRecorderFor("workload-controller"), //nolint:staticcheck // GetEventRecorderFor deprecated but required for record.EventRecorder interface
 	}
 	if err := workloadReconciler.SetupWithManager(mgr); err != nil {
 		return fmt.Errorf("setting up WorkloadReconciler: %w", err)
@@ -106,7 +106,7 @@ func setupControllers(mgr ctrlmanager.Manager, opts Options) error {
 	settingsReconciler := &controller.SettingsReconciler{
 		Client:   mgr.GetClient(),
 		Scheme:   mgr.GetScheme(),
-		Recorder: mgr.GetEventRecorderFor("settings-controller"),
+		Recorder: mgr.GetEventRecorderFor("settings-controller"), //nolint:staticcheck // GetEventRecorderFor deprecated but required for record.EventRecorder interface
 	}
 	if err := settingsReconciler.SetupWithManager(mgr); err != nil {
 		return fmt.Errorf("setting up SettingsReconciler: %w", err)
@@ -115,7 +115,7 @@ func setupControllers(mgr ctrlmanager.Manager, opts Options) error {
 	bundleReconciler := &controller.BundleReconciler{
 		Client:   mgr.GetClient(),
 		Scheme:   mgr.GetScheme(),
-		Recorder: mgr.GetEventRecorderFor("bundle-controller"),
+		Recorder: mgr.GetEventRecorderFor("bundle-controller"), //nolint:staticcheck // GetEventRecorderFor deprecated but required for record.EventRecorder interface
 		Manager:  opts.BundleManager,
 	}
 	if err := bundleReconciler.SetupWithManager(mgr); err != nil {
@@ -125,7 +125,7 @@ func setupControllers(mgr ctrlmanager.Manager, opts Options) error {
 	blueprintReconciler := &controller.BlueprintReconciler{
 		Client:   mgr.GetClient(),
 		Scheme:   mgr.GetScheme(),
-		Recorder: mgr.GetEventRecorderFor("blueprint-controller"),
+		Recorder: mgr.GetEventRecorderFor("blueprint-controller"), //nolint:staticcheck // GetEventRecorderFor deprecated but required for record.EventRecorder interface
 		Manager:  opts.BlueprintManager,
 	}
 	if err := blueprintReconciler.SetupWithManager(mgr); err != nil {
@@ -138,7 +138,7 @@ func setupControllers(mgr ctrlmanager.Manager, opts Options) error {
 		Logger:     opts.Logger,
 		HelmEngine: opts.HelmEngine,
 		Discovery:  opts.Discovery,
-		Recorder:   mgr.GetEventRecorderFor("installaiextension-controller"),
+		Recorder:   mgr.GetEventRecorderFor("installaiextension-controller"), //nolint:staticcheck // GetEventRecorderFor deprecated but required for record.EventRecorder interface
 	}
 	if err := installExtReconciler.SetupWithManager(mgr); err != nil {
 		return fmt.Errorf("setting up InstallAIExtensionReconciler: %w", err)
