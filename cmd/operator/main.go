@@ -143,7 +143,17 @@ func main() {
 		Authz:      publish.AllowAllAuthorizer{},
 		Logger:     logger,
 	})
-	logger.Info("publish.Workflow constructed", "ready", publishWorkflow != nil)
+	// Loud, unmissable warning: AllowAllAuthorizer approves every publisher
+	// action. Safe in dev (no REST handlers consume the Workflow yet), but the
+	// moment a P3-x handler ships, this becomes a security hole unless the
+	// authorizer is swapped. Logged at Warn so it surfaces in any log
+	// aggregator that filters above Info, and so CI smoke tests can grep for
+	// the message to ensure prod builds replace it.
+	logger.Warn(
+		"publish.Workflow wired with AllowAllAuthorizer — INSECURE, DO NOT DEPLOY TO PRODUCTION",
+		"replacement", "pkg/authz with SubjectAccessReview-backed adapter (lands with P7-5)",
+		"ready", publishWorkflow != nil,
+	)
 
 	// Setup API server
 	mux := http.NewServeMux()
