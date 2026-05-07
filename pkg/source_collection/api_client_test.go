@@ -421,3 +421,47 @@ func TestGetChart_VersionNotFound(t *testing.T) {
 		t.Errorf("expected non-sentinel error, got sentinel: %v", err)
 	}
 }
+
+func TestUpdateSettings_ReflectedInList(t *testing.T) {
+	srv1 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(apiResponse{
+			Items: []apiApplication{newTestApp("from-srv1", "Server 1 App", "Pub1", "1.0.0")},
+		})
+	}))
+	defer srv1.Close()
+
+	srv2 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		user, pass, _ := r.BasicAuth()
+		if user != "newuser" || pass != "newtoken" {
+			t.Errorf("expected newuser:newtoken, got %q:%q", user, pass)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(apiResponse{
+			Items: []apiApplication{newTestApp("from-srv2", "Server 2 App", "Pub2", "2.0.0")},
+		})
+	}))
+	defer srv2.Close()
+
+	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+	c := NewClient(logger)
+	c.UpdateSettings(EngineSettings{APIURL: srv1.URL})
+
+	apps, err := c.List(context.Background())
+	if err != nil {
+		t.Fatalf("first List failed: %v", err)
+	}
+	if len(apps) != 1 || apps[0].ID != "from-srv1" {
+		t.Fatalf("expected from-srv1, got %v", apps)
+	}
+
+	c.UpdateSettings(EngineSettings{APIURL: srv2.URL, Username: "newuser", Token: "newtoken"})
+
+	apps, err = c.List(context.Background())
+	if err != nil {
+		t.Fatalf("second List failed: %v", err)
+	}
+	if len(apps) != 1 || apps[0].ID != "from-srv2" {
+		t.Fatalf("expected from-srv2, got %v", apps)
+	}
+}
