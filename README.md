@@ -186,13 +186,22 @@ state — some operations are still stubs.
 
 The Makefile auto-loads a `.env` file at the repo root (git-ignored) and
 exports every variable it defines into recipe subprocesses. Useful for
-local credentials such as `SUSE_REG_USER` / `SUSE_REG_TOKEN` consumed by
-`make verify-nim-live`.
+local credentials consumed by the live verification targets:
+
+| Target                   | Variables                                |
+|--------------------------|------------------------------------------|
+| `make verify-nim-live`   | `SUSE_REG_USER`, `SUSE_REG_TOKEN`        |
+| `make verify-appco-live` | `SUSE_APPCO_USER`, `SUSE_APPCO_TOKEN`    |
+
+The two credential pairs are intentionally separate (per `ARCHITECTURE.md
+§13.2`: SUSE Registry and SUSE Application Collection are distinct
+upstream services), even though customers commonly reuse the same SCC
+value for both.
 
 ```bash
 cp .env.example .env
 $EDITOR .env       # fill in values
-make verify-nim-live
+make verify-nim-live verify-appco-live
 ```
 
 Format is **Makefile syntax**, not bash: `KEY=value`, one per line, no
