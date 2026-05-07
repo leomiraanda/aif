@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 )
 
 // registryClient is a thin HTTP adapter over the OCI Distribution v2 API.
@@ -22,17 +24,20 @@ type registryClient struct {
 	endpoint   string // base URL, e.g. "https://registry.suse.com"; no trailing slash
 	username   string
 	token      string
+	logger     *slog.Logger // nil-safe; per-page debug logging only
 }
 
 // newRegistryClient is the constructor. The HTTP client is injected so
 // tests can supply httptest.Server.Client(); production callers pass a
-// configured *http.Client (with timeouts).
-func newRegistryClient(httpClient *http.Client, endpoint, username, token string) *registryClient {
+// configured *http.Client (with timeouts). logger may be nil — all
+// internal log calls are nil-safe (debug-level pagination tracing only).
+func newRegistryClient(httpClient *http.Client, endpoint, username, token string, logger *slog.Logger) *registryClient {
 	return &registryClient{
 		httpClient: httpClient,
 		endpoint:   strings.TrimRight(endpoint, "/"),
 		username:   username,
 		token:      token,
+		logger:     logger,
 	}
 }
 
@@ -49,16 +54,22 @@ type tagsResponse struct {
 
 // ListRepositories walks the OCI _catalog endpoint, following Link
 // rel="next" pagination until exhausted. Returns the concatenated list.
+// Emits a debug log per page so multi-page catalog walks can be traced
+// in production (Recommendation 3 from PR #8 review).
 func (c *registryClient) ListRepositories(ctx context.Context) ([]string, error) {
 	var all []string
 	next := "/v2/_catalog"
-	for next != "" {
-		var page catalogResponse
-		nextLink, err := c.getJSON(ctx, next, &page)
+	for page := 1; next != ""; page++ {
+		start := time.Now()
+		var body catalogResponse
+		nextLink, err := c.getJSON(ctx, next, &body)
 		if err != nil {
 			return nil, err
 		}
-		all = append(all, page.Repositories...)
+		all = append(all, body.Repositories...)
+		c.debug("registry _catalog page fetched",
+			"page", page, "items", len(body.Repositories), "running_total", len(all),
+			"duration", time.Since(start), "has_next", nextLink != "")
 		next = nextLink
 	}
 	return all, nil
@@ -69,16 +80,29 @@ func (c *registryClient) ListRepositories(ctx context.Context) ([]string, error)
 func (c *registryClient) ListTags(ctx context.Context, repo string) ([]string, error) {
 	var all []string
 	next := "/v2/" + repo + "/tags/list"
-	for next != "" {
-		var page tagsResponse
-		nextLink, err := c.getJSON(ctx, next, &page)
+	for page := 1; next != ""; page++ {
+		start := time.Now()
+		var body tagsResponse
+		nextLink, err := c.getJSON(ctx, next, &body)
 		if err != nil {
 			return nil, err
 		}
-		all = append(all, page.Tags...)
+		all = append(all, body.Tags...)
+		c.debug("registry tags/list page fetched",
+			"repo", repo, "page", page, "items", len(body.Tags), "running_total", len(all),
+			"duration", time.Since(start), "has_next", nextLink != "")
 		next = nextLink
 	}
 	return all, nil
+}
+
+// debug forwards to the optional logger. nil-safe so tests need not
+// supply one.
+func (c *registryClient) debug(msg string, args ...any) {
+	if c.logger == nil {
+		return
+	}
+	c.logger.Debug(msg, args...)
 }
 
 // getJSON performs a GET, classifies the response, and decodes the body

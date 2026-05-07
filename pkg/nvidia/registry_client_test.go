@@ -93,7 +93,7 @@ func TestRegistryClient_ListRepositories_SinglePage(t *testing.T) {
 	ts := newTestServer(t)
 	ts.catalogPages[""] = testPage{body: `{"repositories":["ai/charts/nvidia/nim-llm","ai/charts/nvidia/nim-vlm","other/foo"]}`}
 
-	c := newRegistryClient(ts.Client(), ts.URL, "user", "tok")
+	c := newRegistryClient(ts.Client(), ts.URL, "user", "tok", nil)
 	got, err := c.ListRepositories(context.Background())
 	if err != nil {
 		t.Fatalf("ListRepositories: unexpected error: %v", err)
@@ -108,7 +108,7 @@ func TestRegistryClient_ListRepositories_SendsBasicAuth(t *testing.T) {
 	ts := newTestServer(t)
 	ts.catalogPages[""] = testPage{body: `{"repositories":[]}`}
 
-	c := newRegistryClient(ts.Client(), ts.URL, "alice", "s3cr3t")
+	c := newRegistryClient(ts.Client(), ts.URL, "alice", "s3cr3t", nil)
 	if _, err := c.ListRepositories(context.Background()); err != nil {
 		t.Fatalf("ListRepositories: unexpected error: %v", err)
 	}
@@ -123,7 +123,7 @@ func TestRegistryClient_ListRepositories_NoCredentialsOmitsAuth(t *testing.T) {
 	ts := newTestServer(t)
 	ts.catalogPages[""] = testPage{body: `{"repositories":[]}`}
 
-	c := newRegistryClient(ts.Client(), ts.URL, "", "")
+	c := newRegistryClient(ts.Client(), ts.URL, "", "", nil)
 	if _, err := c.ListRepositories(context.Background()); err != nil {
 		t.Fatalf("ListRepositories: unexpected error: %v", err)
 	}
@@ -143,7 +143,7 @@ func TestRegistryClient_ListRepositories_FollowsPagination(t *testing.T) {
 		// no Link → terminal page
 	}
 
-	c := newRegistryClient(ts.Client(), ts.URL, "u", "t")
+	c := newRegistryClient(ts.Client(), ts.URL, "u", "t", nil)
 	got, err := c.ListRepositories(context.Background())
 	if err != nil {
 		t.Fatalf("ListRepositories: unexpected error: %v", err)
@@ -158,7 +158,7 @@ func TestRegistryClient_ListRepositories_Returns401AsUnauthorized(t *testing.T) 
 	ts := newTestServer(t)
 	ts.catalogPages[""] = testPage{body: `unauthorized`, code: http.StatusUnauthorized}
 
-	c := newRegistryClient(ts.Client(), ts.URL, "u", "wrong")
+	c := newRegistryClient(ts.Client(), ts.URL, "u", "wrong", nil)
 	_, err := c.ListRepositories(context.Background())
 	if !stderrors.Is(err, ErrUnauthorized) {
 		t.Errorf("ListRepositories err = %v, want ErrUnauthorized", err)
@@ -169,7 +169,7 @@ func TestRegistryClient_ListRepositories_Returns500AsUnexpected(t *testing.T) {
 	ts := newTestServer(t)
 	ts.catalogPages[""] = testPage{body: `oops`, code: http.StatusInternalServerError}
 
-	c := newRegistryClient(ts.Client(), ts.URL, "u", "t")
+	c := newRegistryClient(ts.Client(), ts.URL, "u", "t", nil)
 	_, err := c.ListRepositories(context.Background())
 	if !stderrors.Is(err, ErrUnexpectedResponse) {
 		t.Errorf("ListRepositories err = %v, want ErrUnexpectedResponse", err)
@@ -182,7 +182,7 @@ func TestRegistryClient_ListRepositories_NetworkErrorIsUnreachable(t *testing.T)
 	closedURL := ts.URL
 	ts.Close()
 
-	c := newRegistryClient(http.DefaultClient, closedURL, "u", "t")
+	c := newRegistryClient(http.DefaultClient, closedURL, "u", "t", nil)
 	_, err := c.ListRepositories(context.Background())
 	if !stderrors.Is(err, ErrUnreachable) {
 		t.Errorf("ListRepositories err = %v, want ErrUnreachable", err)
@@ -197,7 +197,7 @@ func TestRegistryClient_ListTags_SinglePage(t *testing.T) {
 		"": {body: `{"name":"ai/charts/nvidia/nim-llm","tags":["1.0.0","1.1.0","1.2.0"]}`},
 	}
 
-	c := newRegistryClient(ts.Client(), ts.URL, "u", "t")
+	c := newRegistryClient(ts.Client(), ts.URL, "u", "t", nil)
 	got, err := c.ListTags(context.Background(), "ai/charts/nvidia/nim-llm")
 	if err != nil {
 		t.Fatalf("ListTags: unexpected error: %v", err)
@@ -212,7 +212,7 @@ func TestRegistryClient_ListTags_404IsUnexpected(t *testing.T) {
 	ts := newTestServer(t)
 	// no tagsPages entry → 404
 
-	c := newRegistryClient(ts.Client(), ts.URL, "u", "t")
+	c := newRegistryClient(ts.Client(), ts.URL, "u", "t", nil)
 	_, err := c.ListTags(context.Background(), "nonexistent")
 	if !stderrors.Is(err, ErrUnexpectedResponse) {
 		t.Errorf("ListTags err = %v, want ErrUnexpectedResponse for 404", err)
@@ -275,7 +275,7 @@ func newBearerStubs(t *testing.T, registryBody string) *bearerStubs {
 func TestRegistryClient_BearerExchange_RetriesWithToken(t *testing.T) {
 	stubs := newBearerStubs(t, `{"repositories":["ai/charts/nvidia/nim-llm"]}`)
 
-	c := newRegistryClient(stubs.registry.Client(), stubs.registry.URL, "alice", "s3cr3t")
+	c := newRegistryClient(stubs.registry.Client(), stubs.registry.URL, "alice", "s3cr3t", nil)
 	got, err := c.ListRepositories(context.Background())
 	if err != nil {
 		t.Fatalf("ListRepositories: unexpected error: %v", err)
@@ -304,7 +304,7 @@ func TestRegistryClient_BearerExchange_NoCredentialsDoesNotRetry(t *testing.T) {
 
 	// No credentials → no realm exchange possible → first 401 must return
 	// ErrUnauthorized without a retry loop.
-	c := newRegistryClient(stubs.registry.Client(), stubs.registry.URL, "", "")
+	c := newRegistryClient(stubs.registry.Client(), stubs.registry.URL, "", "", nil)
 	_, err := c.ListRepositories(context.Background())
 	if !stderrors.Is(err, ErrUnauthorized) {
 		t.Errorf("ListRepositories err = %v, want ErrUnauthorized", err)
@@ -328,7 +328,7 @@ func TestRegistryClient_BearerExchange_RealmRejects_ReturnsUnauthorized(t *testi
 	}))
 	t.Cleanup(registry.Close)
 
-	c := newRegistryClient(registry.Client(), registry.URL, "alice", "wrong")
+	c := newRegistryClient(registry.Client(), registry.URL, "alice", "wrong", nil)
 	_, err := c.ListRepositories(context.Background())
 	if !stderrors.Is(err, ErrUnauthorized) {
 		t.Errorf("ListRepositories err = %v, want ErrUnauthorized", err)

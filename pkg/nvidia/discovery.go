@@ -28,8 +28,14 @@ type discoveryImpl struct {
 	logger     *slog.Logger
 	httpClient *http.Client
 
-	mu       sync.RWMutex
-	cache    map[string]NIMEntry // keyed by ID = "<chart>:<version>"
+	mu sync.RWMutex
+	// cache is keyed by ID = "<chart>:<version>". Lifecycle invariant:
+	// nil before the first successful Refresh, then replaced *atomically*
+	// (never mutated incrementally) on every subsequent Refresh — see the
+	// `d.cache = next` swap below. Reads (Index, Get) are safe on nil
+	// (range and lookup return zero-values). Do NOT add incremental writes
+	// to this field; if a use case ever needs them, replace the whole map.
+	cache    map[string]NIMEntry
 	settings EngineSettings
 	client   *registryClient // rebuilt in UpdateSettings; nil until first call
 }
@@ -145,7 +151,7 @@ func (d *discoveryImpl) UpdateSettings(s EngineSettings) {
 		d.client = nil
 		return
 	}
-	d.client = newRegistryClient(d.httpClient, normalizeForHTTP(s.RegistryEndpoint), s.Username, s.Token)
+	d.client = newRegistryClient(d.httpClient, normalizeForHTTP(s.RegistryEndpoint), s.Username, s.Token, d.logger)
 }
 
 // normalizeForHTTP ensures the endpoint is a full URL the http.Client
