@@ -3,6 +3,7 @@ package source_collection
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -232,4 +233,131 @@ func TestList_Deduplication(t *testing.T) {
 		}
 	}
 	t.Error("ollama not found in results")
+}
+
+func TestList_AuthFailure401(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer srv.Close()
+
+	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+	c := NewClient(logger)
+	c.UpdateSettings(EngineSettings{APIURL: srv.URL, Username: "bad", Token: "creds"})
+
+	_, err := c.List(context.Background())
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !errors.Is(err, ErrAuthFailed) {
+		t.Errorf("expected ErrAuthFailed, got %v", err)
+	}
+}
+
+func TestList_AuthFailure403(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+	}))
+	defer srv.Close()
+
+	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+	c := NewClient(logger)
+	c.UpdateSettings(EngineSettings{APIURL: srv.URL, Username: "user", Token: "tok"})
+
+	_, err := c.List(context.Background())
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !errors.Is(err, ErrAuthFailed) {
+		t.Errorf("expected ErrAuthFailed, got %v", err)
+	}
+}
+
+func TestList_ServerError500(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+	c := NewClient(logger)
+	c.UpdateSettings(EngineSettings{APIURL: srv.URL})
+
+	_, err := c.List(context.Background())
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !errors.Is(err, ErrUpstreamUnavailable) {
+		t.Errorf("expected ErrUpstreamUnavailable, got %v", err)
+	}
+}
+
+func TestList_MalformedJSON(t *testing.T) {
+	attempts := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts++
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{invalid json`))
+	}))
+	defer srv.Close()
+
+	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+	c := NewClient(logger)
+	c.UpdateSettings(EngineSettings{APIURL: srv.URL})
+
+	_, err := c.List(context.Background())
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !errors.Is(err, ErrCatalogMalformed) {
+		t.Errorf("expected ErrCatalogMalformed, got %v", err)
+	}
+	if attempts != 2 {
+		t.Errorf("expected 2 attempts (original + 1 retry), got %d", attempts)
+	}
+}
+
+func TestList_RateLimited429(t *testing.T) {
+	attempts := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts++
+		w.WriteHeader(http.StatusTooManyRequests)
+	}))
+	defer srv.Close()
+
+	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+	c := NewClient(logger)
+	c.UpdateSettings(EngineSettings{APIURL: srv.URL})
+
+	_, err := c.List(context.Background())
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !errors.Is(err, ErrUpstreamUnavailable) {
+		t.Errorf("expected ErrUpstreamUnavailable, got %v", err)
+	}
+	if attempts != 2 {
+		t.Errorf("expected 2 attempts (original + 1 retry), got %d", attempts)
+	}
+}
+
+func TestList_ContextCancelled(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(apiResponse{Items: []apiApplication{}})
+	}))
+	defer srv.Close()
+
+	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+	c := NewClient(logger)
+	c.UpdateSettings(EngineSettings{APIURL: srv.URL})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := c.List(ctx)
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
 }
