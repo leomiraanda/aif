@@ -1,9 +1,9 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
-	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -61,10 +61,6 @@ func (f *fakeCatalog) Get(_ context.Context, id string) (apps.App, error) {
 func (f *fakeCatalog) Refresh(_ context.Context) error      { return nil }
 func (f *fakeCatalog) UpdateSettings(_ apps.EngineSettings) {}
 
-func discardLogger() *slog.Logger {
-	return slog.New(slog.NewTextHandler(io.Discard, nil))
-}
-
 // sampleApps mixes Reference-Blueprint and non-RB apps across both
 // sources so filter tests can be written.
 func sampleApps() []apps.App {
@@ -84,7 +80,7 @@ func sampleApps() []apps.App {
 
 func newAppsHandlerForTest(c apps.Catalog) http.Handler {
 	mux := http.NewServeMux()
-	NewAppsHandler(c, discardLogger()).Register(mux)
+	NewAppsHandler(c).Register(mux)
 	return mux
 }
 
@@ -456,5 +452,86 @@ func TestAppsHandler_Categories_WinsOverGetByID(t *testing.T) {
 	// Negative: confirm catalog.Get was NOT routed via the wildcard.
 	if cat.gotID == "categories" {
 		t.Errorf("/categories was routed through /{id} (catalog.Get got id=%q)", cat.gotID)
+	}
+}
+
+// --- Logger contract: catalog-boundary errors carry request_id ---
+//
+// Round-2 regression test. The CLAUDE.md "structured logging with
+// request_id" mandate is only met if the handler retrieves the
+// middleware-decorated logger via LoggerFromContext — NOT if it logs
+// through the constructor-injected base logger (which carries no
+// request_id). This test pins that contract by capturing the slog
+// output and asserting both the warn message and the request_id
+// attribute are present.
+
+func TestAppsHandler_LogCatalogErr_PropagatesRequestID(t *testing.T) {
+	// 1. Build a child logger with a known request_id, writing to a buffer.
+	//    This mirrors what LoggingMiddleware constructs at runtime.
+	var buf bytes.Buffer
+	childLogger := slog.New(slog.NewTextHandler(&buf, nil)).With(
+		"component", "api",
+		"request_id", "test-req-id-abc-123",
+	)
+
+	// 2. Build the handler wired with a failing catalog so the get path
+	//    triggers logCatalogErr.
+	cat := &fakeCatalog{getErr: apps.ErrAppNotFound}
+	mux := http.NewServeMux()
+	NewAppsHandler(cat).Register(mux)
+
+	// 3. Stash the child logger in the request context the same way
+	//    LoggingMiddleware does. Bypassing the middleware chain in this
+	//    test focuses the assertion on the handler's retrieval path.
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/apps/nvidia.does-not-exist:9.9.9", nil)
+	req = req.WithContext(ContextWithLogger(req.Context(), childLogger))
+
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	// 4. The request itself should still produce a 404.
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", rec.Code)
+	}
+
+	// 5. The captured log output MUST contain the request_id and the
+	//    warn message. Without LoggerFromContext, the constructor-
+	//    injected logger would have written elsewhere (or nowhere) and
+	//    this assertion would fail.
+	output := buf.String()
+	if !strings.Contains(output, "request_id=test-req-id-abc-123") {
+		t.Errorf("expected log output to contain request_id; got:\n%s", output)
+	}
+	if !strings.Contains(output, "apps handler: catalog call failed") {
+		t.Errorf("expected log output to contain warn message; got:\n%s", output)
+	}
+	if !strings.Contains(output, "op=Get") {
+		t.Errorf("expected log output to contain op=Get attribute; got:\n%s", output)
+	}
+}
+
+// And the same for the list path, since logCatalogErr is shared.
+func TestAppsHandler_List_LogCatalogErr_PropagatesRequestID(t *testing.T) {
+	var buf bytes.Buffer
+	childLogger := slog.New(slog.NewTextHandler(&buf, nil)).With(
+		"request_id", "test-req-id-list-789",
+	)
+
+	cat := &fakeCatalog{listErr: apps.ErrUnknownSource}
+	mux := http.NewServeMux()
+	NewAppsHandler(cat).Register(mux)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/apps", nil)
+	req = req.WithContext(ContextWithLogger(req.Context(), childLogger))
+
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	output := buf.String()
+	if !strings.Contains(output, "request_id=test-req-id-list-789") {
+		t.Errorf("expected log output to contain request_id; got:\n%s", output)
+	}
+	if !strings.Contains(output, "op=List") {
+		t.Errorf("expected log output to contain op=List attribute; got:\n%s", output)
 	}
 }

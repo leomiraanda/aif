@@ -17,14 +17,18 @@ import (
 // sources or start ticker goroutines. Routes are registered against a
 // caller-supplied *http.ServeMux via Register, conforming to the
 // api.Handler interface.
+//
+// Logger note: this handler does NOT hold a constructor-injected logger.
+// All request-scoped logging goes through LoggerFromContext(r.Context()),
+// which retrieves the request_id-decorated child logger built by
+// LoggingMiddleware (per CLAUDE.md "structured logging with request_id").
 type AppsHandler struct {
 	catalog apps.Catalog
-	logger  *slog.Logger
 }
 
 // NewAppsHandler constructs an AppsHandler bound to the catalog port.
-func NewAppsHandler(catalog apps.Catalog, logger *slog.Logger) *AppsHandler {
-	return &AppsHandler{catalog: catalog, logger: logger}
+func NewAppsHandler(catalog apps.Catalog) *AppsHandler {
+	return &AppsHandler{catalog: catalog}
 }
 
 // Register wires this handler's routes onto the provided mux. App IDs
@@ -157,21 +161,21 @@ func (h *AppsHandler) categories(w http.ResponseWriter, r *http.Request) {
 }
 
 // logCatalogErr emits a single Warn line per catalog-boundary error.
-// CLAUDE.md mandates HTTP handlers log with slog + request_id; the
-// request_id field is added by the middleware via the request context,
-// but only surfaces in slog output if the handler actually logs. This
-// helper threads any extra k/v pairs onto the standard envelope.
+// CLAUDE.md mandates HTTP handlers log with slog + request_id. The
+// request_id-decorated child logger is built by LoggingMiddleware and
+// stashed in the request context via ContextWithLogger; this helper
+// pulls it back with LoggerFromContext so the emitted record actually
+// carries request_id. LoggerFromContext falls back to slog.Default()
+// when no logger is in context (e.g. direct ServeHTTP calls in tests
+// that bypass the middleware), so no nil guard is needed here.
 func (h *AppsHandler) logCatalogErr(r *http.Request, op string, err error, kv ...any) {
-	if h.logger == nil {
-		return
-	}
 	args := []any{
 		"op", op,
 		"path", r.URL.Path,
-		"error", err,
+		slog.Any("error", err),
 	}
 	args = append(args, kv...)
-	h.logger.WarnContext(r.Context(), "apps handler: catalog call failed", args...)
+	LoggerFromContext(r.Context()).Warn("apps handler: catalog call failed", args...)
 }
 
 // Compile-time guard: AppsHandler satisfies api.Handler.

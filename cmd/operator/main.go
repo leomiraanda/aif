@@ -183,7 +183,7 @@ func main() {
 	// Register the REST handlers via the api.Handler interface. Future
 	// handlers (P2-6 NIM, P3-x more publish actions, P5-3 Workload, …)
 	// plug in the same way — pass them as additional varargs.
-	appsAPIHandler := api.NewAppsHandler(appsCatalog, logger)
+	appsAPIHandler := api.NewAppsHandler(appsCatalog)
 	manager.Register(mux, logger, allowedOrigin, appsAPIHandler, publishHandler)
 
 	apiServer := &http.Server{
