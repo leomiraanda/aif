@@ -77,8 +77,8 @@ export function init($plugin: IPlugin, store: any): void {
 
   // Bundles are author-created; Blueprints are minted by the approval workflow (never by UI);
   // Workloads and Settings are operator-managed, not user-created.
-  configureType(CRD_TYPES.BUNDLE,     { isCreatable: true,  isEditable: true,  canYaml: true  });
-  configureType(CRD_TYPES.BLUEPRINT,  { isCreatable: false, isEditable: false, canYaml: true  });
+  configureType(CRD_TYPES.BUNDLE,     { isCreatable: true,  isEditable: true,  isRemovable: false, canYaml: true  });
+  configureType(CRD_TYPES.BLUEPRINT,  { isCreatable: false, isEditable: false, isRemovable: false, canYaml: true  });
   configureType(CRD_TYPES.WORKLOAD,   { isCreatable: false, isEditable: false                 });
   configureType(CRD_TYPES.SETTINGS,   { isCreatable: false, isEditable: true                  });
 
