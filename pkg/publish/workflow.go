@@ -2,7 +2,6 @@ package publish
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log/slog"
 	"regexp"
@@ -39,7 +38,7 @@ type workflowImpl struct {
 
 func (w *workflowImpl) Submit(ctx context.Context, namespace, name string, req SubmitRequest) (bundle.Bundle, error) {
 	if req.User == "" {
-		return bundle.Bundle{}, errors.New("submit: user is required")
+		return bundle.Bundle{}, fmt.Errorf("submit: %w", ErrUserRequired)
 	}
 	if !isValidVersion(req.ProposedVersion) {
 		return bundle.Bundle{}, fmt.Errorf("proposedVersion %q: %w", req.ProposedVersion, ErrInvalidVersion)

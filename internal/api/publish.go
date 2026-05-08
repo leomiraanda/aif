@@ -64,6 +64,11 @@ func (h *PublishHandler) submit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if result.Submission == nil {
+		writeError(w, http.StatusInternalServerError, ErrInternal)
+		return
+	}
+
 	writeJSON(w, http.StatusOK, submitResponse{
 		Phase:             string(result.Phase),
 		ProposedVersion:   result.Submission.ProposedVersion,
@@ -89,6 +94,8 @@ func writePublishError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusForbidden, fmt.Errorf("%s: %w", err.Error(), ErrForbidden))
 	case errors.Is(err, publish.ErrPublishConflict):
 		writeError(w, http.StatusConflict, fmt.Errorf("%s: %w", err.Error(), ErrPublishConflict))
+	case errors.Is(err, publish.ErrUserRequired):
+		writeError(w, http.StatusForbidden, fmt.Errorf("%s: %w", err.Error(), ErrForbidden))
 	default:
 		writeError(w, http.StatusInternalServerError, ErrInternal)
 	}

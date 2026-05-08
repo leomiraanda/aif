@@ -1123,6 +1123,10 @@ grep -E '/api/v1/(ngc|nvidia/(mirror|aicr|models/sync))' internal/api/nvidia.go 
 
 > **Follow-up (P3-2 middleware refactor):** Middleware is now applied at the mux level via `Register() http.Handler` instead of per-route via `Handler.Register(mux, chain)`. `Register()` returns an `http.Handler` with the full middleware stack wrapping the mux. Handlers implement the simpler `Register(mux *http.ServeMux)` — they register routes only, middleware is automatic. This follows the standard Go HTTP pattern (chi, gorilla, stdlib convention) and eliminates the risk of routes silently bypassing middleware. P3-3..P3-5 handlers benefit from this directly.
 
+> **Follow-up (P3-2 aifv1 import exemption):** `pkg/publish/workflow.go` imports `api/v1alpha1` directly because `bundle.Repository.Get` returns `*aifv1.Bundle` — the workflow necessarily operates on CRD types at the adapter boundary. Accepted pattern, consistent with the existing P1-1 (`pkg/bundle/types.go`) and P1-2 (`pkg/blueprint/interface.go`) exemptions. Don't add new violations in other `pkg/publish` files; keep `aifv1` usage confined to `workflow.go`.
+
+> **Follow-up (P3-2 EventRecorder ISP):** `publish.EventRecorder` currently has 1 method (`BundleSubmitted`). P3-3..P3-5 will add `BundleWithdrawn`, `BundleChangesRequested`, `BundleApproved` — reaching 4 methods (within the ≤4 ISP target). If P3-5 also adds `BlueprintPublished` or `BundleStatusUpdateLagged`, the interface exceeds 4 and should be split by role (e.g. `SubmissionRecorder` / `ApprovalRecorder`) or collapsed to a single `RecordEvent(ctx, WorkflowEvent)` method with a discriminated event type.
+
 **Validation:**
 ```bash
 go test ./internal/api/ -run TestSubmit -v

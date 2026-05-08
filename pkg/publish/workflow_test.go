@@ -169,6 +169,7 @@ func TestSubmit_UserRequired(t *testing.T) {
 	})
 
 	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrUserRequired), "got: %v", err)
 }
 
 // Keep the other ErrNotImplemented tests for methods not yet implemented.

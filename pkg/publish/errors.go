@@ -11,4 +11,5 @@ var (
 	ErrPublishNotPending           = errors.New("bundle is not in submitted state")
 	ErrPublishVersionNotIncreasing = errors.New("proposed version must be greater than existing")
 	ErrPublisherRequired           = errors.New("publisher role required")
+	ErrUserRequired                = errors.New("user is required")
 )
