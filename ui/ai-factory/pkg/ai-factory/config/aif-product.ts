@@ -75,12 +75,14 @@ export function init($plugin: IPlugin, store: any): void {
   // These are separate from the virtualType nav entries above.
   basicType([CRD_TYPES.BUNDLE, CRD_TYPES.BLUEPRINT, CRD_TYPES.WORKLOAD, CRD_TYPES.SETTINGS]);
 
-  // Bundles are author-created; Blueprints are minted by the approval workflow (never by UI);
-  // Workloads and Settings are operator-managed, not user-created.
-  configureType(CRD_TYPES.BUNDLE,     { isCreatable: true,  isEditable: true,  isRemovable: false, canYaml: true  });
+  // Bundles: author-created, directly deletable (spec §8.2 — "Delete: available in any state").
+  // Blueprints: minted by approval workflow; only Deprecate/Withdraw/Reactivate are valid lifecycle actions.
+  // Workloads: removed via a custom Uninstall action (P6-6) that cleans up K8s resources, not raw delete.
+  // Settings: singleton CR managed by the operator; no delete action in spec.
+  configureType(CRD_TYPES.BUNDLE,     { isCreatable: true,  isEditable: true,  isRemovable: true,  canYaml: true  });
   configureType(CRD_TYPES.BLUEPRINT,  { isCreatable: false, isEditable: false, isRemovable: false, canYaml: true  });
-  configureType(CRD_TYPES.WORKLOAD,   { isCreatable: false, isEditable: false                 });
-  configureType(CRD_TYPES.SETTINGS,   { isCreatable: false, isEditable: true                  });
+  configureType(CRD_TYPES.WORKLOAD,   { isCreatable: false, isEditable: false, isRemovable: false               });
+  configureType(CRD_TYPES.SETTINGS,   { isCreatable: false, isEditable: true,  isRemovable: false               });
 
   weightGroup('Global', 1100, true);
   weightGroup('Clusters', 1000, true);

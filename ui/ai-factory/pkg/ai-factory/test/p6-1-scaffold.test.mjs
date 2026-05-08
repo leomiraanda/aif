@@ -48,9 +48,12 @@ test('P6-1 product registration exposes grouped navigation', () => {
   assert.match(source, /basicType\(globalPages,\s*'Global'\)/);
   assert.match(source, /basicType\(clusterPages,\s*'Clusters'\)/);
   assert.match(source, /basicType\(\[CRD_TYPES\.BUNDLE,\s*CRD_TYPES\.BLUEPRINT,\s*CRD_TYPES\.WORKLOAD,\s*CRD_TYPES\.SETTINGS\]\)/);
+  assert.match(source, /configureType\(CRD_TYPES\.BUNDLE,\s*\{[^}]*isRemovable:\s*true/s);
   assert.match(source, /configureType\(CRD_TYPES\.BLUEPRINT,\s*\{[^}]*isCreatable:\s*false/s);
   assert.match(source, /configureType\(CRD_TYPES\.BLUEPRINT,\s*\{[^}]*isRemovable:\s*false/s);
   assert.match(source, /configureType\(CRD_TYPES\.WORKLOAD,\s*\{[^}]*isCreatable:\s*false/s);
+  assert.match(source, /configureType\(CRD_TYPES\.WORKLOAD,\s*\{[^}]*isRemovable:\s*false/s);
+  assert.match(source, /configureType\(CRD_TYPES\.SETTINGS,\s*\{[^}]*isRemovable:\s*false/s);
   assert.match(source, /weightGroup\('Global',\s*1100,\s*true\)/);
   assert.match(source, /weightGroup\('Clusters',\s*1000,\s*true\)/);
 
