@@ -874,26 +874,34 @@ go test ./internal/manager/ -run TestRoutes -v
 **Effort:** M
 **Depends On:** P0-1
 **Parallelizable With:** P2-2 (P2-5 now depends on P2-1)
-**Done When:** `pkg/nvidia.NIMDiscovery.RefreshIndex(ctx)` returns a list of NIMs read from `oci://registry.suse.com/ai/charts/nvidia/`, with no calls to `nvcr.io`/`helm.ngc.nvidia.com`/`integrate.api.nvidia.com`.
+**Done When:** `pkg/nvidia.Discovery.Refresh(ctx)` returns successfully against `oci://registry.suse.com/ai/charts/nvidia/`, populates an in-memory cache, and `Discovery.Index(ctx)` returns the cached `[]NIMEntry`. No calls to `nvcr.io`/`helm.ngc.nvidia.com`/`integrate.api.nvidia.com`.
+
+> **Naming reconciled with `ARCHITECTURE.md §6.2` and the OOP foundations** that landed in PR #2: the port is `Discovery` (not `NIMDiscovery`), the methods are `Index` / `Get` / `Refresh` / `UpdateSettings` (not `RefreshIndex` / `List` / `Get(id) (NIMModel, bool)`), and the value type is `NIMEntry` (not `NIMModel`). `Get(ctx, id)` returns `(NIMEntry, error)` with `ErrNIMNotFound` sentinel — Repository-style, not the older `(NIMModel, bool)` shape, so callers branch with `errors.Is` (consistent with `pkg/{bundle,blueprint,workload}.Repository`). Credentials and endpoint flow in via `UpdateSettings(EngineSettings)` from `SettingsReconciler` (the EngineSettings push pattern owned by P5-4) rather than via constructor injection.
 
 **Acceptance Criteria:**
-- [ ] `pkg/nvidia/discovery.go` implements `NIMDiscovery` interface in `pkg/nvidia/interface.go`
-- [ ] `RefreshIndex(ctx)` queries `https://registry.suse.com/v2/_catalog` filtered by repo prefix `ai/charts/nvidia/`, then enumerates tags per chart
-- [ ] Auth: HTTP Basic with credentials supplied at construction time
-- [ ] In-memory map keyed by `{chart, version}`; protected by `sync.RWMutex`
-- [ ] Chart→type heuristic per `ARCHITECTURE.md §13.1` (regex match → `vlm`, else `llm`)
-- [ ] NO calls to `nvcr.io`, `helm.ngc.nvidia.com`, or `integrate.api.nvidia.com`
-- [ ] No hardcoded model seed list anywhere
-- [ ] Tests with httptest server simulating SUSE Registry catalog responses
+- [x] `pkg/nvidia/discovery.go` implements the `Discovery` interface in `pkg/nvidia/interface.go` (`Index` / `Get` / `Refresh` / `UpdateSettings`)
+- [x] `Refresh(ctx)` queries `<RegistryEndpoint>/v2/_catalog` filtered by repo prefix `ai/charts/nvidia/`, then enumerates tags per chart via `/v2/<repo>/tags/list`. Both endpoints follow `Link` rel="next" pagination
+- [x] Auth: HTTP Basic with credentials installed via `UpdateSettings(EngineSettings{Username, Token, RegistryEndpoint, RefreshInterval})`
+- [x] In-memory `map[string]NIMEntry` keyed by `<chart>:<version>`; protected by `sync.RWMutex`. Refresh builds the new map fully before swapping (atomic from `Index`'s perspective)
+- [x] Chart→type heuristic per `ARCHITECTURE.md §13.1` (case-insensitive regex `vlm|vision|kosmos|neva` → `TypeVLM`, else `TypeLLM`); pure function in `pkg/nvidia/classifier.go`
+- [x] NO calls to `nvcr.io`, `helm.ngc.nvidia.com`, or `integrate.api.nvidia.com`
+- [x] No hardcoded model seed list anywhere
+- [x] Sentinel errors in `pkg/nvidia/errors.go`: `ErrUnreachable` / `ErrUnauthorized` / `ErrUnexpectedResponse` / `ErrNotConfigured` / `ErrNIMNotFound`. No `strings.Contains(err.Error(), …)` (per CLAUDE.md Forbidden pattern)
+- [x] Hexagonal layering: `registry_client.go` (HTTP adapter), `classifier.go` (pure function), `discovery.go` (orchestrator). Each layer tested in isolation with `httptest.Server`
+- [x] Runnable end-to-end demonstration in `pkg/nvidia/example_test.go` (Example_discovery — doubles as `make verify-nim-mock`)
+- [x] Live registry test in `pkg/nvidia/live_test.go` gated by `//go:build live`; runs against `registry.suse.com` when `SUSE_REG_USER` and `SUSE_REG_TOKEN` are set
 
 **Validation:**
 ```bash
-go test ./pkg/nvidia/ -run TestNIMDiscovery -v
+make test-nim                       # unit tests (29 cases across 3 layers)
+make verify-nim-mock                # end-to-end Example_discovery output check
+make verify-nim-live                # live registry.suse.com (requires SUSE_REG_USER/TOKEN)
+golangci-lint run --concurrency=1 ./pkg/nvidia/...   # 0 issues
 grep -rE 'nvcr\.io|helm\.ngc\.nvidia\.com|integrate\.api\.nvidia\.com' pkg/nvidia/ && echo FAIL || echo PASS
 ```
 
 **Agent Prompt:**
-> Implement `pkg/nvidia/discovery.go` per `ARCHITECTURE.md §13.1`. Public API: `type NIMDiscovery interface { RefreshIndex(ctx) error; List() []NIMModel; Get(id string) (NIMModel, bool) }`. Implementation calls `GET https://registry.suse.com/v2/_catalog` (Basic auth), filters to repos prefixed `ai/charts/nvidia/`, then `GET /v2/<repo>/tags/list` for each. Stores `{chart, version, type}` in an in-memory map under `sync.RWMutex`. Apply the regex heuristic to infer `llm` vs `vlm`. Never call `nvcr.io`, `helm.ngc.nvidia.com`, or `integrate.api.nvidia.com`. Test with `httptest.Server` returning canned OCI catalog responses. Done when tests pass and the grep guard returns PASS.
+> Implement `pkg/nvidia/discovery.go` per `ARCHITECTURE.md §13.1` (mirror path + chart-type heuristic) and `§6.2` (Discovery port shape). Layer the package hexagonally: `registry_client.go` is the HTTP adapter to OCI Distribution v2 (Basic auth, `Link`-header pagination, sentinel errors); `classifier.go` is the pure chart-name → Type heuristic; `discovery.go` is the orchestrator that walks the catalog, classifies each chart, and atomically swaps the cache. Credentials arrive via `UpdateSettings(EngineSettings)` — never via constructor injection (the engine-settings push pattern from §8.2.1 lives in P5-4). Never call `nvcr.io`, `helm.ngc.nvidia.com`, or `integrate.api.nvidia.com`. Test each layer in isolation with `httptest.Server`; provide an `Example_discovery` for end-to-end documentation; provide a `//go:build live` test for the real registry. Done when all four validation commands pass.
 
 ---
 
@@ -919,6 +927,8 @@ grep -rE 'nvcr\.io|helm\.ngc\.nvidia\.com|integrate\.api\.nvidia\.com' pkg/nvidi
 go test ./pkg/source_collection/ -v
 ```
 
+> **Follow-up (post-merge):** `pkg/source_collection` was brought to parity with `pkg/nvidia`'s verification ergonomics — added a `//go:build live` test against the real `api.apps.rancher.io`, an `Example_clientList` runnable demo (deterministic `// Output:` block, doubles as `make verify-appco-mock`), and Makefile targets `test-appco` / `verify-appco-mock` / `verify-appco-live` mirroring the P2-1 set. Live test uses dedicated env vars `SUSE_APPCO_USER` / `SUSE_APPCO_TOKEN`, distinct from the registry's `SUSE_REG_USER` / `SUSE_REG_TOKEN` — per `ARCHITECTURE.md §13.2` the Application Collection credentials live under `Settings.spec.applicationCollection.{user, token}`, separate from `Settings.suseRegistry.{user, token}` even when customers reuse the same value. The original P2-2 acceptance criterion that read "(per spec — same SUSE creds)" was inaccurate and is corrected here.
+
 ---
 
 **ID:** P2-3
@@ -928,15 +938,57 @@ go test ./pkg/source_collection/ -v
 **Effort:** M
 **Depends On:** P2-1, P2-2
 **Parallelizable With:** P2-4, P2-6
-**Done When:** `appsCatalog.List(opts)` returns the unified catalog; `appsCatalog.Get(id)` returns a single App.
+**Done When:** `pkg/apps.Catalog.List(ctx, opts)` returns the unified, deduplicated, namespaced-id catalog; `Get(ctx, id)` dispatches to the matching Source; per-Source background refresh keeps the in-adapter caches fresh; partial Source failure does not block reads (stale-but-good).
 
 **Acceptance Criteria:**
-- [ ] `pkg/apps/catalog.go` implements `Catalog` interface
-- [ ] Pulls NIMs from `nvidia.NIMDiscovery.List()`
-- [ ] Pulls SUSE apps from `source_collection.Client` (cached for `--catalog-refresh` interval)
-- [ ] Returns deduplicated, sorted `[]App` matching the schema in `ARCHITECTURE.md §5 Apps`
-- [ ] Filtering: `?source=nvidia|suse|all`, `?category=`
-- [ ] Background refresh goroutine respecting root context
+
+*Ports & types*
+- [ ] `pkg/apps/interface.go` defines two ports, each ≤4 methods (ISP):
+  - `Catalog`: `List(ctx, ListOpts) ([]App, error)` · `Get(ctx, id) (App, error)` · `Refresh(ctx) error` · `UpdateSettings(EngineSettings)`
+  - `Source`:  `Name() string` · `List(ctx) ([]App, error)` · `Refresh(ctx) error` · `UpdateSettings(EngineSettings)`
+- [ ] `pkg/apps/types.go` defines the canonical `App` value type matching `ARCHITECTURE.md §5 Apps` shape, plus `ListOpts{Source, Category}`, composite `EngineSettings{SUSERegistry{Endpoint,Username,Token}, ApplicationCollection{APIURL,OCIHost,Username,Token}, RefreshInterval}`, and `SourceStatus{LastSuccessAt, LastError, EntryCount}`.
+- [ ] `pkg/apps/errors.go` declares `ErrAppNotFound`, `ErrUnknownSource` (consumers branch via `errors.Is`).
+
+*Hexagonal adapters (one file per adapter)*
+- [ ] `pkg/apps/nvidia_source.go` — `NVIDIASource` wraps `*nvidia.Discovery`, owns its own cache + ticker goroutine, translates `NIMEntry → App` with **namespaced ID** `nvidia/<chart>:<version>`. Translation is the only file in `pkg/apps` that imports `pkg/nvidia`.
+- [ ] `pkg/apps/appco_source.go` — `AppCoSource` wraps `source_collection.Client`, owns its own cache + ticker goroutine, translates `CatalogApp → App` with **namespaced ID** `suse/<slug>:<latestVersion>`. Translation is the only file in `pkg/apps` that imports `pkg/source_collection`.
+- [ ] `pkg/nvidia` and `pkg/source_collection` MUST NOT gain any import of `pkg/apps` — translation lives at the integration boundary (per CLAUDE.md hexagonal rule and the Option B decision in PR #10).
+
+*Catalog behavior*
+- [ ] `pkg/apps/catalog.go` `catalogImpl` holds `[]Source` (added via `*catalogImpl.AddSource(s)` struct method called from `cmd/operator/main.go`; not part of the public `Catalog` interface).
+- [ ] `Catalog.List(ctx, opts)` fans out to every registered Source's cached `List()`, concatenates, **deduplicates by `App.ID`**, sorts by ID, applies `opts.Source` filter (`""` = all, otherwise match `App.Source`) and `opts.Category` filter (exact match against `App.Categories`).
+- [ ] **Stale-but-good (decision b):** `List` does NOT call `Source.Refresh`; it only reads each adapter's cache. If an adapter's last refresh failed, its cache holds the previous successful result; List logs a warn and serves it. The full call only fails if every adapter has never had a successful refresh.
+- [ ] `Catalog.Get(ctx, id)` parses the namespace prefix (`nvidia/...` | `suse/...`), dispatches to that Source's cache; returns `ErrAppNotFound` if absent, `ErrUnknownSource` if the prefix is unrecognized.
+- [ ] `Catalog.Refresh(ctx)` fans out to every Source's `Refresh`; partial failure is logged but non-fatal (returns the first error only if ALL sources failed).
+- [ ] `Catalog.UpdateSettings(s EngineSettings)` fans out — each adapter's `UpdateSettings` slices `s` into the engine-native shape (`nvidia.EngineSettings` / `source_collection.EngineSettings`) and forwards to its underlying engine.
+- [ ] `*catalogImpl.Start(ctx)` starts every adapter's per-Source ticker goroutine; goroutines exit on `ctx.Done()`. Each adapter's ticker cadence comes from `EngineSettings.RefreshInterval` (default 10m).
+
+*Verification ergonomics (per CLAUDE.md "A New External Integration" pattern, applied to a composite catalog)*
+- [ ] `pkg/apps/example_test.go` — `Example_catalog` builds a Catalog with two fake Sources, demonstrates the unified List + namespaced IDs, deterministic `// Output:`. Doubles as `make verify-apps-mock`.
+- [ ] `pkg/apps/live_test.go` — `//go:build live`, builds a Catalog with real `NVIDIASource` and `AppCoSource`, refreshes, lists; asserts the call completes without error and reports counts informationally. Doubles as `make verify-apps-live`. Reuses `SUSE_REG_*` and `SUSE_APPCO_*` env vars from `.env`.
+- [ ] `Makefile` adds `test-apps` / `verify-apps-mock` / `verify-apps-live` to `.PHONY` and as targets.
+
+*Wiring*
+- [ ] `cmd/operator/main.go` constructs `pkg/apps.NewCatalog`, wraps the existing `*nvidia.Discovery` and `source_collection.Client` instances via `NVIDIASource` / `AppCoSource` adapters, registers them with `AddSource`, and starts the lifecycle. (SettingsReconciler integration with `Catalog.UpdateSettings` waits for P5-4.)
+
+*Forbidden*
+- [ ] No new `pkg/{nvidia,source_collection}` → `pkg/apps` import (verified by grep guard in `make lint` follow-up, or manual at PR review).
+- [ ] No `strings.Contains` on error messages anywhere in `pkg/apps` (sentinel errors + `errors.Is` only).
+
+**Validation:**
+```bash
+make test-apps                       # unit tests across all layers
+make verify-apps-mock                # Example_catalog deterministic output check
+make verify-apps-live                # live registry.suse.com + api.apps.rancher.io (requires SUSE_REG_* + SUSE_APPCO_*)
+golangci-lint run --concurrency=1 ./pkg/apps/...   # 0 issues
+grep -rE 'pkg/apps' pkg/nvidia/ pkg/source_collection/ && echo FAIL || echo PASS
+grep -rE 'strings\.Contains.*err\.Error' pkg/apps/ && echo FAIL || echo PASS
+```
+
+**Agent Prompt:**
+> Implement `pkg/apps/` per the file layout above. The package owns the canonical `App` type, the `Catalog` and `Source` ports, and two adapters (`NVIDIASource`, `AppCoSource`) that wrap `pkg/nvidia.Discovery` and `pkg/source_collection.Client` respectively. **Strict hexagonal:** translation `NIMEntry → App` and `CatalogApp → App` lives ONLY in the adapter files; the underlying source packages must not learn about `pkg/apps`. Each adapter owns its own cache and its own ticker goroutine (decision e: per-Source tickers); `Catalog.Start(ctx)` kicks them off. App IDs are namespaced (`nvidia/<chart>:<version>`, `suse/<slug>:<version>`) so dedupe and source-routing are mechanical. `Catalog.List` is stale-but-good (decision b): it never calls Refresh, only reads adapter caches; a failed refresh leaves the previous result in place. `Catalog.AddSource` is a struct method (decision d: registry pattern, not constructor injection). `Catalog.UpdateSettings` fans out to each adapter, which slices the composite `EngineSettings` into its engine-native shape (decision f). Ship the standard verification trio: `Example_catalog`, `//go:build live` test, three Makefile targets. Done when all five validation commands pass.
+
+> **Naming reconciliation:** the bullet above replaces the older draft that said "Pulls NIMs from `nvidia.NIMDiscovery.List()`" — `pkg/nvidia` exposes `Discovery.Index(ctx) ([]NIMEntry, error)` (named per `ARCHITECTURE.md §6.2`, landed in P2-1), not `NIMDiscovery.List`. The translation `[]NIMEntry → []App` happens inside `pkg/apps.NVIDIASource.List`.
 
 ---
 
