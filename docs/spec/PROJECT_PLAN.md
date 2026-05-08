@@ -1119,6 +1119,8 @@ grep -E '/api/v1/(ngc|nvidia/(mirror|aicr|models/sync))' internal/api/nvidia.go 
 **Deferred from P3-1 review:**
 - Wrap publish routes through the middleware chain (CORS, RequestID, Logging, Metrics). Currently `PublishHandler.Register()` registers routes on the bare mux, bypassing the `api.Chain` applied to other endpoints.
 
+> **Follow-up (P3-2 implementation):** P3-2 introduces a `publish.EventRecorder` port in `Deps` for K8s event recording. This covers `BundleSubmitted` and establishes the pattern for P3-3..P3-5 events (BundleWithdrawn, ChangesRequested, BundleApproved). The port is domain-specific (not a generic K8s recorder) to keep `pkg/publish` K8s-agnostic per hexagonal layering. K8s-backed implementation wired in `cmd/operator/main.go`.
+
 **Validation:**
 ```bash
 go test ./internal/api/ -run TestSubmit -v
