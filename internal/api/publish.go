@@ -90,7 +90,7 @@ func writePublishError(w http.ResponseWriter, err error) {
 	case errors.Is(err, publish.ErrPublishConflict):
 		writeError(w, http.StatusConflict, fmt.Errorf("%s: %w", err.Error(), ErrPublishConflict))
 	default:
-		writeError(w, http.StatusInternalServerError, err)
+		writeError(w, http.StatusInternalServerError, ErrInternal)
 	}
 }
 
