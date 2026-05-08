@@ -42,10 +42,14 @@ test('P6-1 product registration exposes grouped navigation', () => {
   const source = read('config/aif-product.ts');
 
   assert.match(source, /product\(\{/);
+  assert.match(source, /inStore:\s*'aif'/);
+  assert.match(source, /isMultiClusterApp:\s*true/);
   assert.match(source, /showClusterSwitcher:\s*false/);
   assert.match(source, /basicType\(globalPages,\s*'Global'\)/);
   assert.match(source, /basicType\(clusterPages,\s*'Clusters'\)/);
-  assert.match(source, /basicType\(\[CRD_TYPES\.BUNDLE,\s*CRD_TYPES\.BLUEPRINT,\s*CRD_TYPES\.WORKLOAD\]\)/);
+  assert.match(source, /basicType\(\[CRD_TYPES\.BUNDLE,\s*CRD_TYPES\.BLUEPRINT,\s*CRD_TYPES\.WORKLOAD,\s*CRD_TYPES\.SETTINGS\]\)/);
+  assert.match(source, /configureType\(CRD_TYPES\.BLUEPRINT,\s*\{[^}]*isCreatable:\s*false/s);
+  assert.match(source, /configureType\(CRD_TYPES\.WORKLOAD,\s*\{[^}]*isCreatable:\s*false/s);
   assert.match(source, /weightGroup\('Global',\s*1100,\s*true\)/);
   assert.match(source, /weightGroup\('Clusters',\s*1000,\s*true\)/);
 
@@ -90,6 +94,8 @@ test('P6-1 entry point wires product, routes, and localization', () => {
   assert.match(source, /import \* as productModule from '\.\/config\/aif-product'/);
   assert.match(source, /import routes from '\.\/routing'/);
   assert.match(source, /import '\.\/style\/brand\.css'/);
+  assert.match(source, /SteveFactory.*require\('@shell\/plugins\/steve'\)/s);
+  assert.match(source, /plugin\.addDashboardStore\('aif'.*namespace:\s*'aif'/s);
   assert.match(source, /plugin\.addProduct\(productModule/);
   assert.match(source, /plugin\.addRoutes\(routes\)/);
   assert.match(source, /plugin\.addL10n\('en-us',\s*require\('\.\/l10n\/en-us\.yaml'\)\)/);

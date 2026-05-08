@@ -31,16 +31,18 @@ export function init($plugin: IPlugin, store: any): void {
     product,
     virtualType,
     basicType,
+    configureType,
     weightGroup
   } = $plugin.DSL(store, PRODUCT_NAME);
 
   product({
     icon:                'ai-factory',
-    inStore:             'management',
+    inStore:             'aif',
+    isMultiClusterApp:   true,
     showClusterSwitcher: false,
     weight:              100,
     to:                  routeFor(PAGE_IDS.OVERVIEW)
-  });
+  } as any);
 
   pageNav.forEach((page) => {
     // ConfigureVirtualTypeOptions is missing `weight`, but type-map.js reads type.weight
@@ -71,7 +73,14 @@ export function init($plugin: IPlugin, store: any): void {
 
   // Register CRD-backed types so the Steve store discovers and watches them.
   // These are separate from the virtualType nav entries above.
-  basicType([CRD_TYPES.BUNDLE, CRD_TYPES.BLUEPRINT, CRD_TYPES.WORKLOAD]);
+  basicType([CRD_TYPES.BUNDLE, CRD_TYPES.BLUEPRINT, CRD_TYPES.WORKLOAD, CRD_TYPES.SETTINGS]);
+
+  // Bundles are author-created; Blueprints are minted by the approval workflow (never by UI);
+  // Workloads and Settings are operator-managed, not user-created.
+  configureType(CRD_TYPES.BUNDLE,     { isCreatable: true,  isEditable: true,  canYaml: true  });
+  configureType(CRD_TYPES.BLUEPRINT,  { isCreatable: false, isEditable: false, canYaml: true  });
+  configureType(CRD_TYPES.WORKLOAD,   { isCreatable: false, isEditable: false                 });
+  configureType(CRD_TYPES.SETTINGS,   { isCreatable: false, isEditable: true                  });
 
   weightGroup('Global', 1100, true);
   weightGroup('Clusters', 1000, true);
