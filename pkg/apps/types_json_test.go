@@ -13,7 +13,7 @@ import (
 // the API contract.
 func TestApp_JSONTags_MatchesArchitectureSchema(t *testing.T) {
 	a := App{
-		ID:                 "nvidia/nim-llm:1.0.0",
+		ID:                 "nvidia.nim-llm:1.0.0",
 		Name:               "nim-llm",
 		DisplayName:        "NIM LLM",
 		Description:        "an LLM",
@@ -98,7 +98,7 @@ func TestChartRef_JSONTags(t *testing.T) {
 
 func TestApp_JSONRoundTrip_PreservesAllFields(t *testing.T) {
 	want := App{
-		ID:                 "suse/ollama:0.4.1",
+		ID:                 "suse.ollama:0.4.1",
 		Name:               "ollama",
 		DisplayName:        "Ollama",
 		Description:        "Local LLM runtime",

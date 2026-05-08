@@ -67,15 +67,15 @@ func discardLogger() *slog.Logger {
 // sources so filter tests can be written.
 func sampleApps() []apps.App {
 	return []apps.App{
-		{ID: "nvidia/nim-llm:1.0.0", Source: "nvidia", Name: "nim-llm",
+		{ID: "nvidia.nim-llm:1.0.0", Source: "nvidia", Name: "nim-llm",
 			Categories: []string{"llm"}, ReferenceBlueprint: false},
-		{ID: "nvidia/nim-vlm:2.0.0", Source: "nvidia", Name: "nim-vlm",
+		{ID: "nvidia.nim-vlm:2.0.0", Source: "nvidia", Name: "nim-vlm",
 			Categories: []string{"vlm"}, ReferenceBlueprint: false},
-		{ID: "nvidia/rag-blueprint:1.0", Source: "nvidia", Name: "rag-blueprint",
+		{ID: "nvidia.rag-blueprint:1.0", Source: "nvidia", Name: "rag-blueprint",
 			Categories: []string{"reference-blueprint"}, ReferenceBlueprint: true},
-		{ID: "suse/ollama:0.4.1", Source: "suse", Name: "ollama",
+		{ID: "suse.ollama:0.4.1", Source: "suse", Name: "ollama",
 			Categories: []string{"AI", "Inference"}, ReferenceBlueprint: false},
-		{ID: "suse/milvus:2.4.0", Source: "suse", Name: "milvus",
+		{ID: "suse.milvus:2.4.0", Source: "suse", Name: "milvus",
 			Categories: []string{"AI", "Vector DB"}, ReferenceBlueprint: false},
 	}
 }
@@ -223,12 +223,12 @@ func TestAppsHandler_List_EmptyResult_SerializesAsEmptyArray(t *testing.T) {
 
 func TestAppsHandler_Get_HappyPath_Returns200AndApp(t *testing.T) {
 	want := apps.App{
-		ID: "nvidia/nim-llm:1.0.0", Name: "nim-llm", Source: "nvidia",
+		ID: "nvidia.nim-llm:1.0.0", Name: "nim-llm", Source: "nvidia",
 	}
 	cat := &fakeCatalog{getResult: want}
 	h := newAppsHandlerForTest(cat)
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/apps/nvidia/nim-llm:1.0.0", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/apps/nvidia.nim-llm:1.0.0", nil)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 
@@ -244,13 +244,13 @@ func TestAppsHandler_Get_HappyPath_Returns200AndApp(t *testing.T) {
 	}
 }
 
-// --- GET /api/v1/apps/{id...}: namespaced ID with slash routes correctly ---
+// --- GET /api/v1/apps/{id}: dot-namespaced ID is a single path segment ---
 
 func TestAppsHandler_Get_NamespacedID_RoutedToCatalog(t *testing.T) {
-	cat := &fakeCatalog{getResult: apps.App{ID: "suse/ollama:0.4.1", Source: "suse"}}
+	cat := &fakeCatalog{getResult: apps.App{ID: "suse.ollama:0.4.1", Source: "suse"}}
 	h := newAppsHandlerForTest(cat)
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/apps/suse/ollama:0.4.1", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/apps/suse.ollama:0.4.1", nil)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 
@@ -259,13 +259,13 @@ func TestAppsHandler_Get_NamespacedID_RoutedToCatalog(t *testing.T) {
 	}
 }
 
-// --- GET /api/v1/apps/{id...}: ErrAppNotFound → 404 NOT_FOUND ---
+// --- GET /api/v1/apps/{id}: ErrAppNotFound → 404 NOT_FOUND ---
 
 func TestAppsHandler_Get_AppNotFound_Returns404(t *testing.T) {
 	cat := &fakeCatalog{getErr: apps.ErrAppNotFound}
 	h := newAppsHandlerForTest(cat)
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/apps/nvidia/does-not-exist:9.9.9", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/apps/nvidia.does-not-exist:9.9.9", nil)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 
@@ -281,13 +281,13 @@ func TestAppsHandler_Get_AppNotFound_Returns404(t *testing.T) {
 	}
 }
 
-// --- GET /api/v1/apps/{id...}: ErrUnknownSource → 400 INVALID_INPUT ---
+// --- GET /api/v1/apps/{id}: ErrUnknownSource → 400 INVALID_INPUT ---
 
 func TestAppsHandler_Get_UnknownSource_Returns400(t *testing.T) {
 	cat := &fakeCatalog{getErr: apps.ErrUnknownSource}
 	h := newAppsHandlerForTest(cat)
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/apps/mystery/whatever:1.0", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/apps/mystery.whatever:1.0", nil)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 
@@ -355,18 +355,21 @@ func TestAppsHandler_Categories_EmptyCatalog_SerializesAsEmptyArray(t *testing.T
 	}
 }
 
-// --- Routing precedence: /categories must NOT be caught by /{id...} ---
+// --- Routing precedence: literal /categories must beat /{id} ---
 
-func TestAppsHandler_Categories_WinsOverWildcard(t *testing.T) {
-	// If /categories were caught by the wildcard, the handler would call
-	// catalog.Get("categories"). Configure the fake to verify that did
-	// NOT happen by setting a sentinel result that the categories
-	// handler would never produce.
+func TestAppsHandler_Categories_WinsOverGetByID(t *testing.T) {
+	// Both /api/v1/apps/categories and /api/v1/apps/{id} could in
+	// principle match the path "/api/v1/apps/categories" (with id =
+	// "categories"). Go 1.22+ ServeMux resolves this in favour of the
+	// more specific literal pattern, but it's worth a guard test in
+	// case routing infra changes. If the {id} route ever wins, the
+	// handler would call catalog.Get("categories") and the trap App's
+	// ID would surface in the response.
 	cat := &fakeCatalog{
 		listResult: []apps.App{
 			{ID: "a", Categories: []string{"AI"}},
 		},
-		getResult: apps.App{ID: "TRAP/should-not-appear", Source: "trap"},
+		getResult: apps.App{ID: "trap.should-not-appear:0", Source: "trap"},
 	}
 	h := newAppsHandlerForTest(cat)
 
@@ -375,10 +378,8 @@ func TestAppsHandler_Categories_WinsOverWildcard(t *testing.T) {
 	h.ServeHTTP(rec, req)
 
 	body := strings.TrimSpace(rec.Body.String())
-	// The categories handler returns []string — the trap App's ID should
-	// NEVER appear in the response.
-	if strings.Contains(body, "TRAP/should-not-appear") {
-		t.Errorf("/categories was routed to /{id...}; body=%s", body)
+	if strings.Contains(body, "trap.should-not-appear") {
+		t.Errorf("/categories was routed to /{id}; body=%s", body)
 	}
 	// And the response must be a JSON array of strings.
 	var asStrings []string

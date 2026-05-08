@@ -950,8 +950,8 @@ go test ./pkg/source_collection/ -v
 - [ ] `pkg/apps/errors.go` declares `ErrAppNotFound`, `ErrUnknownSource` (consumers branch via `errors.Is`).
 
 *Hexagonal adapters (one file per adapter)*
-- [ ] `pkg/apps/nvidia_source.go` — `NVIDIASource` wraps `*nvidia.Discovery`, owns its own cache + ticker goroutine, translates `NIMEntry → App` with **namespaced ID** `nvidia/<chart>:<version>`. Translation is the only file in `pkg/apps` that imports `pkg/nvidia`.
-- [ ] `pkg/apps/appco_source.go` — `AppCoSource` wraps `source_collection.Client`, owns its own cache + ticker goroutine, translates `CatalogApp → App` with **namespaced ID** `suse/<slug>:<latestVersion>`. Translation is the only file in `pkg/apps` that imports `pkg/source_collection`.
+- [ ] `pkg/apps/nvidia_source.go` — `NVIDIASource` wraps `*nvidia.Discovery`, owns its own cache + ticker goroutine, translates `NIMEntry → App` with **namespaced ID** `nvidia.<chart>:<version>` (dot separator — see "Namespacing format" follow-up note below). Translation is the only file in `pkg/apps` that imports `pkg/nvidia`.
+- [ ] `pkg/apps/appco_source.go` — `AppCoSource` wraps `source_collection.Client`, owns its own cache + ticker goroutine, translates `CatalogApp → App` with **namespaced ID** `suse.<slug>:<latestVersion>` (dot separator — see "Namespacing format" follow-up note below). Translation is the only file in `pkg/apps` that imports `pkg/source_collection`.
 - [ ] `pkg/nvidia` and `pkg/source_collection` MUST NOT gain any import of `pkg/apps` — translation lives at the integration boundary (per CLAUDE.md hexagonal rule and the Option B decision in PR #10).
 
 *Catalog behavior*
@@ -986,9 +986,11 @@ grep -rE 'strings\.Contains.*err\.Error' pkg/apps/ && echo FAIL || echo PASS
 ```
 
 **Agent Prompt:**
-> Implement `pkg/apps/` per the file layout above. The package owns the canonical `App` type, the `Catalog` and `Source` ports, and two adapters (`NVIDIASource`, `AppCoSource`) that wrap `pkg/nvidia.Discovery` and `pkg/source_collection.Client` respectively. **Strict hexagonal:** translation `NIMEntry → App` and `CatalogApp → App` lives ONLY in the adapter files; the underlying source packages must not learn about `pkg/apps`. Each adapter owns its own cache and its own ticker goroutine (decision e: per-Source tickers); `Catalog.Start(ctx)` kicks them off. App IDs are namespaced (`nvidia/<chart>:<version>`, `suse/<slug>:<version>`) so dedupe and source-routing are mechanical. `Catalog.List` is stale-but-good (decision b): it never calls Refresh, only reads adapter caches; a failed refresh leaves the previous result in place. `Catalog.AddSource` is a struct method (decision d: registry pattern, not constructor injection). `Catalog.UpdateSettings` fans out to each adapter, which slices the composite `EngineSettings` into its engine-native shape (decision f). Ship the standard verification trio: `Example_catalog`, `//go:build live` test, three Makefile targets. Done when all five validation commands pass.
+> Implement `pkg/apps/` per the file layout above. The package owns the canonical `App` type, the `Catalog` and `Source` ports, and two adapters (`NVIDIASource`, `AppCoSource`) that wrap `pkg/nvidia.Discovery` and `pkg/source_collection.Client` respectively. **Strict hexagonal:** translation `NIMEntry → App` and `CatalogApp → App` lives ONLY in the adapter files; the underlying source packages must not learn about `pkg/apps`. Each adapter owns its own cache and its own ticker goroutine (decision e: per-Source tickers); `Catalog.Start(ctx)` kicks them off. App IDs are namespaced (`nvidia.<chart>:<version>`, `suse.<slug>:<version>` — dot separator) so dedupe and source-routing are mechanical. `Catalog.List` is stale-but-good (decision b): it never calls Refresh, only reads adapter caches; a failed refresh leaves the previous result in place. `Catalog.AddSource` is a struct method (decision d: registry pattern, not constructor injection). `Catalog.UpdateSettings` fans out to each adapter, which slices the composite `EngineSettings` into its engine-native shape (decision f). Ship the standard verification trio: `Example_catalog`, `//go:build live` test, three Makefile targets. Done when all five validation commands pass.
 
 > **Naming reconciliation:** the bullet above replaces the older draft that said "Pulls NIMs from `nvidia.NIMDiscovery.List()`" — `pkg/nvidia` exposes `Discovery.Index(ctx) ([]NIMEntry, error)` (named per `ARCHITECTURE.md §6.2`, landed in P2-1), not `NIMDiscovery.List`. The translation `[]NIMEntry → []App` happens inside `pkg/apps.NVIDIASource.List`.
+
+> **Namespacing format (P2-4 follow-up):** the original P2-3 amendment specified `<source>/<chart>:<version>` (slash separator), but P2-4's REST handler then needed a Go 1.22 `{id...}` trailing-wildcard pattern to match URLs like `/api/v1/apps/nvidia/nim-llm:1.0.0`. The wildcard came with a routing-precedence concern (`/categories` had to win over `/{id...}`) and locked us into a specific `ServeMux` semantics. Replaced with **dot** as the separator — `nvidia.<chart>:<version>` and `suse.<slug>:<version>` — so the route is a plain `/api/v1/apps/{id}` single-segment match. Helm chart names and Application Collection slugs are DNS-1123 (lowercase alphanumeric + dashes; no dots), so the prefix split (`strings.Cut(id, ".")`) is unambiguous.
 
 ---
 
@@ -999,7 +1001,7 @@ grep -rE 'strings\.Contains.*err\.Error' pkg/apps/ && echo FAIL || echo PASS
 **Effort:** S
 **Depends On:** P2-3
 **Parallelizable With:** P2-3, P2-6
-**Done When:** `GET /api/v1/apps`, `GET /api/v1/apps/{id...}`, `GET /api/v1/apps/categories` all return `200 OK` with the documented JSON shapes; `catalog.Get` errors map to `404 NOT_FOUND` / `400 INVALID_INPUT`; the `?includeReferenceBlueprints` toggle filters Reference Blueprints out of the default response.
+**Done When:** `GET /api/v1/apps`, `GET /api/v1/apps/{id}`, `GET /api/v1/apps/categories` all return `200 OK` with the documented JSON shapes; `catalog.Get` errors map to `404 NOT_FOUND` / `400 INVALID_INPUT`; the `?includeReferenceBlueprints` toggle filters Reference Blueprints out of the default response.
 
 **Acceptance Criteria:**
 
@@ -1010,8 +1012,8 @@ grep -rE 'strings\.Contains.*err\.Error' pkg/apps/ && echo FAIL || echo PASS
 - [ ] `internal/api/apps.go`: `appsHandler` implements `api.Handler`; depends on `apps.Catalog` (the read-only port) — NOT on `Aggregator`. Constructor takes `(apps.Catalog, *slog.Logger)`.
 - [ ] Routes registered via `Handler.Register` using Go 1.22 `ServeMux` method-prefixed patterns:
   - `GET /api/v1/apps`
-  - `GET /api/v1/apps/categories`  (registered BEFORE the wildcard so it wins)
-  - `GET /api/v1/apps/{id...}`     (wildcard — namespaced IDs contain `/`)
+  - `GET /api/v1/apps/categories`  (literal segment beats `{id}` per Go 1.22 specificity rules)
+  - `GET /api/v1/apps/{id}`        (single path segment — IDs are dot-namespaced, no `/`)
 
 *GET /api/v1/apps*
 - [ ] Query params: `?source=nvidia|suse`, `?category=`, `?includeReferenceBlueprints=true|false` (default `false`).
@@ -1019,7 +1021,7 @@ grep -rE 'strings\.Contains.*err\.Error' pkg/apps/ && echo FAIL || echo PASS
 - [ ] Returns `[]App` (camelCase JSON), 200 OK; empty slice serialized as `[]` (never `null`).
 - [ ] `App.referenceBlueprint` field is populated from chart annotation `ai.suse.com/role: reference-blueprint` upstream by P2-5; this PR just passes the field through and respects the filter.
 
-*GET /api/v1/apps/{id...}*
+*GET /api/v1/apps/{id}*
 - [ ] Returns the single App (regardless of `referenceBlueprint`).
 - [ ] `catalog.Get` errors: `ErrAppNotFound` → `404 NOT_FOUND`; `ErrUnknownSource` → `400 INVALID_INPUT`.
 

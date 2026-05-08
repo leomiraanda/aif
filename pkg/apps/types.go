@@ -8,10 +8,12 @@ import "time"
 // translate engine-native types (NIMEntry, source_collection.CatalogApp)
 // into App; the engine packages remain unaware of App's existence.
 //
-// IDs are namespaced by source so dedupe and routing are mechanical:
+// IDs are namespaced by source so dedupe and routing are mechanical;
+// the dot separator is chosen so the REST surface uses a plain
+// path-segment route (`/api/v1/apps/{id}`) rather than a wildcard:
 //
-//	nvidia/<chart>:<version>     e.g. nvidia/nim-llm:1.2.0
-//	suse/<slug>:<version>        e.g. suse/ollama:0.4.1
+//	nvidia.<chart>:<version>     e.g. nvidia.nim-llm:1.2.0
+//	suse.<slug>:<version>        e.g. suse.ollama:0.4.1
 type App struct {
 	ID                 string   `json:"id"`                 // namespaced; canonical key for dedupe + Get
 	Name               string   `json:"name"`               // bare chart/slug name (no namespace, no version)

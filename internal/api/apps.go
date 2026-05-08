@@ -27,14 +27,15 @@ func NewAppsHandler(catalog apps.Catalog, logger *slog.Logger) *AppsHandler {
 	return &AppsHandler{catalog: catalog, logger: logger}
 }
 
-// Register wires this handler's routes onto the provided mux. Go 1.22+
-// ServeMux precedence resolves more specific patterns over wildcards
-// independently of registration order, so /categories wins over
-// /{id...} for that exact path.
+// Register wires this handler's routes onto the provided mux. App IDs
+// are dot-namespaced single tokens (e.g. `nvidia.nim-llm:1.0.0`) so the
+// per-app route is a plain `{id}` path-segment pattern — no trailing
+// wildcard needed. Go 1.22+ ServeMux precedence still gives /categories
+// priority over /{id} for that exact path.
 func (h *AppsHandler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/apps", h.list)
 	mux.HandleFunc("GET /api/v1/apps/categories", h.categories)
-	mux.HandleFunc("GET /api/v1/apps/{id...}", h.get)
+	mux.HandleFunc("GET /api/v1/apps/{id}", h.get)
 }
 
 // list serves GET /api/v1/apps. Query params:
@@ -78,11 +79,11 @@ func parseIncludeReferenceBlueprints(r *http.Request) bool {
 	return r.URL.Query().Get("includeReferenceBlueprints") == "true"
 }
 
-// get serves GET /api/v1/apps/{id...}. The wildcard pattern captures
-// the namespaced ID including the '/' separator
-// (e.g. "nvidia/nim-llm:1.0.0"). Returns the single App regardless of
-// the includeReferenceBlueprints flag (per ARCHITECTURE.md §5: "Single
-// app (returned regardless of referenceBlueprint flag)").
+// get serves GET /api/v1/apps/{id}. The dot-namespaced ID is a single
+// path segment (e.g. "nvidia.nim-llm:1.0.0"). Returns the single App
+// regardless of the includeReferenceBlueprints flag (per
+// ARCHITECTURE.md §5: "Single app (returned regardless of
+// referenceBlueprint flag)").
 //
 // Error mapping (catalog → API):
 //
