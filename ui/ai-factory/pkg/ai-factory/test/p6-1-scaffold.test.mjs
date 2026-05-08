@@ -39,7 +39,7 @@ test('P6-1 type constants define product, pages, and CRD types', () => {
 });
 
 test('P6-1 product registration exposes grouped navigation', () => {
-  const source = read('config/product.ts');
+  const source = read('config/aif-product.ts');
 
   assert.match(source, /product\(\{/);
   assert.match(source, /showClusterSwitcher:\s*false/);
@@ -87,7 +87,7 @@ test('P6-1 l10n and placeholder pages cover all navigation entries', () => {
 test('P6-1 entry point wires product, routes, and localization', () => {
   const source = read('index.ts');
 
-  assert.match(source, /import \* as productModule from '\.\/config\/product'/);
+  assert.match(source, /import \* as productModule from '\.\/config\/aif-product'/);
   assert.match(source, /import routes from '\.\/routing'/);
   assert.match(source, /import '\.\/style\/brand\.css'/);
   assert.match(source, /plugin\.addProduct\(productModule/);
