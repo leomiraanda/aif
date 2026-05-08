@@ -1,0 +1,130 @@
+import assert from 'node:assert/strict';
+import { existsSync, readFileSync } from 'node:fs';
+import { test } from 'node:test';
+
+const read = (path) => readFileSync(new URL(`../${ path }`, import.meta.url), 'utf8');
+const maskPayloads = (source) => Array.from(
+  source.matchAll(/url\("data:image\/svg\+xml;base64,([^"]+)"\)/g),
+  (match) => match[1]
+);
+
+const pages = [
+  ['overview', 'OverviewPage', 'Overview'],
+  ['apps', 'AppsPage', 'Apps Catalog'],
+  ['blueprints', 'BlueprintsPage', 'Blueprints'],
+  ['bundles', 'BundlesPage', 'Bundles'],
+  ['workloads', 'WorkloadsPage', 'Workloads'],
+  ['settings', 'SettingsPage', 'Settings']
+];
+
+test('P6-1 type constants define product, pages, and CRD types', () => {
+  const source = read('config/types.ts');
+
+  assert.match(source, /PRODUCT_NAME\s*=\s*'ai-factory'/);
+  assert.match(source, /BLANK_CLUSTER\s*=\s*'_'/);
+
+  for (const [page] of pages) {
+    assert.match(source, new RegExp(`${ page.toUpperCase() }: '${ page }'`));
+  }
+
+  for (const crd of ['bundle', 'blueprint', 'workload', 'settings']) {
+    assert.match(source, new RegExp(`ai\\.suse\\.com\\.${ crd }`));
+  }
+});
+
+test('P6-1 product registration exposes grouped navigation', () => {
+  const source = read('config/product.ts');
+
+  assert.match(source, /product\(\{/);
+  assert.match(source, /showClusterSwitcher:\s*false/);
+  assert.match(source, /basicType\(globalPages,\s*'Global'\)/);
+  assert.match(source, /basicType\(clusterPages,\s*'Clusters'\)/);
+  assert.match(source, /weightGroup\('Global',\s*1100,\s*true\)/);
+  assert.match(source, /weightGroup\('Clusters',\s*1000,\s*true\)/);
+
+  for (const [page] of pages) {
+    assert.match(source, new RegExp(`PAGE_IDS\\.${ page.toUpperCase() }`));
+    assert.match(source, new RegExp(`aif\\.nav\\.${ page }`));
+  }
+
+  assert.match(source, /weightType\(page\.id,\s*page\.weight,\s*true\)/);
+});
+
+test('P6-1 routes map every page to a lazy-loaded component', () => {
+  const source = read('routing/index.ts');
+
+  for (const [page] of pages) {
+    assert.match(source, new RegExp(`\\$\\{\\s*PRODUCT_NAME\\s*\\}-c-cluster-\\$\\{\\s*PAGE_IDS\\.${ page.toUpperCase() }\\s*\\}`));
+    assert.match(source, new RegExp(`/c/:cluster/\\$\\{\\s*PRODUCT_NAME\\s*\\}/\\$\\{\\s*PAGE_IDS\\.${ page.toUpperCase() }\\s*\\}`));
+    assert.match(source, new RegExp(`import\\('\\.\\./pages/${ page }\\.vue'\\)`));
+    assert.match(source, new RegExp(`pageId:\\s*PAGE_IDS\\.${ page.toUpperCase() }`));
+  }
+});
+
+test('P6-1 l10n and placeholder pages cover all navigation entries', () => {
+  const l10n = read('l10n/en-us.yaml');
+
+  assert.match(l10n, /label:\s*'SUSE AI Factory'/);
+
+  for (const [page, componentName, title] of pages) {
+    const component = read(`pages/${ page }.vue`);
+
+    assert.match(l10n, new RegExp(`${ page }:\\s*'`));
+    assert.match(l10n, new RegExp(`title:\\s*'${ title }'`));
+    assert.match(component, new RegExp(`name:\\s*'${ componentName }'`));
+    assert.match(component, new RegExp(`aif\\.pages\\.${ page }\\.title`));
+    assert.match(component, new RegExp(`aif\\.pages\\.${ page }\\.comingSoon`));
+  }
+});
+
+test('P6-1 entry point wires product, routes, and localization', () => {
+  const source = read('index.ts');
+
+  assert.match(source, /import \* as productModule from '\.\/config\/product'/);
+  assert.match(source, /import routes from '\.\/routing'/);
+  assert.match(source, /import '\.\/style\/brand\.css'/);
+  assert.match(source, /plugin\.addProduct\(productModule/);
+  assert.match(source, /plugin\.addRoutes\(routes\)/);
+  assert.match(source, /plugin\.addL10n\('en-us',\s*require\('\.\/l10n\/en-us\.yaml'\)\)/);
+});
+
+test('P6-1 package metadata exposes a local extension tile icon', () => {
+  const pkg = JSON.parse(read('package.json'));
+  const entry = read('index.ts');
+
+  assert.equal(pkg.icon, './assets/logo.svg');
+  const iconPath = pkg.icon.replace(/^\.\//, '');
+  const iconUrl = new URL(`../${ iconPath }`, import.meta.url);
+
+  assert.ok(existsSync(iconUrl));
+  assert.match(read(iconPath), /fill="#30BA78"/);
+  assert.match(entry, /plugin\.metadata\s*=\s*\{\s*\.\.\.require\('\.\/package\.json'\),\s*icon:\s*require\('\.\/assets\/logo\.svg'\)\s*\}/s);
+});
+
+test('P6-1 brand CSS registers the AI Factory sidebar icon', () => {
+  const source = read('style/brand.css');
+  const payloads = maskPayloads(source);
+  const svg = Buffer.from(payloads[0], 'base64').toString('utf8');
+
+  assert.match(source, /\.icon-ai-factory::before/);
+  assert.doesNotMatch(source, /\.icon-suseai::before/);
+  assert.match(source, /background-color:\s*currentColor/);
+  assert.match(source, /-webkit-mask:\s*url\("data:image\/svg\+xml;base64,/);
+  assert.match(source, /mask:\s*url\("data:image\/svg\+xml;base64,/);
+  assert.equal(payloads.length, 2);
+  assert.equal(payloads[0], payloads[1]);
+  assert.match(svg, /viewBox="28 2 80 44"/);
+  assert.match(svg, /fill="#fff"/);
+  assert.match(svg, /M101\.408/);
+  assert.doesNotMatch(svg, /viewBox="0 0 24 24"/);
+});
+
+test('P6-1 mock API stub exports future resource groups', () => {
+  const source = read('utils/mock-api.ts');
+
+  for (const group of ['bundles', 'blueprints', 'workloads', 'apps', 'settings']) {
+    assert.match(source, new RegExp(`${ group }: \\{`));
+  }
+
+  assert.match(source, /USE_MOCK_API/);
+});

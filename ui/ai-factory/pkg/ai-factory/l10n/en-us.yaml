@@ -1,0 +1,33 @@
+product:
+  ai-factory: 'SUSE AI Factory'
+
+aif:
+  label: 'SUSE AI Factory'
+
+  nav:
+    overview: 'Overview'
+    apps: 'Apps'
+    blueprints: 'Blueprints'
+    bundles: 'Bundles'
+    workloads: 'Workloads'
+    settings: 'Settings'
+
+  pages:
+    overview:
+      title: 'Overview'
+      comingSoon: 'Overview dashboard coming soon'
+    apps:
+      title: 'Apps Catalog'
+      comingSoon: 'Apps catalog coming soon'
+    blueprints:
+      title: 'Blueprints'
+      comingSoon: 'Blueprints gallery coming soon'
+    bundles:
+      title: 'Bundles'
+      comingSoon: 'Bundle management coming soon'
+    workloads:
+      title: 'Workloads'
+      comingSoon: 'Workload monitoring coming soon'
+    settings:
+      title: 'Settings'
+      comingSoon: 'Settings configuration coming soon'
