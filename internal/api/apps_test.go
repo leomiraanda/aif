@@ -23,6 +23,7 @@ type fakeCatalog struct {
 	getResult  apps.App
 	getErr     error
 	listOpts   apps.ListOpts // captured for assertions
+	gotID      string        // captured: most recent id passed to Get
 }
 
 func (f *fakeCatalog) List(_ context.Context, opts apps.ListOpts) ([]apps.App, error) {
@@ -52,7 +53,8 @@ func (f *fakeCatalog) List(_ context.Context, opts apps.ListOpts) ([]apps.App, e
 	return out, nil
 }
 
-func (f *fakeCatalog) Get(_ context.Context, _ string) (apps.App, error) {
+func (f *fakeCatalog) Get(_ context.Context, id string) (apps.App, error) {
+	f.gotID = id
 	return f.getResult, f.getErr
 }
 
@@ -166,6 +168,57 @@ func TestAppsHandler_List_IncludeReferenceBlueprintsFalse_HidesRBs(t *testing.T)
 	}
 }
 
+// --- includeReferenceBlueprints accepts strconv.ParseBool forms ---
+
+func TestAppsHandler_List_IncludeReferenceBlueprints_AcceptsCommonBoolForms(t *testing.T) {
+	// strconv.ParseBool accepts "1/t/T/TRUE/true/True" as true and
+	// "0/f/F/FALSE/false/False" as false. The handler MUST treat all
+	// "true"-equivalents the same so frontend devs don't get bitten by
+	// case sensitivity.
+	cases := []struct {
+		raw     string
+		showRBs bool
+	}{
+		{"true", true},
+		{"True", true},
+		{"TRUE", true},
+		{"1", true},
+		{"t", true},
+		{"false", false},
+		{"False", false},
+		{"0", false},
+		{"", false},        // absent → default false
+		{"yes", false},     // garbage → default false
+		{"banana", false},  // garbage → default false
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.raw, func(t *testing.T) {
+			cat := &fakeCatalog{listResult: sampleApps()}
+			h := newAppsHandlerForTest(cat)
+
+			url := "/api/v1/apps"
+			if tc.raw != "" {
+				url += "?includeReferenceBlueprints=" + tc.raw
+			}
+			req := httptest.NewRequest(http.MethodGet, url, nil)
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, req)
+
+			var got []apps.App
+			_ = json.Unmarshal(rec.Body.Bytes(), &got)
+			wantCount := 4 // RBs hidden
+			if tc.showRBs {
+				wantCount = 5 // RBs visible
+			}
+			if len(got) != wantCount {
+				t.Errorf("raw=%q: got %d apps, want %d (showRBs=%v)",
+					tc.raw, len(got), wantCount, tc.showRBs)
+			}
+		})
+	}
+}
+
 // --- GET /api/v1/apps?source=nvidia ---
 
 func TestAppsHandler_List_FilterBySource_ForwardsToCatalog(t *testing.T) {
@@ -250,12 +303,18 @@ func TestAppsHandler_Get_NamespacedID_RoutedToCatalog(t *testing.T) {
 	cat := &fakeCatalog{getResult: apps.App{ID: "suse.ollama:0.4.1", Source: "suse"}}
 	h := newAppsHandlerForTest(cat)
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/apps/suse.ollama:0.4.1", nil)
+	const wantID = "suse.ollama:0.4.1"
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/apps/"+wantID, nil)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	// Pin the actual id forwarded to catalog.Get — guards against a
+	// regression where r.PathValue("id") returns "" or strips the dot.
+	if cat.gotID != wantID {
+		t.Errorf("catalog.Get received id = %q, want %q", cat.gotID, wantID)
 	}
 }
 
@@ -367,7 +426,7 @@ func TestAppsHandler_Categories_WinsOverGetByID(t *testing.T) {
 	// ID would surface in the response.
 	cat := &fakeCatalog{
 		listResult: []apps.App{
-			{ID: "a", Categories: []string{"AI"}},
+			{ID: "a", Categories: []string{"AI", "Vector DB"}},
 		},
 		getResult: apps.App{ID: "trap.should-not-appear:0", Source: "trap"},
 	}
@@ -377,13 +436,25 @@ func TestAppsHandler_Categories_WinsOverGetByID(t *testing.T) {
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 
-	body := strings.TrimSpace(rec.Body.String())
-	if strings.Contains(body, "trap.should-not-appear") {
-		t.Errorf("/categories was routed to /{id}; body=%s", body)
+	// Positive: 200 + the actual sorted [AI, Vector DB].
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
 	}
-	// And the response must be a JSON array of strings.
-	var asStrings []string
-	if err := json.Unmarshal([]byte(body), &asStrings); err != nil {
-		t.Errorf("/categories did not return []string; body=%s err=%v", body, err)
+	var got []string
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("/categories did not return JSON []string; body=%s err=%v", rec.Body.String(), err)
+	}
+	want := []string{"AI", "Vector DB"}
+	if len(got) != len(want) {
+		t.Fatalf("/categories returned %d entries, want %d: %v", len(got), len(want), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("/categories[%d] = %q, want %q", i, got[i], want[i])
+		}
+	}
+	// Negative: confirm catalog.Get was NOT routed via the wildcard.
+	if cat.gotID == "categories" {
+		t.Errorf("/categories was routed through /{id} (catalog.Get got id=%q)", cat.gotID)
 	}
 }

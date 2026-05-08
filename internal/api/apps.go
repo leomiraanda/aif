@@ -1,12 +1,12 @@
 package api
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"sort"
+	"strconv"
 
 	"github.com/SUSE/aif/pkg/apps"
 )
@@ -56,6 +56,7 @@ func (h *AppsHandler) list(w http.ResponseWriter, r *http.Request) {
 
 	all, err := h.catalog.List(r.Context(), opts)
 	if err != nil {
+		h.logCatalogErr(r, "List", err, "source", opts.Source, "category", opts.Category)
 		writeError(w, errorStatus(err), err)
 		return
 	}
@@ -72,11 +73,21 @@ func (h *AppsHandler) list(w http.ResponseWriter, r *http.Request) {
 }
 
 // parseIncludeReferenceBlueprints parses the `includeReferenceBlueprints`
-// query parameter. Any value other than the literal string "true"
-// (case-sensitive — matches the documented enum) is treated as false.
-// Absent param defaults to false per ARCHITECTURE.md §5.
+// query parameter via strconv.ParseBool, which accepts "1", "t", "T",
+// "TRUE", "true", "True", "0", "f", "F", "FALSE", "false", "False".
+// Absent or unparseable values default to false (per ARCHITECTURE.md
+// §5: "default false"). The forgiving parser was chosen so frontend
+// devs aren't surprised by a strict case-sensitive match.
 func parseIncludeReferenceBlueprints(r *http.Request) bool {
-	return r.URL.Query().Get("includeReferenceBlueprints") == "true"
+	raw := r.URL.Query().Get("includeReferenceBlueprints")
+	if raw == "" {
+		return false
+	}
+	v, err := strconv.ParseBool(raw)
+	if err != nil {
+		return false
+	}
+	return v
 }
 
 // get serves GET /api/v1/apps/{id}. The dot-namespaced ID is a single
@@ -94,7 +105,9 @@ func (h *AppsHandler) get(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	app, err := h.catalog.Get(r.Context(), id)
 	if err != nil {
-		writeError(w, errorStatus(mapCatalogErr(err, id)), mapCatalogErr(err, id))
+		mapped := mapCatalogErr(err, id)
+		h.logCatalogErr(r, "Get", err, "id", id)
+		writeError(w, errorStatus(mapped), mapped)
 		return
 	}
 	writeJSON(w, http.StatusOK, app)
@@ -102,7 +115,11 @@ func (h *AppsHandler) get(w http.ResponseWriter, r *http.Request) {
 
 // mapCatalogErr translates pkg/apps sentinels into the api package's
 // sentinels so writeError + errorStatus + errorCode classify them
-// correctly. Unknown errors fall through unchanged (default → 500).
+// correctly. The original catalog error is intentionally NOT wrapped
+// — the visible API message stays clean ("not found: app \"x\""), and
+// the handler's logCatalogErr call records the underlying err for
+// server-side debugging. Unknown errors fall through unchanged
+// (default → 500).
 func mapCatalogErr(err error, id string) error {
 	switch {
 	case errors.Is(err, apps.ErrAppNotFound):
@@ -120,6 +137,7 @@ func mapCatalogErr(err error, id string) error {
 func (h *AppsHandler) categories(w http.ResponseWriter, r *http.Request) {
 	all, err := h.catalog.List(r.Context(), apps.ListOpts{})
 	if err != nil {
+		h.logCatalogErr(r, "categories.List", err)
 		writeError(w, errorStatus(err), err)
 		return
 	}
@@ -138,9 +156,23 @@ func (h *AppsHandler) categories(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, out)
 }
 
+// logCatalogErr emits a single Warn line per catalog-boundary error.
+// CLAUDE.md mandates HTTP handlers log with slog + request_id; the
+// request_id field is added by the middleware via the request context,
+// but only surfaces in slog output if the handler actually logs. This
+// helper threads any extra k/v pairs onto the standard envelope.
+func (h *AppsHandler) logCatalogErr(r *http.Request, op string, err error, kv ...any) {
+	if h.logger == nil {
+		return
+	}
+	args := []any{
+		"op", op,
+		"path", r.URL.Path,
+		"error", err,
+	}
+	args = append(args, kv...)
+	h.logger.WarnContext(r.Context(), "apps handler: catalog call failed", args...)
+}
+
 // Compile-time guard: AppsHandler satisfies api.Handler.
 var _ Handler = (*AppsHandler)(nil)
-
-// keep context import live (used via r.Context() in handlers; explicit
-// reference for clarity).
-var _ = context.Background
