@@ -2173,6 +2173,26 @@ kubectl apply -f testdata/installaiextension-cr.yaml
 
 ---
 
+**ID:** P6-12
+**Epic:** UI Extension CI
+**Story:** As a contributor, I want a GitHub Actions workflow that lints, type-checks, builds, and tests the UI extension on every PR so regressions are caught automatically.
+**Owner Hint:** Frontend / DevOps
+**Effort:** S
+**Depends On:** P6-1
+**Parallelizable With:** P6-2
+
+**Done When:** A workflow at `.github/workflows/ui-extension-ci.yml` runs on every PR touching `ui/ai-factory/**` and enforces: ESLint, `tsc --noEmit`, `yarn build-pkg ai-factory`, and `yarn test` — all on Node 24.
+
+**Acceptance Criteria:**
+- [ ] Workflow file at repo-root `.github/workflows/ui-extension-ci.yml` (not inside `ui/ai-factory/`)
+- [ ] Triggers on `pull_request` with `paths: ['ui/ai-factory/**']`
+- [ ] Uses Node 24 (matches `.nvmrc`)
+- [ ] Steps: `yarn install`, `yarn lint`, `tsc --noEmit -p pkg/ai-factory/tsconfig.json`, `yarn build-pkg ai-factory`, `yarn test`
+- [ ] All steps must pass for PR to merge
+- [ ] Workflow is verified to appear in the GitHub Actions tab on a test PR
+
+---
+
 ## Phase 7 — Security
 
 *Goal: Production-grade security posture: tight RBAC, NetworkPolicy, container hardening, working webhook with cert-manager, publisher RBAC enforced.*
@@ -2787,11 +2807,11 @@ hack/airgap-e2e.sh
 | 3 | 8 (+P3-8 preflight) |
 | 4 | 6 (+P4-6 image rewrite) |
 | 5 | 9 (+P5-7, P5-8, P5-9 air-gap) |
-| 6 | 11 |
+| 6 | 12 (+P6-12 UI CI workflow) |
 | 7 | 5 |
 | 8 | 6 |
 | 9 | 7 (+P9-6 release bundle, P9-7 air-gap admin doc) |
-| **Total** | **76** |
+| **Total** | **77** |
 
 ---
 
