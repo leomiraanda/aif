@@ -1942,6 +1942,8 @@ curl -X POST http://localhost:8080/api/v1/settings/test-connection | jq
 - [ ] `config/aif-product.js` per §7.3 (registers `BUNDLE`, `BLUEPRINT`, `WORKLOAD`, plus virtual types `OVERVIEW`, `APPS`, `PENDING_REVIEWS`)
 - [ ] Build succeeds; sidebar product loads in Rancher
 
+> **Follow-up (post-merge):** P6-1 implementation diverged from the original §7.3 spec in three ways now reconciled in ARCHITECTURE.md: (1) `isMultiClusterApp: true` added to `product()` — required for sidebar visibility when `inStore` is not `'management'` (TopLevelMenu.vue:148 filters on this flag); (2) `CRD_TYPES.SETTINGS` added to `basicType([...])` so the singleton Settings CR is discoverable via the Steve store; (3) `isRemovable` corrected to `false` for Blueprint (publish-by-approval lifecycle only) and Workload (Uninstall action in P6-6, not raw delete), and to `false` for Settings (operator-managed singleton). Bundle retains `isRemovable: true` per spec §8.2 "Delete: available in any state". All seven nav pages (including `BLUEPRINTS`, `BUNDLES`, `WORKLOADS`, `SETTINGS`) are registered as `virtualType` entries; `PENDING_REVIEWS` was the only virtual type in the original spec sketch.
+
 ---
 
 **ID:** P6-2
@@ -2170,6 +2172,26 @@ kubectl apply -f testdata/installaiextension-cr.yaml
 # Verify Rancher Dashboard shows AIF extension in Extensions page
 # Verify extension loads correctly in UI
 ```
+
+---
+
+**ID:** P6-12
+**Epic:** UI Extension CI
+**Story:** As a contributor, I want a GitHub Actions workflow that lints, type-checks, builds, and tests the UI extension on every PR so regressions are caught automatically.
+**Owner Hint:** Frontend / DevOps
+**Effort:** S
+**Depends On:** P6-1
+**Parallelizable With:** P6-2
+
+**Done When:** A workflow at `.github/workflows/ui-extension-ci.yml` runs on every PR touching `ui/ai-factory/**` and enforces: ESLint, `tsc --noEmit`, `yarn build-pkg ai-factory`, and `yarn test` — all on Node 24.
+
+**Acceptance Criteria:**
+- [ ] Workflow file at repo-root `.github/workflows/ui-extension-ci.yml` (not inside `ui/ai-factory/`)
+- [ ] Triggers on `pull_request` with `paths: ['ui/ai-factory/**']`
+- [ ] Uses Node 24 (matches `.nvmrc`)
+- [ ] Steps: `yarn install`, `yarn lint`, `tsc --noEmit -p pkg/ai-factory/tsconfig.json`, `yarn build-pkg ai-factory`, `yarn test`
+- [ ] All steps must pass for PR to merge
+- [ ] Workflow is verified to appear in the GitHub Actions tab on a test PR
 
 ---
 
@@ -2787,11 +2809,11 @@ hack/airgap-e2e.sh
 | 3 | 8 (+P3-8 preflight) |
 | 4 | 6 (+P4-6 image rewrite) |
 | 5 | 9 (+P5-7, P5-8, P5-9 air-gap) |
-| 6 | 11 |
+| 6 | 12 (+P6-12 UI CI workflow) |
 | 7 | 5 |
 | 8 | 6 |
 | 9 | 7 (+P9-6 release bundle, P9-7 air-gap admin doc) |
-| **Total** | **76** |
+| **Total** | **77** |
 
 ---
 
