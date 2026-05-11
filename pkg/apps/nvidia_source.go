@@ -2,12 +2,14 @@ package apps
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/SUSE/aif/pkg/nvidia"
+	"golang.org/x/sync/errgroup"
 )
 
 // NVIDIASource is the apps.Source adapter for the SUSE Registry-backed
@@ -19,6 +21,7 @@ import (
 // pkg/apps; translation lives at the integration boundary.
 type NVIDIASource struct {
 	discovery       nvidia.Discovery
+	annReader       nvidia.AnnotationReader
 	logger          *slog.Logger
 	refreshInterval time.Duration
 
@@ -29,9 +32,10 @@ type NVIDIASource struct {
 
 // NewNVIDIASource constructs the adapter. refreshInterval is the
 // initial per-Source ticker cadence; UpdateSettings can override it.
-func NewNVIDIASource(d nvidia.Discovery, logger *slog.Logger, refreshInterval time.Duration) *NVIDIASource {
+func NewNVIDIASource(d nvidia.Discovery, a nvidia.AnnotationReader, logger *slog.Logger, refreshInterval time.Duration) *NVIDIASource {
 	return &NVIDIASource{
 		discovery:       d,
+		annReader:       a,
 		logger:          logger,
 		refreshInterval: refreshInterval,
 	}
@@ -66,6 +70,7 @@ func (n *NVIDIASource) Refresh(ctx context.Context) error {
 		return err
 	}
 	apps := translateNIMEntries(entries)
+	n.enrichWithAnnotations(ctx, apps)
 	n.mu.Lock()
 	n.cache = apps
 	n.status = SourceStatus{
@@ -174,4 +179,54 @@ func parseNVIDIAChartRef(e nvidia.NIMEntry) ChartRef {
 	suffix := "/" + e.Chart + ":" + e.Version
 	repo := strings.TrimSuffix(e.ChartRef, suffix)
 	return ChartRef{Repo: repo, Chart: e.Chart, Version: e.Version}
+}
+
+// enrichWithAnnotations populates ReferenceBlueprint, DisplayName,
+// Description, and UseCase on each app from the AnnotationReader. Bounded
+// parallelism (limit 8); per-chart failures log a warn and leave the app
+// at ReferenceBlueprint=false. ErrNotConfigured short-circuits the rest
+// of the fan-out via context cancel and emits a single warn.
+func (n *NVIDIASource) enrichWithAnnotations(ctx context.Context, apps []App) {
+	if n.annReader == nil {
+		return
+	}
+	g, gctx := errgroup.WithContext(ctx)
+	g.SetLimit(8)
+	var notConfiguredOnce sync.Once
+	for i := range apps {
+		i := i
+		g.Go(func() error {
+			ann, err := n.annReader.ChartAnnotations(gctx, apps[i].ChartRef.Chart, apps[i].Version)
+			if err != nil {
+				if errors.Is(err, nvidia.ErrNotConfigured) {
+					notConfiguredOnce.Do(func() {
+						if n.logger != nil {
+							n.logger.Warn("annotation reader not configured; reference-blueprint detection disabled this Refresh")
+						}
+					})
+					return context.Canceled
+				}
+				if n.logger != nil {
+					n.logger.Warn("nvidia annotations: per-chart fetch failed",
+						"chart", apps[i].ChartRef.Chart, "version", apps[i].Version, "error", err)
+				}
+				return nil
+			}
+			if ann == nil {
+				return nil
+			}
+			apps[i].ReferenceBlueprint = ann["ai.suse.com/role"] == "reference-blueprint"
+			if v, ok := ann["ai.suse.com/display-name"]; ok {
+				apps[i].DisplayName = v
+			}
+			if v, ok := ann["ai.suse.com/description"]; ok {
+				apps[i].Description = v
+			}
+			if v, ok := ann["ai.suse.com/use-case"]; ok {
+				apps[i].UseCase = v
+			}
+			return nil
+		})
+	}
+	_ = g.Wait()
 }
