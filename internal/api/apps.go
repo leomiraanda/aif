@@ -53,10 +53,10 @@ func (h *AppsHandler) Register(mux *http.ServeMux) {
 // Returns 200 + []App JSON. Empty list is serialized as `[]` not `null`.
 func (h *AppsHandler) list(w http.ResponseWriter, r *http.Request) {
 	opts := apps.ListOpts{
-		Source:   r.URL.Query().Get("source"),
-		Category: r.URL.Query().Get("category"),
+		Source:                     r.URL.Query().Get("source"),
+		Category:                   r.URL.Query().Get("category"),
+		IncludeReferenceBlueprints: parseIncludeReferenceBlueprints(r),
 	}
-	includeRBs := parseIncludeReferenceBlueprints(r)
 
 	all, err := h.catalog.List(r.Context(), opts)
 	if err != nil {
@@ -71,14 +71,10 @@ func (h *AppsHandler) list(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Always return a non-nil slice so JSON emits `[]` not `null`.
-	out := make([]apps.App, 0, len(all))
-	for _, a := range all {
-		if !includeRBs && a.ReferenceBlueprint {
-			continue
-		}
-		out = append(out, a)
+	if all == nil {
+		all = []apps.App{}
 	}
-	writeJSON(w, http.StatusOK, out)
+	writeJSON(w, http.StatusOK, all)
 }
 
 // parseIncludeReferenceBlueprints parses the `includeReferenceBlueprints`
