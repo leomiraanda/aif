@@ -38,6 +38,10 @@ type submitResponse struct {
 	SubmittedBy       string `json:"submittedBy"`
 }
 
+type withdrawResponse struct {
+	Phase string `json:"phase"`
+}
+
 func (h *PublishHandler) submit(w http.ResponseWriter, r *http.Request) {
 	ns := r.PathValue("namespace")
 	name := r.PathValue("name")
@@ -117,7 +121,29 @@ func writePublishError(w http.ResponseWriter, err error) {
 }
 
 func (h *PublishHandler) withdraw(w http.ResponseWriter, r *http.Request) {
-	writeError(w, http.StatusNotImplemented, ErrNotImplemented)
+	ns := r.PathValue("namespace")
+	name := r.PathValue("name")
+
+	user, _ := ExtractUser(r)
+	if user == "" {
+		writeError(w, http.StatusForbidden, errors.New("authentication required: Impersonate-User header missing"))
+		return
+	}
+
+	result, err := h.workflow.Withdraw(r.Context(), ns, name, user)
+	if err != nil {
+		LoggerFromContext(r.Context()).Warn("withdraw failed",
+			"namespace", ns, "name", name, "error", err)
+		writePublishError(w, err)
+		return
+	}
+
+	LoggerFromContext(r.Context()).Info("bundle withdrawn",
+		"namespace", ns, "name", name, "withdrawnBy", user)
+
+	writeJSON(w, http.StatusOK, withdrawResponse{
+		Phase: string(result.Phase),
+	})
 }
 
 func (h *PublishHandler) approve(w http.ResponseWriter, r *http.Request) {

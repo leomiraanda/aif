@@ -61,6 +61,30 @@ func testDraftBundle(ns, name string) *aifv1.Bundle {
 	}
 }
 
+func testSubmittedBundle(ns, name string) *aifv1.Bundle {
+	b := testDraftBundle(ns, name)
+	b.Status.Phase = aifv1.BundlePhaseSubmitted
+	b.Status.Submission = &aifv1.SubmissionStatus{
+		ProposedVersion:    "1.0.0",
+		ChangeDescription:  "initial release",
+		SubmittedBy:        "alice",
+		SubmittedAt:        metav1.Now(),
+		GenerationAtSubmit: b.Generation,
+	}
+	return b
+}
+
+func testChangesRequestedBundle(ns, name string) *aifv1.Bundle {
+	b := testDraftBundle(ns, name)
+	b.Status.Phase = aifv1.BundlePhaseChangesRequested
+	b.Status.Review = &aifv1.ReviewStatus{
+		ReviewerComment: "needs work",
+		ReviewedBy:      "reviewer",
+		ReviewedAt:      metav1.Now(),
+	}
+	return b
+}
+
 func TestSubmitHandler_DraftToSubmitted(t *testing.T) {
 	mux, _ := setupPublishTest(testDraftBundle("ns", "my-bundle"))
 
@@ -253,4 +277,76 @@ func TestSubmitHandler_RepositoryError_Returns500(t *testing.T) {
 	mux.ServeHTTP(w, req)
 
 	assert.Equal(t, http.StatusInternalServerError, w.Code)
+}
+
+func TestWithdrawHandler_SubmittedToDraft_200(t *testing.T) {
+	mux, _ := setupPublishTest(testSubmittedBundle("ns", "my-bundle"))
+
+	req := httptest.NewRequest("POST", "/api/v1/bundles/ns/my-bundle/withdraw", nil)
+	req.Header.Set("Impersonate-User", "alice")
+
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	var resp map[string]any
+	require.NoError(t, json.NewDecoder(w.Body).Decode(&resp))
+	assert.Equal(t, "Draft", resp["phase"])
+}
+
+func TestWithdrawHandler_ChangesRequestedToDraft_200(t *testing.T) {
+	mux, _ := setupPublishTest(testChangesRequestedBundle("ns", "my-bundle"))
+
+	req := httptest.NewRequest("POST", "/api/v1/bundles/ns/my-bundle/withdraw", nil)
+	req.Header.Set("Impersonate-User", "alice")
+
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	var resp map[string]any
+	require.NoError(t, json.NewDecoder(w.Body).Decode(&resp))
+	assert.Equal(t, "Draft", resp["phase"])
+}
+
+func TestWithdrawHandler_DraftPhase_Returns409(t *testing.T) {
+	mux, _ := setupPublishTest(testDraftBundle("ns", "my-bundle"))
+
+	req := httptest.NewRequest("POST", "/api/v1/bundles/ns/my-bundle/withdraw", nil)
+	req.Header.Set("Impersonate-User", "alice")
+
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusConflict, w.Code)
+
+	var apiErr APIError
+	require.NoError(t, json.NewDecoder(w.Body).Decode(&apiErr))
+	assert.Equal(t, ErrCodeInvalidTransition, apiErr.Code)
+}
+
+func TestWithdrawHandler_NotFound_Returns404(t *testing.T) {
+	mux, _ := setupPublishTest()
+
+	req := httptest.NewRequest("POST", "/api/v1/bundles/ns/missing/withdraw", nil)
+	req.Header.Set("Impersonate-User", "alice")
+
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusNotFound, w.Code)
+}
+
+func TestWithdrawHandler_NoUser_Returns403(t *testing.T) {
+	mux, _ := setupPublishTest(testSubmittedBundle("ns", "my-bundle"))
+
+	req := httptest.NewRequest("POST", "/api/v1/bundles/ns/my-bundle/withdraw", nil)
+	// No Impersonate-User header
+
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusForbidden, w.Code)
 }
