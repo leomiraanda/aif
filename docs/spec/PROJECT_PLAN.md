@@ -2277,6 +2277,8 @@ go test -race ./internal/api/ -run TestPublisherEndpointsEnforcement -v
 **Agent Prompt:**
 > Implement `RequirePublisher` in `internal/api/middleware.go` per the `ARCHITECTURE.md §10.1 "RequirePublisher middleware (P7-5 contract)"` snippet — copy verbatim. Include the `ExtractUser` helper from §10.1 with `sort.Strings(groups)` for cache-key determinism. Apply the middleware to ALL 8 publisher-only endpoints (full list in Acceptance). The cache key MUST include groups per §10.1 (test by simulating a user whose group membership changes). The 403 envelope uses the `ErrCodeForbidden` constant per §6.4. Tests are `-race` clean. Done when both Validation suites pass.
 
+> **Follow-up (post-merge, from P3-2 review):** Author endpoints (submit, future edit) currently have no namespace-scoped SAR check — any authenticated caller can transition any bundle in any namespace. Add a `RequireNamespaceAccess` middleware or SAR check (verb=update, resource=bundles, namespace=target) to author-facing endpoints alongside the publisher enforcement. The operator SA has cluster-wide bundle permissions, so Rancher proxy RBAC is the only current gate; a namespace-scoped SAR would enforce authorization inside the operator process.
+
 ---
 
 ## Phase 8 — Observability + Tests

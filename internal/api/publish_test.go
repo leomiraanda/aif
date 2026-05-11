@@ -16,7 +16,9 @@ import (
 	"github.com/SUSE/aif/pkg/publish"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
 var _ Handler = (*PublishHandler)(nil)
@@ -171,6 +173,57 @@ func TestSubmitHandler_InvalidJSON_Returns400(t *testing.T) {
 	mux.ServeHTTP(w, req)
 
 	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
+
+func TestSubmitHandler_UnknownField_Returns400(t *testing.T) {
+	mux, _ := setupPublishTest(testDraftBundle("ns", "my-bundle"))
+
+	body := `{"proposedVerison":"1.0.0"}`
+	req := httptest.NewRequest("POST", "/api/v1/bundles/ns/my-bundle/submit", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Impersonate-User", "alice")
+
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
+
+func TestSubmitHandler_ConflictOnUpdate_Returns409(t *testing.T) {
+	repo := bundle.NewFakeRepository()
+	repo.Seed(testDraftBundle("ns", "my-bundle"))
+	repo.UpdateStatusErr = apierrors.NewConflict(
+		schema.GroupResource{Group: "ai.suse.com", Resource: "bundles"},
+		"my-bundle",
+		errors.New("resourceVersion changed"),
+	)
+
+	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+	wf := publish.New(publish.Deps{
+		Bundles:    repo,
+		Blueprints: blueprint.NewFakeRepository(),
+		Authz:      publish.AllowAllAuthorizer{},
+		Recorder:   &publish.FakeEventRecorder{},
+		Logger:     logger,
+	})
+
+	handler := NewPublishHandler(wf, logger)
+	mux := http.NewServeMux()
+	handler.Register(mux)
+
+	body := `{"proposedVersion":"1.0.0"}`
+	req := httptest.NewRequest("POST", "/api/v1/bundles/ns/my-bundle/submit", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Impersonate-User", "alice")
+
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusConflict, w.Code)
+
+	var apiErr APIError
+	require.NoError(t, json.NewDecoder(w.Body).Decode(&apiErr))
+	assert.Equal(t, ErrCodePublishConflict, apiErr.Code)
 }
 
 func TestSubmitHandler_RepositoryError_Returns500(t *testing.T) {

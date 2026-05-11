@@ -70,15 +70,11 @@ func (w *workflowImpl) Submit(ctx context.Context, namespace, name string, req S
 	cr.Status.Review = nil
 
 	if err := w.deps.Bundles.UpdateStatus(ctx, cr); err != nil {
+		if apierrors.IsConflict(err) {
+			return bundle.Bundle{}, fmt.Errorf("concurrent update on %s/%s: %w", namespace, name, ErrPublishConflict)
+		}
 		return bundle.Bundle{}, fmt.Errorf("update bundle status: %w", err)
 	}
-
-	w.deps.Logger.Info("bundle submitted",
-		"namespace", namespace,
-		"name", name,
-		"proposedVersion", req.ProposedVersion,
-		"submittedBy", req.User,
-	)
 
 	if w.deps.Recorder != nil {
 		w.deps.Recorder.BundleSubmitted(ctx, namespace, name, req.User, req.ProposedVersion)

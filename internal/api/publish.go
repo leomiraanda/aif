@@ -50,7 +50,9 @@ func (h *PublishHandler) submit(w http.ResponseWriter, r *http.Request) {
 
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 	var body submitRequest
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, fmt.Errorf("invalid request body: %w", ErrInvalidInput))
 		return
 	}
@@ -67,6 +69,10 @@ func (h *PublishHandler) submit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	LoggerFromContext(r.Context()).Info("bundle submitted",
+		"namespace", ns, "name", name,
+		"proposedVersion", body.ProposedVersion, "submittedBy", user)
+
 	if result.Submission == nil {
 		writeError(w, http.StatusInternalServerError, ErrInternal)
 		return
@@ -80,28 +86,31 @@ func (h *PublishHandler) submit(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// writePublishError maps domain sentinel errors from pkg/publish to the
-// internal/api error codes and HTTP statuses. This explicit mapping is needed
-// because pkg/publish defines its own sentinels (hexagonal layering — domain
-// can't import internal/api), so errorCode() wouldn't match them. The handler
-// is the adapter that bridges the two error vocabularies.
-func writePublishError(w http.ResponseWriter, err error) {
+// mapPublishErr translates a pkg/publish domain sentinel into the corresponding
+// internal/api sentinel. The HTTP status is derived from errorStatus() — no
+// duplication. P3-3..P3-6 handlers reuse this mapping.
+func mapPublishErr(err error) error {
 	switch {
 	case errors.Is(err, publish.ErrBundleNotFound):
-		writeError(w, http.StatusNotFound, fmt.Errorf("%s: %w", err.Error(), ErrNotFound))
+		return ErrNotFound
 	case errors.Is(err, publish.ErrInvalidTransition):
-		writeError(w, http.StatusConflict, fmt.Errorf("%s: %w", err.Error(), ErrInvalidTransition))
+		return ErrInvalidTransition
 	case errors.Is(err, publish.ErrInvalidVersion):
-		writeError(w, http.StatusBadRequest, fmt.Errorf("%s: %w", err.Error(), ErrInvalidInput))
+		return ErrInvalidInput
 	case errors.Is(err, publish.ErrPublisherRequired):
-		writeError(w, http.StatusForbidden, fmt.Errorf("%s: %w", err.Error(), ErrForbidden))
+		return ErrForbidden
 	case errors.Is(err, publish.ErrPublishConflict):
-		writeError(w, http.StatusConflict, fmt.Errorf("%s: %w", err.Error(), ErrPublishConflict))
+		return ErrPublishConflict
 	case errors.Is(err, publish.ErrUserRequired):
-		writeError(w, http.StatusForbidden, fmt.Errorf("%s: %w", err.Error(), ErrForbidden))
+		return ErrForbidden
 	default:
-		writeError(w, http.StatusInternalServerError, ErrInternal)
+		return ErrInternal
 	}
+}
+
+func writePublishError(w http.ResponseWriter, err error) {
+	apiErr := mapPublishErr(err)
+	writeError(w, errorStatus(apiErr), apiErr)
 }
 
 func (h *PublishHandler) withdraw(w http.ResponseWriter, r *http.Request) {

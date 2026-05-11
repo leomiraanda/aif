@@ -159,7 +159,7 @@ func main() {
 	bundleRepo := bundle.NewK8sRepository(mgr.GetClient())
 	blueprintRepo := blueprint.NewK8sRepository(mgr.GetClient())
 
-	publishRecorder := internalpublish.NewEventRecorder(mgr.GetEventRecorder("publish-workflow"), bundleRepo.Get)
+	publishRecorder := internalpublish.NewEventRecorder(mgr.GetEventRecorder("publish-workflow"))
 
 	publishWorkflow = publish.New(publish.Deps{
 		Bundles:    bundleRepo,

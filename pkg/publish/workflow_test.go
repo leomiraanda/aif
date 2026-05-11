@@ -12,7 +12,9 @@ import (
 	"github.com/SUSE/aif/pkg/bundle"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
 func newTestWorkflow(bundles bundle.Repository) (Workflow, *FakeEventRecorder) {
@@ -170,6 +172,26 @@ func TestSubmit_UserRequired(t *testing.T) {
 
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, ErrUserRequired), "got: %v", err)
+}
+
+func TestSubmit_ConflictOnUpdate_ReturnsPublishConflict(t *testing.T) {
+	repo := bundle.NewFakeRepository()
+	repo.Seed(draftBundle("ns", "my-bundle"))
+	repo.UpdateStatusErr = apierrors.NewConflict(
+		schema.GroupResource{Group: "ai.suse.com", Resource: "bundles"},
+		"my-bundle",
+		errors.New("resourceVersion changed"),
+	)
+	wf, rec := newTestWorkflow(repo)
+
+	_, err := wf.Submit(context.Background(), "ns", "my-bundle", SubmitRequest{
+		User:            "alice",
+		ProposedVersion: "1.0.0",
+	})
+
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrPublishConflict), "got: %v", err)
+	assert.Empty(t, rec.Events, "no event should be recorded on conflict")
 }
 
 // Keep the other ErrNotImplemented tests for methods not yet implemented.
