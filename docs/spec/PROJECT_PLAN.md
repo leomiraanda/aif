@@ -1258,6 +1258,14 @@ grep -nE 'strings\.Contains.*err\.Error' pkg/blueprint/    && echo FAIL || echo 
 **Deferred from P3-1 review:**
 - Wrap publish routes through the middleware chain (CORS, RequestID, Logging, Metrics). Currently `PublishHandler.Register()` registers routes on the bare mux, bypassing the `api.Chain` applied to other endpoints.
 
+> **Follow-up (P3-2 implementation):** P3-2 introduces a `publish.EventRecorder` port in `Deps` for K8s event recording. This covers `BundleSubmitted` and establishes the pattern for P3-3..P3-5 events (BundleWithdrawn, ChangesRequested, BundleApproved). The port is domain-specific (not a generic K8s recorder) to keep `pkg/publish` K8s-agnostic per hexagonal layering. K8s-backed adapter lives in `internal/publish/event_recorder.go`.
+
+> **Follow-up (P3-2 middleware refactor):** Middleware is now applied at the mux level via `Register() http.Handler` instead of per-route via `Handler.Register(mux, chain)`. `Register()` returns an `http.Handler` with the full middleware stack wrapping the mux. Handlers implement the simpler `Register(mux *http.ServeMux)` — they register routes only, middleware is automatic. This follows the standard Go HTTP pattern (chi, gorilla, stdlib convention) and eliminates the risk of routes silently bypassing middleware. P3-3..P3-5 handlers benefit from this directly.
+
+> **Follow-up (P3-2 aifv1 import exemption):** `pkg/publish/workflow.go` imports `api/v1alpha1` directly because `bundle.Repository.Get` returns `*aifv1.Bundle` — the workflow necessarily operates on CRD types at the adapter boundary. Accepted pattern, consistent with the existing P1-1 (`pkg/bundle/types.go`) and P1-2 (`pkg/blueprint/interface.go`) exemptions. Don't add new violations in other `pkg/publish` files; keep `aifv1` usage confined to `workflow.go`.
+
+> **Follow-up (P3-2 EventRecorder ISP):** `publish.EventRecorder` currently has 1 method (`BundleSubmitted`). P3-3..P3-5 will add `BundleWithdrawn`, `BundleChangesRequested`, `BundleApproved` — reaching 4 methods (within the ≤4 ISP target). If P3-5 also adds `BlueprintPublished` or `BundleStatusUpdateLagged`, the interface exceeds 4 and should be split by role (e.g. `SubmissionRecorder` / `ApprovalRecorder`) or collapsed to a single `RecordEvent(ctx, WorkflowEvent)` method with a discriminated event type.
+
 **Validation:**
 ```bash
 go test ./internal/api/ -run TestSubmit -v
@@ -1984,6 +1992,8 @@ curl -X POST http://localhost:8080/api/v1/settings/test-connection | jq
 - [ ] `config/aif-product.js` per §7.3 (registers `BUNDLE`, `BLUEPRINT`, `WORKLOAD`, plus virtual types `OVERVIEW`, `APPS`, `PENDING_REVIEWS`)
 - [ ] Build succeeds; sidebar product loads in Rancher
 
+> **Follow-up (post-merge):** P6-1 implementation diverged from the original §7.3 spec in three ways now reconciled in ARCHITECTURE.md: (1) `isMultiClusterApp: true` added to `product()` — required for sidebar visibility when `inStore` is not `'management'` (TopLevelMenu.vue:148 filters on this flag); (2) `CRD_TYPES.SETTINGS` added to `basicType([...])` so the singleton Settings CR is discoverable via the Steve store; (3) `isRemovable` corrected to `false` for Blueprint (publish-by-approval lifecycle only) and Workload (Uninstall action in P6-6, not raw delete), and to `false` for Settings (operator-managed singleton). Bundle retains `isRemovable: true` per spec §8.2 "Delete: available in any state". All seven nav pages (including `BLUEPRINTS`, `BUNDLES`, `WORKLOADS`, `SETTINGS`) are registered as `virtualType` entries; `PENDING_REVIEWS` was the only virtual type in the original spec sketch.
+
 ---
 
 **ID:** P6-2
@@ -2215,6 +2225,26 @@ kubectl apply -f testdata/installaiextension-cr.yaml
 
 ---
 
+**ID:** P6-12
+**Epic:** UI Extension CI
+**Story:** As a contributor, I want a GitHub Actions workflow that lints, type-checks, builds, and tests the UI extension on every PR so regressions are caught automatically.
+**Owner Hint:** Frontend / DevOps
+**Effort:** S
+**Depends On:** P6-1
+**Parallelizable With:** P6-2
+
+**Done When:** A workflow at `.github/workflows/ui-extension-ci.yml` runs on every PR touching `ui/ai-factory/**` and enforces: ESLint, `tsc --noEmit`, `yarn build-pkg ai-factory`, and `yarn test` — all on Node 24.
+
+**Acceptance Criteria:**
+- [ ] Workflow file at repo-root `.github/workflows/ui-extension-ci.yml` (not inside `ui/ai-factory/`)
+- [ ] Triggers on `pull_request` with `paths: ['ui/ai-factory/**']`
+- [ ] Uses Node 24 (matches `.nvmrc`)
+- [ ] Steps: `yarn install`, `yarn lint`, `tsc --noEmit -p pkg/ai-factory/tsconfig.json`, `yarn build-pkg ai-factory`, `yarn test`
+- [ ] All steps must pass for PR to merge
+- [ ] Workflow is verified to appear in the GitHub Actions tab on a test PR
+
+---
+
 ## Phase 7 — Security
 
 *Goal: Production-grade security posture: tight RBAC, NetworkPolicy, container hardening, working webhook with cert-manager, publisher RBAC enforced.*
@@ -2407,6 +2437,8 @@ go test -race ./internal/api/ -run TestPublisherEndpointsEnforcement -v
 
 **Agent Prompt:**
 > Implement `RequirePublisher` in `internal/api/middleware.go` per the `ARCHITECTURE.md §10.1 "RequirePublisher middleware (P7-5 contract)"` snippet — copy verbatim. Include the `ExtractUser` helper from §10.1 with `sort.Strings(groups)` for cache-key determinism. Apply the middleware to ALL 8 publisher-only endpoints (full list in Acceptance). The cache key MUST include groups per §10.1 (test by simulating a user whose group membership changes). The 403 envelope uses the `ErrCodeForbidden` constant per §6.4. Tests are `-race` clean. Done when both Validation suites pass.
+
+> **Follow-up (post-merge, from P3-2 review):** Author endpoints (submit, future edit) currently have no namespace-scoped SAR check — any authenticated caller can transition any bundle in any namespace. Add a `RequireNamespaceAccess` middleware or SAR check (verb=update, resource=bundles, namespace=target) to author-facing endpoints alongside the publisher enforcement. The operator SA has cluster-wide bundle permissions, so Rancher proxy RBAC is the only current gate; a namespace-scoped SAR would enforce authorization inside the operator process.
 
 ---
 
@@ -2829,11 +2861,11 @@ hack/airgap-e2e.sh
 | 3 | 8 (+P3-8 preflight) |
 | 4 | 6 (+P4-6 image rewrite) |
 | 5 | 9 (+P5-7, P5-8, P5-9 air-gap) |
-| 6 | 11 |
+| 6 | 12 (+P6-12 UI CI workflow) |
 | 7 | 5 |
 | 8 | 6 |
 | 9 | 7 (+P9-6 release bundle, P9-7 air-gap admin doc) |
-| **Total** | **76** |
+| **Total** | **77** |
 
 ---
 
