@@ -2007,10 +2007,19 @@ curl -X POST http://localhost:8080/api/v1/settings/test-connection | jq
 - [ ] `yarn build` succeeds; sidebar shows all seven pages in a single flat list under the AIF product
 
 **Validation:**
+Backend:
 ```bash
 go build ./...
 grep -r "TargetCluster\b\|DeployStrategyTypeFleet\|\"fleet\"" api/ internal/ pkg/ && echo FAIL || echo PASS
 grep -r "BLANK_CLUSTER\|weightGroup\|weightType\|SteveFactory(null" ui/ai-factory/pkg/ai-factory/ && echo FAIL || echo PASS
+```
+
+Frontend:
+```bash
+#UI Extension should build 
+yarn build-pkgs ai-factory
+#Should be able to serve the extension app locally and install in a Rancher session
+yarn serve-pkgs
 ```
 
 ---
