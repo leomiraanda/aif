@@ -21,7 +21,8 @@ These constraints flow through every story; violating them creates rework. Each 
    - SUSE-native charts come from `oci://registry.suse.com/ai/charts/...` and SUSE Application Collection (`oci://dp.apps.rancher.io/charts`)
 8. **Catalog content == what is published.** AIF lists NIMs by reading the SUSE Registry chart index at `oci://registry.suse.com/ai/charts/nvidia/`. There is no hardcoded model seed and no "pending mirror" UX.
 9. **One pull-secret pattern.** Workload pods authenticate to both SUSE Registry and SUSE Application Collection via a single docker-config Secret named `suse-registry-creds`, reconciled by the operator from the `Settings` CRD into each workload namespace. There is no `ngc-api-key` Secret in v1.
-10. **Air-gap is a first-class scenario, not a mode.** Every story must keep its acceptance criteria valid in an air-gapped cluster. Hardcoded references to `registry.suse.com`, `dp.apps.rancher.io`, `api.apps.rancher.io`, `ghcr.io`, or any external host are bugs unless they're parameterized via `Settings.spec.registryEndpoints` (per `ARCHITECTURE.md §4.5`), the operator chart's `image.registry` field (per `ARCHITECTURE.md §9.1`), or `Settings.spec.imageRewrite.rules` (per `ARCHITECTURE.md §6.6` layer 5). The Helm values merge layer 5 (`pkg/helm.ApplyImageRewrites`) and the chart-default behaviour preserving connected-customer experience are non-negotiable. Stories implementing new external integrations or new container images must include both an "online default" path and an "air-gap parameterized" path in their acceptance criteria.
+10. **Air-gap is a first-class scenario, not a mode.** Every story must keep its acceptance criteria valid in an air-gapped cluster.
+11. **Hub-on-management-cluster topology.** The AIF operator and all AIF CRDs (`Bundle`, `Blueprint`, `Workload`, `Settings`, `InstallAIExtension`) live exclusively on the Rancher management cluster. Downstream clusters run only the Rancher-managed `fleet-agent` — no AIF operator, no AIF CRDs (all five AIF CRDs exist only on the management cluster). Workload delivery to downstream clusters flows through Fleet: `deployStrategy: helm` → WorkloadReconciler creates a `fleet.cattle.io/v1alpha1 Bundle` CR; `deployStrategy: gitops` → WorkloadReconciler creates a `fleet.cattle.io/v1alpha1 GitRepo` CR. The operator never calls downstream cluster APIs directly. `Workload.spec.targetClusters` ([]string) lists the destination clusters and is used to populate `spec.targets` in the Fleet CR (one entry per cluster). The UI has no cluster switcher; the Steve store connects to the management cluster only; the cluster picker in the deploy wizard is sourced from `management.cattle.io.cluster`.
 
 ---
 
@@ -266,7 +267,7 @@ docker build -t aif:test . && docker inspect aif:test | grep -i user
 - [ ] `BundleStatus` per §4.2: `phase` enum {`Draft`, `Submitted`, `ChangesRequested`}, `submission` (*SubmissionStatus), `review` (*ReviewStatus), `testDeploys[]` (TestDeployRecord), `publishedVersions[]` (PublishedVersionRef), `conditions[]`, `observedGeneration`. The full `SubmissionStatus`, `ReviewStatus`, `TestDeployRecord`, `PublishedVersionRef` Go struct definitions are in §4.2 — copy verbatim.
 - [ ] `BlueprintSpec` per §4.3: `blueprintName`, `version`, `useCase`, `description`, `changeDescription`, `source`, `components[]`, `valueOverrides`, `publishedBy`, `publishedAt`. Includes `BlueprintSource` discriminated union (type ∈ {`WrapsVendorChart`, `Published`}) with `vendorChartRef` and `publishedFrom` sub-pointers per §4.3 — copy verbatim, including the `BlueprintSourceType` const block.
 - [ ] `BlueprintStatus` per §4.3: `phase` enum {`Active`, `Deprecated`, `Withdrawn`}, `deprecation` (*DeprecationStatus), `deploymentCount int`, `conditions[]`, `observedGeneration`
-- [ ] `WorkloadSpec` per §4.4: `source` (WorkloadSource discriminated union with `kind`, `app`, `blueprint`, `bundleTest` sub-fields), `valueOverrides`, `deployStrategy`, plus the full strategy/scaling/resources blocks (RollingUpdate/BlueGreen/Canary/AutomaticRecovery, scaling.{minReplicas,maxReplicas,vpa,targetCPU}). All optional except `name` and `source`.
+- [ ] `WorkloadSpec` per §4.4: `source` (WorkloadSource discriminated union with `kind`, `app`, `blueprint`, `bundleTest` sub-fields), `targetClusters` ([]string, lists downstream clusters for Fleet routing), `valueOverrides`, `deployStrategy` (enum: `helm` | `gitops`; default `helm`), plus the full strategy/scaling/resources blocks (RollingUpdate/BlueGreen/Canary/AutomaticRecovery, scaling.{minReplicas,maxReplicas,vpa,targetCPU}). All optional except `name` and `source`.
 - [ ] `WorkloadStatus` per §4.4: `phase` enum, `replicas`, `readyReplicas`, `componentReleases[]` (ComponentReleaseStatus per §6.6 component-to-Helm-release mapping), `conditions[]`, `deploymentHistory[]`, `observedGeneration`
 - [ ] `SettingsSpec` per §4.5 — base fields ONLY in this story (P0-2 lands the foundation): `applicationCollection.{userSecretRef, tokenSecretRef, categories}`, `suseRegistry.{userSecretRef, tokenSecretRef, refreshIntervalMinutes}`, `fleet.{repoURL, branch, authType, credSecretRef}`. The air-gap field groups (`registryEndpoints`, `imageRewrite`, `catalogDiscovery`, `blueprintClassification`) are added in **P5-7** (additive, optional). All credential fields use `corev1.SecretKeySelector` from `k8s.io/api/core/v1`.
 - [ ] **Phase enums use typed Go string constants** per `ARCHITECTURE.md §4.1` Common Patterns (e.g., `type BundlePhase string; const ( BundlePhaseDraft BundlePhase = "Draft"; ... )`). Plus the shared condition Type/Reason constants from `pkg/conditions/types.go` (lands here as part of P0-2; full enumeration in §4.1).
@@ -1485,24 +1486,85 @@ go test -race ./pkg/helm/ -v
 ---
 
 **ID:** P4-3
-**Epic:** Fleet Engine
-**Story:** As a platform engineer, I want Workloads with `deployStrategy=fleet` to publish manifests to a Git repo so that downstream Fleet controllers reconcile them.
+**Epic:** Fleet GitRepo Engine (`deployStrategy: gitops`)
+**Story:** As a platform engineer, I want Workloads with `deployStrategy=gitops` to create `fleet.cattle.io/v1alpha1 GitRepo` CR(s) on the management cluster (one per target cluster) so that Fleet reads the user's git repo and delivers the workload to the target downstream clusters via fleet-agents.
 **Owner Hint:** Backend Go
 **Effort:** L
-**Depends On:** P4-1
+**Depends On:** P4-1, P6-1-refactor
 **Parallelizable With:** P4-2, P4-4
-**Done When:** A Workload with `deployStrategy=fleet` writes the directory tree from `ARCHITECTURE.md §6.7` and `git push`es to the configured branch.
+**Done When:** A Workload with `deployStrategy=gitops` and `targetClusters = ["cluster-a", "cluster-b"]` results in TWO `fleet.cattle.io/v1alpha1 GitRepo` CRs created on the management cluster (one per cluster), each targeting its respective cluster, with repo URL and branch from `Settings.spec.fleet`.
 
 **Acceptance Criteria:**
-- [ ] `pkg/git/fleet.go` implements the **`FleetEngine` interface from `ARCHITECTURE.md §6.2 Fleet engine interface` verbatim** (Push / Remove / UpdateSettings)
-- [ ] Generates `fleet.yaml` and per-component `HelmChart` resource manifests per `ARCHITECTURE.md §6.7` directory layout
-- [ ] **Filename numbering follows the §6.7 contract:** `00-namespace.yaml` always written; component files `1{component-index}-{sanitized-component-name}.yaml` (component 0 → `10-...`, component 1 → `11-...`, ..., component 9 → `19-...`, component 10 → `1-10-{name}.yaml`); component-name sanitization (lowercase + non-`[a-z0-9-]` → `-` + collapse + trim); reject Workloads with >100 components (`ErrTooManyComponents`)
-- [ ] **Re-write semantics per §6.7:** every push rewrites the FULL `manifests/` directory (delete contents, write fresh). Skip the actual `git push` if `git diff --quiet` returns 0 (no changes); log `slog.Info("fleet: no manifest changes; skipping push")` and return previous SHA
-- [ ] Uses `go-git/go-git/v5` for clone/commit/push
-- [ ] Auth modes per §13.3: `ssh-key` (via `ssh.PublicKeysFromFile`), `token` (via go-git's `BasicAuth` with username `oauth2` + token), `basic` (BasicAuth with username + password) — selected by `Settings.fleet.authMode`
-- [ ] Commit message format: `aif: workload {workloadID} on cluster {clusterID} ({revision})` where `{revision}` is the Workload `metadata.generation`
-- [ ] Branch policy: only commits to `Settings.fleet.branch` (default `main`); refuses any other branch via early validation
-- [ ] Integration test against a local bare git repo (`git init --bare`); verify commits via `git log --format=%s` matches the expected commit message; verify the file tree per §6.7 (00-namespace.yaml present, 10/11/12-component files present); verify the no-op push behaviour (second reconcile with no changes does NOT produce a commit)
+- [ ] `pkg/fleet/gitrepo_engine.go` implements a `FleetGitRepoEngine` interface (in `pkg/fleet/interface.go`) with methods: `CreateOrUpdate(ctx, spec GitRepoDeploymentSpec) error` · `Delete(ctx, workloadID string) error` · `UpdateSettings(settings FleetSettings)`
+- [ ] `pkg/fleet/types.go` defines domain types:
+  ```go
+  type GitRepoDeploymentSpec struct {
+      WorkloadID      string               // namespace/name
+      TargetClusters  []string             // cluster IDs
+      RepoURL         string               // from Settings.spec.fleet.repoURL
+      Branch          string               // from Settings.spec.fleet.branch
+      AuthSecretName  string               // from Settings.spec.fleet.credSecretRef
+      Components      []ComponentManifest  // for manifest generation
+      PullSecretData  []byte               // suse-registry-creds Secret data (base64 dockerconfigjson)
+  }
+  ```
+- [ ] **One GitRepo CR per cluster** (matching §6.7): For a Workload with `targetClusters = ["cluster-a", "cluster-b"]`, `CreateOrUpdate` creates TWO `fleet.cattle.io/v1alpha1 GitRepo` CRs on the management cluster:
+  - `metadata.name` = `{workload-ns}-{workload-name}-{clusterID}` (DNS-1123 sanitized)
+  - `spec.repo` = `spec.RepoURL`
+  - `spec.branch` = `spec.Branch`
+  - `spec.targets` = `[{clusterName: clusterID}]` (single-cluster targeting per CR)
+  - `spec.paths` = `["gitops/{clusterID}/{workloadID}"]` (per §6.7 directory layout)
+  - `spec.clientSecretName` = `spec.AuthSecretName`
+  - `spec.resources[]` includes a `Secret` resource (`suse-registry-creds`) with `data[".dockerconfigjson"]` set from `spec.PullSecretData` so fleet-agents apply it to the workload namespace on the downstream cluster (secrets delivered via Fleet, NOT written to git)
+  - owner reference pointing at the Workload CR so deletion cascades
+- [ ] `pkg/git/` continues to implement pure git operations (clone/commit/push) via a `GitEngine` interface, invoked by `FleetGitRepoEngine` to write the manifest directory tree per §6.7
+- [ ] **Secret delivery for gitops strategy:** `suse-registry-creds` Secret is NOT written to git (security: no secrets in git history). Instead, `FleetGitRepoEngine` creates the Secret directly on the management cluster in a Fleet-managed namespace, and adds it to the GitRepo CR's `spec.resources[]` so Fleet delivers it to downstream clusters without it ever touching git. This matches Fleet's native secret delivery mechanism and keeps credentials out of version control.
+- [ ] `Delete` removes all GitRepo CRs for the workload (one per cluster; iterate and delete)
+- [ ] `WorkloadReconciler` translates `*aifv1.Workload` → `GitRepoDeploymentSpec` (CR→domain) and invokes `FleetGitRepoEngine.CreateOrUpdate` when `deployStrategy=gitops`; mirrors all GitRepo statuses back to `Workload.status` (phase: Deploying while any Fleet GitRepo is reconciling, Running when ALL GitRepo CRs report `status.readyClusters == 1`)
+- [ ] Unit test: GitRepo CRs created with correct fields per cluster; idempotent on re-run; multi-cluster workload creates N GitRepo CRs
+- [ ] Integration test: GitRepo CRs created in envtest cluster; verify one CR per target cluster; `spec.targets` has single entry per CR
+
+---
+
+**ID:** P4-3b
+**Epic:** Fleet Bundle Engine (`deployStrategy: helm`)
+**Story:** As a platform engineer, I want Workloads with `deployStrategy=helm` to create a `fleet.cattle.io/v1alpha1 Bundle` CR on the management cluster so that fleet-agents on the target downstream cluster pull and apply the Helm chart without requiring a git repository.
+**Owner Hint:** Backend Go
+**Effort:** M
+**Depends On:** P4-1, P4-2, P6-1-refactor
+**Parallelizable With:** P4-3, P4-4
+**Done When:** A Workload with `deployStrategy=helm` (the default) results in a `fleet.cattle.io/v1alpha1 Bundle` CR on the management cluster, targeting all clusters in `Workload.spec.targetClusters`, containing the merged Helm values and OCI chart reference; fleet-agents on the target clusters pick it up and the Workload reaches `Running`.
+
+**Acceptance Criteria:**
+- [ ] `pkg/fleet/bundle_engine.go` implements a `FleetBundleEngine` interface (in `pkg/fleet/interface.go`) with methods: `CreateOrUpdate(ctx, spec BundleDeploymentSpec) error` · `Delete(ctx, workloadID string) error` · `UpdateSettings(settings FleetSettings)`
+- [ ] `pkg/fleet/types.go` defines domain types:
+  ```go
+  type BundleDeploymentSpec struct {
+      WorkloadID        string            // namespace/name
+      TargetClusters    []string          // cluster IDs
+      Components        []ComponentBundle // OCI chart ref + merged values per component
+      PullSecretData    []byte            // suse-registry-creds Secret data (base64 dockerconfigjson)
+  }
+  type ComponentBundle struct {
+      Name       string
+      ChartRef   string            // oci://{registryEndpoint}/...
+      Values     map[string]any    // merged Helm values (output of §6.6 MergeValues)
+  }
+  ```
+- [ ] **One Fleet Bundle per Workload** (explicit design, not coin-flip): `CreateOrUpdate` creates or updates a SINGLE `fleet.cattle.io/v1alpha1 Bundle` CR on the management cluster with:
+  - `metadata.name` = `{workload-ns}-{workload-name}` (DNS-1123 sanitized)
+  - `spec.helm.chart` = first component's chart reference (primary chart)
+  - `spec.helm.values` = first component's merged values
+  - `spec.helm.valuesFiles[]` = additional components' merged values (one entry per additional component) — used for multi-component Blueprints
+  - `spec.targets` = one entry per cluster in `spec.TargetClusters`: `[{clusterName: c} for c in spec.TargetClusters]`
+  - `spec.resources[]` includes a `Secret` resource (`suse-registry-creds`) with `data[".dockerconfigjson"]` set from `spec.PullSecretData` so fleet-agents apply it to the workload namespace on the downstream cluster
+  - owner reference pointing at the Workload CR so deletion cascades
+- [ ] `Delete` removes the Bundle CR when the Workload is deleted (owner-reference cascade covers this if set)
+- [ ] `WorkloadReconciler` translates `*aifv1.Workload` → `BundleDeploymentSpec` (CR→domain, including fetching `suse-registry-creds` Secret from `aif` namespace) and invokes `FleetBundleEngine.CreateOrUpdate` when `deployStrategy=helm` (the default). WorkloadReconciler watches Fleet Bundle status and mirrors it back to `Workload.status` (phase: Deploying → Running once `Bundle.status.readyClusters == len(targetClusters)`)
+- [ ] `pkg/helm/` continues to implement pure Helm SDK operations (chart fetching, values merging per §6.6) via the existing `HelmEngine` interface, invoked by `FleetBundleEngine` to prepare the chart refs and merged values
+- [ ] envtest: Bundle CR created with correct chart reference, targets, values, and pull-secret resource; owner reference set; Bundle deletion triggered by Workload deletion; multi-cluster workload has `len(spec.targets) == len(targetClusters)`
+
+> **Note:** This story replaces the direct Helm install path in P4-2 for the `helm` deployStrategy. P4-2's `pkg/workload/deployer.go` should be updated to delegate to `FleetBundleEngine` instead of calling `pkg/helm.Engine` directly for cross-cluster workloads.
 
 ---
 
@@ -1547,7 +1609,7 @@ grep 'nvcr.io' pkg/nvidia/nim.go && echo FAIL || echo PASS
 **Effort:** M
 **Depends On:** P4-2, P4-3
 **Parallelizable With:** none
-**Done When:** Both endpoints accept `{targetCluster, valueOverrides?, deployStrategy?}` and return the created Workload CR.
+**Done When:** Both endpoints accept `{targetClusters, valueOverrides?, deployStrategy?}` (deployStrategy: `helm` | `gitops`, default `helm`) and return the created Workload CR.
 
 **Acceptance Criteria:**
 - [ ] Handlers in `internal/api/blueprints.go` and `internal/api/bundles.go`
@@ -1706,7 +1768,7 @@ go test -race ./internal/controller/ -run TestWorkloadFailedToDeploying -v
   - The new version is greater than the current version per `golang.org/x/mod/semver` → else 409 `INVALID_TRANSITION` with message `"Upgrade must target a higher version (downgrade is not supported in v1)"`
 - [ ] **Mutates `Workload.spec`** (single PATCH):
   - Updates `spec.source.blueprint.version` to the new version
-  - **Preserves**: `spec.valueOverrides` (per-component customer overrides), `spec.scaling.*`, `spec.strategy.*`, `spec.replicas`, `spec.targetCluster`, `spec.deployStrategy`
+  - **Preserves**: `spec.valueOverrides` (per-component customer overrides), `spec.scaling.*`, `spec.strategy.*`, `spec.replicas`, `spec.targetClusters`, `spec.deployStrategy`
   - **Resets**: nothing else — the WorkloadReconciler's normal spec-change handling drives the rollout
 - [ ] Patches the Workload via `client.Patch(ctx, &w, client.MergeFrom(orig))` so concurrent writes are surfaced as `Conflict` (returned to caller as 409 with retry guidance)
 - [ ] Records event `WorkloadUpgradeStarted` (Normal, Reason=`UpgradeStarted`, Message=`Upgrading from {oldVersion} to {newVersion}`) on the Workload BEFORE the spec patch
@@ -1752,33 +1814,33 @@ go test -race ./internal/api/ -run TestSettingsHandler -v
 
 **ID:** P5-5
 **Epic:** Pull-Secret Reconciler
-**Story:** As an operator, I want the `suse-registry-creds` docker-config Secret created/updated in every workload namespace whenever Settings or a Workload changes.
+**Story:** As an operator, I want the `suse-registry-creds` docker-config Secret created in the `aif` namespace on the management cluster so that WorkloadReconciler can embed it in Fleet Bundles for delivery to downstream clusters.
 **Owner Hint:** Backend Go
 **Effort:** M
 **Depends On:** P5-4, P1-3
 **Parallelizable With:** none
-**Done When:** Creating a Workload in a fresh namespace results in `suse-registry-creds` appearing in that namespace within 30s.
+**Done When:** Creating or updating Settings results in `suse-registry-creds` appearing in the `aif` namespace within 30s. WorkloadReconciler can read this Secret and include it in Fleet Bundles (P4-3b) or gitops manifests (P4-3).
 
 **Acceptance Criteria:**
-- [ ] **Cross-controller Workload watch via the `ARCHITECTURE.md §13.4 "Cross-controller event source pattern (P5-5)" snippet verbatim**: `Watches(&Workload{}, EnqueueRequestsFromMapFunc(...), WithPredicates(predicate.Funcs{CreateFunc: true, DeleteFunc: false, UpdateFunc: false}))`. The `UpdateFunc: false` is the cache-invalidation key — Workload status updates fire constantly and would otherwise trigger needless Settings reconciles per §13.4.
 - [ ] **`suse-registry-creds` Secret shape matches `ARCHITECTURE.md §13.4 "Pull-secret Secret shape (P5-5 contract)" verbatim**:
   - Type `kubernetes.io/dockerconfigjson`
-  - `data["<.dockerconfigjson>"]` is base64-encoded JSON
+  - `data[".dockerconfigjson"]` is base64-encoded JSON
   - `auths` map ALWAYS contains `registry.suse.com` and `dp.apps.rancher.io` entries (canonical hostnames preserved even when overrides set)
   - When `Settings.spec.registryEndpoints.suseRegistry` is non-empty AND non-default, ADDITIONAL `auths` entry appended for that hostname
   - Both `username`/`password` AND `auth` field populated for compatibility (per §13.4)
   - Empty Settings credentials → that hostname's entry OMITTED (not included with empty values)
-- [ ] **Reconciler scope** per §13.4 "Reconciler scope (P5-5)":
-  - Trigger: Settings change, Workload create, Source Secret change, Workload deletion (no action)
-  - Iterate: for each Workload, ensure Secret in `Workload.spec.targetNamespace`
-  - Skip: namespaces with `metadata.deletionTimestamp != nil`
-- [ ] **Fail-closed condition** per §13.4: when a Settings-referenced Secret is missing, set `Settings` condition `Type=PullSecretReconcileBlocked, Reason=SourceSecretMissing, Status=True, Message="Settings.spec.suseRegistry.tokenSecretRef secret 'X' not found in namespace 'Y'"` and SKIP processing for that credential set. Other credential sets continue independently.
-- [ ] **envtest scenarios** (5 cases per §13.4):
-  1. Create Workload in fresh namespace → Secret appears within 30s with both upstream + override hosts
-  2. Update Settings → ALL existing Secrets re-stamped within 30s (verify by checking `metadata.resourceVersion` increments)
-  3. Delete a Workload → Secret stays (might be used by other Workloads)
-  4. Source Secret deleted → fail-closed condition set; partial Secret NOT written
-  5. Update Workload status (no spec change) → reconciler does NOT fire (predicate filtered)
+- [ ] **Reconciler scope**: SettingsReconciler creates/updates the source Secret (`suse-registry-creds`) in namespace `aif` on the management cluster from the credentials in `Settings.spec.{suseRegistry,applicationCollection}`. There is NO cross-controller Workload watch and NO per-workload-namespace iteration — the source Secret is a singleton in `aif` namespace; WorkloadReconciler embeds it in Fleet Bundles (P4-3b) or gitops manifests (P4-3) for delivery to downstream cluster workload namespaces by fleet-agents.
+  - Trigger: Settings change, Source Secret change (SecretKeyRef targets)
+  - Action: Reconcile `suse-registry-creds` in namespace `aif` only
+  - Skip: none (always reconcile when triggered)
+- [ ] **Fail-closed condition** per §13.4: when a Settings-referenced Secret is missing, set `Settings` condition `Type=PullSecretReconcileBlocked, Reason=SourceSecretMissing, Status=True, Message="Settings.spec.suseRegistry.tokenSecretRef secret 'X' not found in namespace 'Y'"` and SKIP processing for that credential set. Other credential sets continue independently. No `suse-registry-creds` Secret is written if ANY required credential is missing (fail-closed).
+- [ ] **envtest scenarios**:
+  1. Create or update Settings with valid credentials → `suse-registry-creds` Secret appears in `aif` namespace within 30s
+  2. Update Settings credentials → Secret in `aif` namespace re-stamped (verify `metadata.resourceVersion` increments)
+  3. Source Secret deleted → fail-closed condition set; `suse-registry-creds` NOT written/updated
+  4. Settings with registry endpoint overrides → Secret includes additional `auths` entry for override hostname
+
+> **Hub-model note (post-P4-3/P4-3b):** The source Secret lives in `aif` namespace on the management cluster. WorkloadReconciler reads it and embeds it in Fleet Bundles/GitRepo CRs via `spec.resources[]` (per P4-3b and P4-3). fleet-agents on downstream clusters apply the Secret into the workload namespace. **Security:** Secrets are NEVER written to git repositories — they flow exclusively through Fleet's `spec.resources[]` mechanism, which delivers them directly from the management cluster to downstream clusters without version control exposure. There is no management-cluster-side iteration over workload namespaces; P4-3/P4-3b handle cross-cluster delivery.
 
 **Validation:**
 ```bash
@@ -1993,6 +2055,50 @@ curl -X POST http://localhost:8080/api/v1/settings/test-connection | jq
 - [ ] Build succeeds; sidebar product loads in Rancher
 
 > **Follow-up (post-merge):** P6-1 implementation diverged from the original §7.3 spec in three ways now reconciled in ARCHITECTURE.md: (1) `isMultiClusterApp: true` added to `product()` — required for sidebar visibility when `inStore` is not `'management'` (TopLevelMenu.vue:148 filters on this flag); (2) `CRD_TYPES.SETTINGS` added to `basicType([...])` so the singleton Settings CR is discoverable via the Steve store; (3) `isRemovable` corrected to `false` for Blueprint (publish-by-approval lifecycle only) and Workload (Uninstall action in P6-6, not raw delete), and to `false` for Settings (operator-managed singleton). Bundle retains `isRemovable: true` per spec §8.2 "Delete: available in any state". All seven nav pages (including `BLUEPRINTS`, `BUNDLES`, `WORKLOADS`, `SETTINGS`) are registered as `virtualType` entries; `PENDING_REVIEWS` was the only virtual type in the original spec sketch.
+
+---
+
+**ID:** P6-1-refactor
+**Epic:** Hub Architecture Renames + Flat Navigation
+**Story:** As a developer, I want all hub-architecture naming changes and the grouped-to-flat sidebar nav migration landed in one atomic commit so that Phase 4 backend stories and Phase 6 UI stories build on correct field names and routing from the start.
+**Owner Hint:** Full-stack (Go + UI Vue)
+**Effort:** S
+**Depends On:** P6-1
+**Parallelizable With:** P6-0, P4-1
+**Done When:** The codebase compiles cleanly with `targetClusters []string` and `gitops` enum value in the Workload CRD; the UI extension loads in Rancher with flat navigation, no `weightGroup` calls, and `MANAGEMENT_CLUSTER = 'local'` routing; all existing tests pass.
+
+**Acceptance Criteria:**
+
+*Backend — CRD field and enum renames:*
+- [ ] `api/v1alpha1/workload_types.go`: rename `TargetCluster string` → `TargetClusters []string` (json tag `targetClusters`); rename constant `DeployStrategyTypeFleet = "fleet"` → `DeployStrategyTypeGitOps = "gitops"`; update `+kubebuilder:validation:Enum=helm;fleet` → `+kubebuilder:validation:Enum=helm;gitops`
+- [ ] `make manifests generate` run and committed — CRD YAML in `charts/aif-operator/crds/ai.suse.com_workloads.yaml` reflects both changes (`targetClusters` array, enum `[helm, gitops]`)
+- [ ] All Go references to `TargetCluster` / `DeployStrategyTypeFleet` updated (controller, tests, any pkg files); `go build ./...` passes
+
+*UI — management cluster routing:*
+- [ ] `ui/ai-factory/pkg/ai-factory/config/types.ts`: remove `BLANK_CLUSTER` export; add `export const MANAGEMENT_CLUSTER = 'local'`
+- [ ] `ui/ai-factory/pkg/ai-factory/index.ts`: `SteveFactory(null, null)` → `SteveFactory('local', null)`
+- [ ] `ui/ai-factory/pkg/ai-factory/config/aif-product.ts`: replace all `BLANK_CLUSTER` references with `MANAGEMENT_CLUSTER`; remove `weightGroup` from DSL destructure; delete both `weightGroup(...)` calls (lines ~87–88)
+
+*UI — grouped nav → flat nav:*
+- [ ] `config/aif-product.ts`: all seven pages registered via `basicType([...])` ordered by `weight` only — no `weightGroup`, no `weightType`, no sidebar group labels
+- [ ] Seven pages in order: Overview (weight 1), Apps (2), Blueprints (3), Bundles (4), Pending Reviews (5), Workloads (6), Settings (7)
+- [ ] `yarn build` succeeds; sidebar shows all seven pages in a single flat list under the AIF product
+
+**Validation:**
+Backend:
+```bash
+go build ./...
+grep -r "TargetCluster\b\|DeployStrategyTypeFleet\|\"fleet\"" api/ internal/ pkg/ && echo FAIL || echo PASS
+grep -r "BLANK_CLUSTER\|weightGroup\|weightType\|SteveFactory(null" ui/ai-factory/pkg/ai-factory/ && echo FAIL || echo PASS
+```
+
+Frontend:
+```bash
+#UI Extension should build 
+yarn build-pkgs ai-factory
+#Should be able to serve the extension app locally and install in a Rancher session
+yarn serve-pkgs
+```
 
 ---
 
@@ -2242,6 +2348,30 @@ kubectl apply -f testdata/installaiextension-cr.yaml
 - [ ] Steps: `yarn install`, `yarn lint`, `tsc --noEmit -p pkg/ai-factory/tsconfig.json`, `yarn build-pkg ai-factory`, `yarn test`
 - [ ] All steps must pass for PR to merge
 - [ ] Workflow is verified to appear in the GitHub Actions tab on a test PR
+
+---
+
+**ID:** P6-13
+**Epic:** Workload Deploy Wizard — Cluster + Strategy Step
+**Story:** As an AI/ML practitioner, I want the Workload deploy wizard Step 2 to let me select one or more downstream clusters and choose between Helm and GitOps delivery so that the resulting Workload CR is correctly populated.
+**Owner Hint:** UI Vue
+**Effort:** M
+**Depends On:** P6-1-refactor, P6-8
+**Parallelizable With:** P6-9, P6-10
+**Done When:** Step 2 of the Install & Deploy wizard shows a multi-select cluster list sourced from `management.cattle.io.cluster` and a Helm/GitOps radio; submitting the wizard writes `spec.targetClusters` and `spec.deployStrategy` on the created Workload CR.
+
+**Acceptance Criteria:**
+- [ ] `DeployWizard.vue` Step 2: cluster list fetches from `this.$store.dispatch('management/findAll', { type: 'management.cattle.io.cluster' })`; each row shows cluster name, ID, and status; multi-select checkboxes; at least one cluster required to advance
+- [ ] Below the cluster list: a `deployStrategy` radio group — **Helm** (default) / **GitOps**; selection written to `Workload.spec.deployStrategy`
+- [ ] Selected cluster IDs written to `Workload.spec.targetClusters` (array)
+- [ ] `product({ ..., showClusterSwitcher: false })` confirmed in place (set by P6-1-refactor)
+- [ ] No hardcoded `'_'` remaining in wizard component (covered by P6-1-refactor; this story must not re-introduce it)
+- [ ] Step 4 Review surface shows selected clusters and delivery strategy
+
+**Validation:**
+```bash
+grep -r "BLANK_CLUSTER\|'_'\|weightGroup\|weightType" ui/ai-factory/pkg/ai-factory/ && echo FAIL || echo PASS
+```
 
 ---
 

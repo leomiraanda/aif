@@ -35,12 +35,14 @@ SUSE AI Factory uses four nouns, each with a distinct role:
 
 | Noun | What it is | Mutability | Scope |
 |------|------------|------------|-------|
-| **App** | A building-block AI application (NIM model, vector database, LLM serving runtime, vendor-published Reference Blueprint chart, …) — anything packaged as a Helm chart in SUSE Registry or SUSE Application Collection | Immutable; sourced from the SUSE catalog | Catalog-wide |
-| **Bundle** | A workshop where an author composes Apps and existing Blueprints into a candidate AI stack | Mutable; owned by an author or small team | Namespaced |
-| **Blueprint** *(AIF Blueprint)* | A published, immutable, versioned AI stack tied to a use case (e.g., RAG, vision pipeline) — an **AIF concept**, distinct from vendor-published Reference Blueprints (see note below) | Immutable per version; new versions are minted, never edited in place | Cluster-scoped |
-| **Workload** | A running instance of an App or a Blueprint on a target cluster | Status-only | Workload namespace |
+| **App** | A building-block AI application (NIM model, vector database, LLM serving runtime, vendor-published Reference Blueprint chart, …) — anything packaged as a Helm chart in SUSE Registry or SUSE Application Collection | Immutable; sourced from the SUSE catalog | Catalog-wide (not a CRD; discovered from registries) |
+| **Bundle** | A workshop where an author composes Apps and existing Blueprints into a candidate AI stack | Mutable; owned by an author or small team | Namespaced (CRD in author's namespace) |
+| **Blueprint** *(AIF Blueprint)* | A published, immutable, versioned AI stack tied to a use case (e.g., RAG, vision pipeline) — an **AIF concept**, distinct from vendor-published Reference Blueprints (see note below) | Immutable per version; new versions are minted, never edited in place | Cluster-scoped (CRD visible org-wide) |
+| **Workload** | A running instance of an App or a Blueprint on a target cluster | Status-only | Namespaced (CRD in workload's namespace) |
 
-Apps and Blueprints are both directly deployable. A Bundle becomes a Blueprint version through an approval workflow; the Bundle persists after publishing so the author can iterate toward the next version.
+**Scope clarification:** "Namespaced" means the resource exists within a Kubernetes namespace and is isolated per team/project. "Cluster-scoped" means the resource is visible across the entire cluster (all namespaces). Apps are not Kubernetes resources — they're catalog entries discovered from OCI registries.
+
+Apps, Blueprints, and Bundles are all deployable. Apps and Blueprints are deployed as production workloads; Bundles are test-deployed during authoring to validate the stack before submission. A Bundle becomes a Blueprint version through an approval workflow; the Bundle persists after publishing so the author can iterate toward the next version.
 
 > **A note on terminology — "Blueprint" in this document means "AIF Blueprint."** NVIDIA and other vendors publish their own "Reference Blueprints" (e.g., NVIDIA RAG, NVIDIA AIQ). Those are **Helm charts** mirrored into SUSE Registry; AIF treats each one as an App in the catalog and additionally **wraps** it as a single-component AIF Blueprint so it appears on the Blueprints page with versioning and governance. A NVIDIA Blueprint is not an AIF Blueprint — it's a chart that AIF wraps. See [§6 Blueprints](#6-blueprints) and the Glossary for details.
 
@@ -113,7 +115,7 @@ Designation of users as Blueprint Publishers happens **outside the AIF UI**, thr
 
 SUSE AI Factory appears as a top-level product in the Rancher Dashboard sidebar, labeled **"SUSE AI Factory"** with the SUSE AI Factory logo mark.
 
-The product contains six navigation pages, accessible from the left sidebar within the SUSE AI Factory product context:
+The product contains seven navigation pages, accessible from the left sidebar within the SUSE AI Factory product context:
 
 | Page | Icon | Purpose |
 |------|------|---------|
@@ -122,11 +124,12 @@ The product contains six navigation pages, accessible from the left sidebar with
 | Blueprints | Blueprint/stack icon | Gallery of validated, reusable AI stacks |
 | Bundles | Bundle/package icon | Compose AI stacks and submit them for publication |
 | Workloads | Compute/deploy icon | Monitor and manage deployed AI workloads |
+| Pending Reviews | Review/queue icon | Publisher review queue — submitted Bundles awaiting approval |
 | Settings | Gear icon | Platform credentials, registries, and integrations |
 
-All six pages are scoped to the currently selected cluster in Rancher. The cluster selector at the top of Rancher applies to all SUSE AI Factory pages.
+SUSE AI Factory operates in a **hub-on-management-cluster** model: the AIF operator and all CRs live on the Rancher management cluster. There is no cluster switcher within the product — all pages are always in the context of the management cluster. Downstream cluster selection happens at deploy time inside the Install & Deploy wizard (see [§10 Install & Deploy Flow](#10-install--deploy-flow)).
 
-SUSE AI Factory integrates fully with Rancher's native product and sidebar framework. It appears and behaves exactly like any other built-in Rancher product — same keyboard navigation, same breadcrumbs, same namespace filter, same cluster switcher. Users who know Rancher already know how to navigate SUSE AI Factory.
+SUSE AI Factory integrates fully with Rancher's native product and sidebar framework. It appears and behaves exactly like any other built-in Rancher product — same keyboard navigation, same breadcrumbs, same namespace filter. Users who know Rancher already know how to navigate SUSE AI Factory.
 
 ---
 
@@ -425,7 +428,7 @@ The author can re-open the Bundle later to edit it, test deploy it, or submit it
 
 **Edit** — Re-opens the Bundle Wizard with the current contents loaded.
 
-**Test Deploy** — Deploys the Bundle to a target cluster as a test Workload. The user picks the target cluster and deployment strategy (Helm or Fleet) at deploy time. Test Workloads are clearly labeled with `Source: Bundle (test): <name>` and intended to be short-lived. Test deploys are not required before submission, but their history is visible to publishers during review.
+**Test Deploy** — Deploys the Bundle to a target cluster as a test Workload. The user picks the target cluster and deployment strategy (Helm or GitOps) at deploy time. Test Workloads are clearly labeled with `Source: Bundle (test): <name>` and intended to be short-lived. Test deploys are not required before submission, but their history is visible to publishers during review.
 
 **Pre-flight Check** *(any user)* — Verifies that every component referenced by this Bundle (charts and images) is currently resolvable in the configured registry. Returns one of three results:
 
@@ -627,7 +630,15 @@ A horizontal progress bar at the top of the modal shows the four steps: **Basic 
 
 **Step 2 — Target**
 
-A checklist of available Kubernetes clusters. The user selects one or more clusters to deploy this app to. Each cluster entry shows its name, ID, and status. The current cluster is pre-selected.
+**Cluster selection:** A list of downstream clusters managed by Rancher. The user selects one or more clusters to deploy this workload to. Each cluster entry shows its name, ID, and status. The workload is delivered to the selected clusters by Rancher Fleet — no direct access from the user's browser or from the AIF operator to the downstream cluster APIs is required. The cluster list is sourced from Rancher's management cluster registry (`management.cattle.io/cluster`).
+
+**Delivery strategy:** A radio selection below the cluster list:
+- **Helm** *(default)* — AIF creates a Fleet Bundle CR containing the OCI chart and merged values. No git repository required.
+- **GitOps** — AIF generates manifests and pushes them to the Fleet git repository configured in Settings (`Settings.spec.fleet.repoURL` / `Settings.spec.fleet.branch`), then creates a Fleet GitRepo CR. Fleet watches the repo and generates the Bundle automatically. No git URL input is collected in this wizard step.
+
+Both strategies use Fleet for cross-cluster delivery. The selection is written to `Workload.spec.deployStrategy`.
+
+> **CRD note:** `spec.targetClusters` is a `[]string` field. The Fleet CR `spec.targets` array is populated with one entry per cluster in this slice. The rename from the original singular `targetCluster` field is tracked in story P6-1-refactor.
 
 ---
 
@@ -654,7 +665,7 @@ The configuration form adapts based on the type of app being installed:
 A read-only summary of all selections before installation:
 - Release name and namespace
 - Chart repository, name, and version
-- Target clusters
+- Target clusters and delivery strategy (Helm / GitOps)
 - Configuration highlights (image, replicas, GPU, key overrides)
 
 A large **Install** button with a loading spinner triggers the deployment. The modal closes on success and a success toast appears. On failure, an error banner appears within the modal.
@@ -746,7 +757,10 @@ The following features are explicitly not included in the v1 release:
 | **Mirror process** | A SUSE-managed offline process that copies the agreed set of NIM containers and Helm charts from NVIDIA NGC into SUSE Registry. AIF only ever sees the SUSE Registry side of this pipeline. |
 | **SUSE Application Collection** | SUSE's catalog of certified applications (Milvus, Ollama, vLLM, etc.) at `apps.rancher.io`. |
 | **SUSE Registry** | SUSE's OCI image registry at `registry.suse.com`. |
-| **Fleet** | Rancher's GitOps engine. Workloads can be deployed via Fleet by committing manifests to a Git repository. |
+| **Fleet** | Rancher's multi-cluster delivery engine. AIF uses Fleet for all workload delivery to downstream clusters. Two modes: `helm` (AIF creates a Fleet Bundle CR containing the OCI chart + values directly) and `gitops` (AIF creates a Fleet GitRepo CR pointing at a user-owned git repo; Fleet reads the repo and generates a Bundle). In both cases fleet-agents on downstream clusters pull from the Fleet controller on the management cluster — no outbound connections from the operator to downstream cluster APIs. |
+| **Fleet Bundle CR** | A `fleet.cattle.io/v1alpha1 Bundle` resource on the management cluster, created by the AIF operator for `deployStrategy: helm`. Contains the Helm chart reference and merged values. Fleet agents on downstream clusters pull and apply it. Not to be confused with an AIF Bundle CR. |
+| **Fleet GitRepo CR** | A `fleet.cattle.io/v1alpha1 GitRepo` resource on the management cluster, created by the AIF operator for `deployStrategy: gitops`. Points to the user's git repository; Fleet reads it and auto-generates a Fleet Bundle. |
+| **deployStrategy** | How a Workload's components are delivered to the target downstream cluster. `helm`: AIF operator creates a Fleet Bundle CR (OCI chart + merged values, no git). `gitops`: AIF operator creates a Fleet GitRepo CR (git repo is the source of truth; Fleet generates the Bundle). Both strategies use Fleet for cross-cluster delivery. |
 | **Steve** | Rancher's typed API surface used by the dashboard and extensions. |
 | **UIPlugin** | Rancher's extension registration resource (`catalog.cattle.io/v1`). |
 | **Source** *(of a Workload)* | Provenance metadata recorded on every Workload identifying where it came from: `App: <name>@<version>`, `Blueprint: <name>@<version>`, or `Bundle (test): <name>`. |
