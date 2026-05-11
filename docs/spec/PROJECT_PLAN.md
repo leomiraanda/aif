@@ -1009,7 +1009,7 @@ grep -rE 'strings\.Contains.*err\.Error' pkg/apps/ && echo FAIL || echo PASS
 - [ ] `pkg/apps/types.go`: add JSON tags to `App` and `ChartRef` matching `ARCHITECTURE.md §5` keys (`id`, `name`, `displayName`, `description`, `publisher`, `version`, `logoURL`, `source`, `assetType`, `categories`, `tags`, `chartRef.{repo,chart,version}`, `projectURL`, `referenceBlueprint`). The schema in §5 is camelCase; default Go marshaling would emit `ID`, `Name`, etc.
 
 *Handler & routes*
-- [ ] `internal/api/apps.go`: `appsHandler` implements `api.Handler`; depends on `apps.Catalog` (the read-only port) — NOT on `Aggregator`. Constructor takes `(apps.Catalog, *slog.Logger)`.
+- [ ] `internal/api/apps.go`: `appsHandler` implements `api.Handler`; depends on `apps.Catalog` (the read-only port) — NOT on `Aggregator`. Constructor takes `(apps.Catalog)`; request-scoped logging goes through `LoggerFromContext(r.Context())` (the `request_id`-decorated child logger built by `LoggingMiddleware`), not a constructor-injected `*slog.Logger`.
 - [ ] Routes registered via `Handler.Register` using Go 1.22 `ServeMux` method-prefixed patterns:
   - `GET /api/v1/apps`
   - `GET /api/v1/apps/categories`  (literal segment beats `{id}` per Go 1.22 specificity rules)
