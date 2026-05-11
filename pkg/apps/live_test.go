@@ -63,7 +63,7 @@ func TestLive_Catalog_AssemblesFromBothUpstreams(t *testing.T) {
 	// Build Catalog and register both adapters.
 	catalog := New(logger, 10*time.Minute).(*catalogImpl)
 	catalog.AddSource(NewNVIDIASource(nvDiscovery, nil, logger, 10*time.Minute))
-	catalog.AddSource(NewAppCoSource(appcoClient, logger, 10*time.Minute))
+	catalog.AddSource(NewAppCoSource(appcoClient, nil, logger, 10*time.Minute))
 
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()

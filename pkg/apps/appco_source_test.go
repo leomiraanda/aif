@@ -71,7 +71,7 @@ func sampleCatalogApps() []source_collection.CatalogApp {
 // --- Behavior: Name ---
 
 func TestAppCoSource_Name_IsSuse(t *testing.T) {
-	s := NewAppCoSource(&fakeAppCoClient{}, discardLogger(), 10*time.Minute)
+	s := NewAppCoSource(&fakeAppCoClient{}, &fakeAppcoAnnotationReader{}, discardLogger(), 10*time.Minute)
 	if got := s.Name(); got != "suse" {
 		t.Errorf("Name() = %q, want %q", got, "suse")
 	}
@@ -81,7 +81,7 @@ func TestAppCoSource_Name_IsSuse(t *testing.T) {
 
 func TestAppCoSource_RefreshThenList_ReturnsNamespacedApps(t *testing.T) {
 	c := &fakeAppCoClient{listResult: sampleCatalogApps()}
-	s := NewAppCoSource(c, discardLogger(), 10*time.Minute)
+	s := NewAppCoSource(c, &fakeAppcoAnnotationReader{}, discardLogger(), 10*time.Minute)
 
 	if err := s.Refresh(context.Background()); err != nil {
 		t.Fatalf("Refresh failed: %v", err)
@@ -149,7 +149,7 @@ func TestAppCoSource_RefreshThenList_ReturnsNamespacedApps(t *testing.T) {
 // --- Behavior: List before Refresh returns empty (not error) ---
 
 func TestAppCoSource_ListBeforeRefresh_ReturnsEmpty(t *testing.T) {
-	s := NewAppCoSource(&fakeAppCoClient{}, discardLogger(), 10*time.Minute)
+	s := NewAppCoSource(&fakeAppCoClient{}, &fakeAppcoAnnotationReader{}, discardLogger(), 10*time.Minute)
 	apps, err := s.List(context.Background())
 	if err != nil {
 		t.Fatalf("List failed: %v", err)
@@ -163,7 +163,7 @@ func TestAppCoSource_ListBeforeRefresh_ReturnsEmpty(t *testing.T) {
 
 func TestAppCoSource_RefreshFailure_LeavesPriorCacheIntact(t *testing.T) {
 	c := &fakeAppCoClient{listResult: sampleCatalogApps()}
-	s := NewAppCoSource(c, discardLogger(), 10*time.Minute)
+	s := NewAppCoSource(c, &fakeAppcoAnnotationReader{}, discardLogger(), 10*time.Minute)
 
 	if err := s.Refresh(context.Background()); err != nil {
 		t.Fatalf("first Refresh failed: %v", err)
@@ -192,7 +192,7 @@ func TestAppCoSource_RefreshFailure_LeavesPriorCacheIntact(t *testing.T) {
 
 func TestAppCoSource_Refresh_UpdatesStatus(t *testing.T) {
 	c := &fakeAppCoClient{listResult: sampleCatalogApps()}
-	s := NewAppCoSource(c, discardLogger(), 10*time.Minute)
+	s := NewAppCoSource(c, &fakeAppcoAnnotationReader{}, discardLogger(), 10*time.Minute)
 
 	before := time.Now()
 	if err := s.Refresh(context.Background()); err != nil {
@@ -226,7 +226,7 @@ func TestAppCoSource_Refresh_UpdatesStatus(t *testing.T) {
 
 func TestAppCoSource_UpdateSettings_ForwardsAppCoSliceToEngine(t *testing.T) {
 	c := &fakeAppCoClient{}
-	s := NewAppCoSource(c, discardLogger(), 10*time.Minute)
+	s := NewAppCoSource(c, &fakeAppcoAnnotationReader{}, discardLogger(), 10*time.Minute)
 
 	s.UpdateSettings(EngineSettings{
 		// SUSERegistry slice intentionally set — should be IGNORED by AppCoSource.
@@ -257,6 +257,140 @@ func TestAppCoSource_UpdateSettings_ForwardsAppCoSliceToEngine(t *testing.T) {
 	}
 	if got != want {
 		t.Errorf("forwarded source_collection.EngineSettings = %+v, want %+v", got, want)
+	}
+}
+
+// --- Behavior: Annotation enrichment (reference blueprint detection) ---
+
+type fakeAppcoAnnotationReader struct {
+	mu          sync.Mutex
+	calls       []string
+	annotations map[string]map[string]string // key: "<repo>/<chart>:<version>"
+	errs        map[string]error
+}
+
+func (f *fakeAppcoAnnotationReader) ChartAnnotations(_ context.Context, repo, chart, version string) (map[string]string, error) {
+	key := repo + "/" + chart + ":" + version
+	f.mu.Lock()
+	f.calls = append(f.calls, key)
+	f.mu.Unlock()
+	if err, ok := f.errs[key]; ok {
+		return nil, err
+	}
+	return f.annotations[key], nil
+}
+
+func TestAppCoSource_Refresh_PopulatesReferenceBlueprintAndOverrides(t *testing.T) {
+	upstream := []source_collection.CatalogApp{
+		{
+			ID:            "milvus",
+			DisplayName:   "Milvus",
+			Publisher:     "Zilliz",
+			LatestVersion: "2.4.0",
+			ChartRef:      "oci://dp.apps.rancher.io/charts/milvus:2.4.0",
+		},
+	}
+	annReader := &fakeAppcoAnnotationReader{
+		annotations: map[string]map[string]string{
+			"oci://dp.apps.rancher.io/charts/milvus:2.4.0": {
+				"ai.suse.com/role":         "reference-blueprint",
+				"ai.suse.com/display-name": "Pretty Milvus",
+				"ai.suse.com/description":  "Pretty description",
+				"ai.suse.com/use-case":     "vector-db",
+			},
+		},
+	}
+	c := &fakeAppCoClient{listResult: upstream}
+	s := NewAppCoSource(c, annReader, discardLogger(), time.Minute)
+	if err := s.Refresh(context.Background()); err != nil {
+		t.Fatalf("Refresh: %v", err)
+	}
+	apps, _ := s.List(context.Background())
+	if len(apps) != 1 {
+		t.Fatalf("expected 1 app, got %d", len(apps))
+	}
+	a := apps[0]
+	if !a.ReferenceBlueprint {
+		t.Errorf("ReferenceBlueprint: got false, want true")
+	}
+	if a.DisplayName != "Pretty Milvus" {
+		t.Errorf("DisplayName: got %q, want Pretty Milvus", a.DisplayName)
+	}
+	if a.Description != "Pretty description" {
+		t.Errorf("Description: got %q", a.Description)
+	}
+	if a.UseCase != "vector-db" {
+		t.Errorf("UseCase: got %q, want vector-db", a.UseCase)
+	}
+}
+
+func TestAppCoSource_Refresh_LeavesReferenceBlueprintFalse_WhenNoAnnotation(t *testing.T) {
+	upstream := []source_collection.CatalogApp{
+		{ID: "milvus", LatestVersion: "2.4.0", ChartRef: "oci://dp.apps.rancher.io/charts/milvus:2.4.0"},
+	}
+	annReader := &fakeAppcoAnnotationReader{annotations: nil}
+	c := &fakeAppCoClient{listResult: upstream}
+	s := NewAppCoSource(c, annReader, discardLogger(), time.Minute)
+	_ = s.Refresh(context.Background())
+	apps, _ := s.List(context.Background())
+	if apps[0].ReferenceBlueprint {
+		t.Fatalf("expected ReferenceBlueprint=false, got true")
+	}
+}
+
+func TestAppCoSource_Refresh_SurvivesPerChartAnnotationError(t *testing.T) {
+	upstream := []source_collection.CatalogApp{
+		{ID: "good", LatestVersion: "1.0.0", ChartRef: "oci://x/charts/good:1.0.0"},
+		{ID: "bad", LatestVersion: "1.0.0", ChartRef: "oci://x/charts/bad:1.0.0"},
+	}
+	annReader := &fakeAppcoAnnotationReader{
+		annotations: map[string]map[string]string{
+			"oci://x/charts/good:1.0.0": {"ai.suse.com/role": "reference-blueprint"},
+		},
+		errs: map[string]error{
+			"oci://x/charts/bad:1.0.0": stderrors.New("annotation fetch failed"),
+		},
+	}
+	c := &fakeAppCoClient{listResult: upstream}
+	s := NewAppCoSource(c, annReader, discardLogger(), time.Minute)
+	if err := s.Refresh(context.Background()); err != nil {
+		t.Fatalf("Refresh should not fail on per-chart errors: %v", err)
+	}
+	apps, _ := s.List(context.Background())
+	if len(apps) != 2 {
+		t.Fatalf("expected 2 apps, got %d", len(apps))
+	}
+	for _, a := range apps {
+		if a.ID == "suse.good:1.0.0" && !a.ReferenceBlueprint {
+			t.Errorf("good app: expected ReferenceBlueprint=true")
+		}
+		if a.ID == "suse.bad:1.0.0" && a.ReferenceBlueprint {
+			t.Errorf("bad app: expected ReferenceBlueprint=false")
+		}
+	}
+}
+
+func TestAppCoSource_Refresh_ShortCircuitsOnNotConfigured(t *testing.T) {
+	upstream := []source_collection.CatalogApp{
+		{ID: "a", LatestVersion: "1.0", ChartRef: "oci://x/charts/a:1.0"},
+		{ID: "b", LatestVersion: "1.0", ChartRef: "oci://x/charts/b:1.0"},
+	}
+	annReader := &fakeAppcoAnnotationReader{
+		errs: map[string]error{
+			"oci://x/charts/a:1.0": source_collection.ErrNotConfigured,
+			"oci://x/charts/b:1.0": source_collection.ErrNotConfigured,
+		},
+	}
+	c := &fakeAppCoClient{listResult: upstream}
+	s := NewAppCoSource(c, annReader, discardLogger(), time.Minute)
+	if err := s.Refresh(context.Background()); err != nil {
+		t.Fatalf("Refresh should not fail on ErrNotConfigured: %v", err)
+	}
+	apps, _ := s.List(context.Background())
+	for _, a := range apps {
+		if a.ReferenceBlueprint {
+			t.Errorf("%s: expected ReferenceBlueprint=false when not configured", a.ID)
+		}
 	}
 }
 

@@ -2,12 +2,14 @@ package apps
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/SUSE/aif/pkg/source_collection"
+	"golang.org/x/sync/errgroup"
 )
 
 // AppCoSource is the apps.Source adapter for the SUSE Application
@@ -25,6 +27,7 @@ import (
 // pkg/source_collection, per the Option B hexagonal contract.
 type AppCoSource struct {
 	client          source_collection.Client
+	annReader       source_collection.AnnotationReader
 	logger          *slog.Logger
 	refreshInterval time.Duration
 
@@ -35,9 +38,10 @@ type AppCoSource struct {
 
 // NewAppCoSource constructs the adapter. refreshInterval is the
 // initial per-Source ticker cadence; UpdateSettings can override it.
-func NewAppCoSource(c source_collection.Client, logger *slog.Logger, refreshInterval time.Duration) *AppCoSource {
+func NewAppCoSource(c source_collection.Client, ar source_collection.AnnotationReader, logger *slog.Logger, refreshInterval time.Duration) *AppCoSource {
 	return &AppCoSource{
 		client:          c,
+		annReader:       ar,
 		logger:          logger,
 		refreshInterval: refreshInterval,
 	}
@@ -65,6 +69,7 @@ func (a *AppCoSource) Refresh(ctx context.Context) error {
 		return err
 	}
 	apps := translateCatalogApps(upstream)
+	a.enrichWithAnnotations(ctx, apps)
 	a.mu.Lock()
 	a.cache = apps
 	a.status = SourceStatus{
@@ -168,4 +173,54 @@ func parseAppCoChartRef(u source_collection.CatalogApp) ChartRef {
 	suffix := "/" + u.ID + ":" + u.LatestVersion
 	repo := strings.TrimSuffix(u.ChartRef, suffix)
 	return ChartRef{Repo: repo, Chart: u.ID, Version: u.LatestVersion}
+}
+
+// enrichWithAnnotations populates ReferenceBlueprint, DisplayName,
+// Description, and UseCase on each app from the AnnotationReader. Bounded
+// parallelism (limit 8); per-chart failures log a warn and leave the app
+// at ReferenceBlueprint=false. ErrNotConfigured short-circuits the rest
+// of the fan-out via context cancel and emits a single warn.
+func (a *AppCoSource) enrichWithAnnotations(ctx context.Context, apps []App) {
+	if a.annReader == nil {
+		return
+	}
+	g, gctx := errgroup.WithContext(ctx)
+	g.SetLimit(8)
+	var notConfiguredOnce sync.Once
+	for i := range apps {
+		i := i
+		g.Go(func() error {
+			ann, err := a.annReader.ChartAnnotations(gctx, apps[i].ChartRef.Repo, apps[i].ChartRef.Chart, apps[i].Version)
+			if err != nil {
+				if errors.Is(err, source_collection.ErrNotConfigured) {
+					notConfiguredOnce.Do(func() {
+						if a.logger != nil {
+							a.logger.Warn("annotation reader not configured; reference-blueprint detection disabled this Refresh")
+						}
+					})
+					return context.Canceled
+				}
+				if a.logger != nil {
+					a.logger.Warn("source_collection annotations: per-chart fetch failed",
+						"repo", apps[i].ChartRef.Repo, "chart", apps[i].ChartRef.Chart, "version", apps[i].Version, "error", err)
+				}
+				return nil
+			}
+			if ann == nil {
+				return nil
+			}
+			apps[i].ReferenceBlueprint = ann["ai.suse.com/role"] == "reference-blueprint"
+			if v, ok := ann["ai.suse.com/display-name"]; ok {
+				apps[i].DisplayName = v
+			}
+			if v, ok := ann["ai.suse.com/description"]; ok {
+				apps[i].Description = v
+			}
+			if v, ok := ann["ai.suse.com/use-case"]; ok {
+				apps[i].UseCase = v
+			}
+			return nil
+		})
+	}
+	_ = g.Wait()
 }
