@@ -24,6 +24,9 @@ type FakeRepository struct {
 	ListErr         error
 	UpdateErr       error
 	UpdateStatusErr error
+	CreateErr       error
+	WithdrawErr     error
+	ListWrappedErr  error
 }
 
 // NewFakeRepository returns an empty FakeRepository.
@@ -90,5 +93,48 @@ func (f *FakeRepository) UpdateStatus(_ context.Context, bp *aifv1.Blueprint) er
 		return apierrors.NewNotFound(schema.GroupResource{Group: "ai.suse.com", Resource: "blueprints"}, bp.Name)
 	}
 	existing.Status = *bp.Status.DeepCopy()
+	return nil
+}
+
+func (f *FakeRepository) ListWrapped(_ context.Context) ([]Blueprint, error) {
+	if f.ListWrappedErr != nil {
+		return nil, f.ListWrappedErr
+	}
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	var out []Blueprint
+	for _, bp := range f.items {
+		if bp.Labels != nil && bp.Labels["ai.suse.com/blueprint-source"] == "wraps-vendor-chart" {
+			out = append(out, FromCR(bp))
+		}
+	}
+	return out, nil
+}
+
+func (f *FakeRepository) Create(_ context.Context, b Blueprint) (bool, error) {
+	if f.CreateErr != nil {
+		return false, f.CreateErr
+	}
+	cr := ToWrappedCR(b)
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if _, exists := f.items[cr.Name]; exists {
+		return false, nil
+	}
+	f.items[cr.Name] = cr
+	return true, nil
+}
+
+func (f *FakeRepository) Withdraw(_ context.Context, name string) error {
+	if f.WithdrawErr != nil {
+		return f.WithdrawErr
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	bp, ok := f.items[name]
+	if !ok {
+		return apierrors.NewNotFound(schema.GroupResource{Group: "ai.suse.com", Resource: "blueprints"}, name)
+	}
+	bp.Status.Phase = aifv1.BlueprintPhaseWithdrawn
 	return nil
 }
