@@ -45,7 +45,10 @@ test('P6-1 product registration exposes flat navigation', () => {
   assert.match(source, /inStore:\s*'aif'/);
   assert.match(source, /isMultiClusterApp:\s*true/);
   assert.match(source, /showClusterSwitcher:\s*false/);
-  assert.match(source, /basicType\(\[\s*PAGE_IDS\.OVERVIEW/);
+
+  // Pin complete navigation order per P6-1-refactor acceptance criteria
+  assert.match(source, /basicType\(\[\s*PAGE_IDS\.OVERVIEW,\s*PAGE_IDS\.APPS,\s*PAGE_IDS\.BLUEPRINTS,\s*PAGE_IDS\.BUNDLES,\s*PAGE_IDS\.PENDING_REVIEWS,\s*PAGE_IDS\.WORKLOADS,\s*PAGE_IDS\.SETTINGS\s*\]\)/);
+
   assert.match(source, /basicType\(\[CRD_TYPES\.BUNDLE,\s*CRD_TYPES\.BLUEPRINT,\s*CRD_TYPES\.WORKLOAD,\s*CRD_TYPES\.SETTINGS\]\)/);
   assert.match(source, /configureType\(CRD_TYPES\.BUNDLE,\s*\{[^}]*isRemovable:\s*true/s);
   assert.match(source, /configureType\(CRD_TYPES\.BLUEPRINT,\s*\{[^}]*isCreatable:\s*false/s);
