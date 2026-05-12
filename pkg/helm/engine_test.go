@@ -284,3 +284,29 @@ func TestRollback_RunnerError_Wrapped(t *testing.T) {
 		t.Errorf("expected wrapped 'boom', got %v", err)
 	}
 }
+
+func TestRollback_NotFound_ReturnsErrReleaseNotFound(t *testing.T) {
+	fr := &fakeRunner{rollbackErr: driver.ErrReleaseNotFound}
+	e := newTestEngine(t, fr)
+
+	err := e.Rollback(context.Background(), "ns", "missing", 1)
+	if !errors.Is(err, ErrReleaseNotFound) {
+		t.Fatalf("expected ErrReleaseNotFound, got %v", err)
+	}
+}
+
+func TestInstallChartFromRepo_PullFailure_PreservesUnderlyingError(t *testing.T) {
+	underlying := errors.New("network down")
+	fr := &fakeRunner{pullErr: underlying}
+	e := newTestEngine(t, fr)
+
+	_, err := e.InstallChartFromRepo(context.Background(), InstallRequest{
+		Namespace: "ns", ReleaseName: "ext", ChartRef: "oci://x/y:1",
+	})
+	if !errors.Is(err, ErrPullFailed) {
+		t.Errorf("expected ErrPullFailed in chain, got %v", err)
+	}
+	if !errors.Is(err, underlying) {
+		t.Errorf("expected underlying error preserved in chain, got %v", err)
+	}
+}

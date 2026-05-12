@@ -46,7 +46,11 @@ func (e *engine) InstallChartFromRepo(ctx context.Context, req InstallRequest) (
 
 	chartPath, err := e.runner.Pull(ctx, cfg, req.ChartRef, e.chartDir)
 	if err != nil {
-		return ReleaseStatus{}, fmt.Errorf("%w: %s: %v", ErrPullFailed, req.ChartRef, err)
+		// errors.Join keeps both sentinels reachable via errors.Is: callers can
+		// branch on ErrPullFailed (the package contract) AND on the underlying
+		// cause (e.g. transport-level errors). fmt.Errorf only supports one %w
+		// per format, so Join is the idiomatic way to expose both.
+		return ReleaseStatus{}, errors.Join(ErrPullFailed, fmt.Errorf("ref %s: %w", req.ChartRef, err))
 	}
 	defer func() { _ = os.RemoveAll(chartPath) }()
 
@@ -128,12 +132,17 @@ func (e *engine) Status(ctx context.Context, namespace, releaseName string) (Rel
 }
 
 // Rollback rolls back to a specific revision (per §4.4 Recovery procedure).
+// Returns ErrReleaseNotFound if the release does not exist (matches Status /
+// History so callers can branch uniformly via errors.Is).
 func (e *engine) Rollback(ctx context.Context, namespace, releaseName string, revision int) error {
 	cfg, err := e.cfgFactory(namespace)
 	if err != nil {
 		return fmt.Errorf("failed to create action config: %w", err)
 	}
 	if err := e.runner.Rollback(ctx, cfg, releaseName, revision); err != nil {
+		if errors.Is(err, driver.ErrReleaseNotFound) {
+			return ErrReleaseNotFound
+		}
 		return fmt.Errorf("helm rollback failed: %w", err)
 	}
 	return nil
