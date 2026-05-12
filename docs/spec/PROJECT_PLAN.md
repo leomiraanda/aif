@@ -1487,6 +1487,29 @@ go test -race ./pkg/helm/ -v
 >    test coverage, but the primary AC says "Engine interface fully
 >    implemented" — interpreted strictly, all six methods got real envtest
 >    happy-path coverage in `engine_envtest_test.go`.
+>
+> 5. **Public `Engine` interface exceeds the ≤4-method ISP rule.** `Engine`
+>    has six methods (`InstallChartFromRepo`, `Uninstall`, `Status`,
+>    `Rollback`, `History`, `UpdateSettings`); CLAUDE.md "Interface size
+>    (ISP)" targets ≤4 and instructs splitting by role at five. P4-1's AC
+>    explicitly preserved `interface.go` byte-identical to `main`, so the
+>    split was out of scope here. Recorded for a future story (suggested
+>    shape: `Lifecycler` (Install/Uninstall) + `Inspector` (Status/History)
+>    + `Recoverer` (Rollback) + `Configurer` (UpdateSettings)). Splitting
+>    is a breaking change to `internal/controller/installaiextension_controller.go`
+>    and `internal/manager/setup.go` — schedule before P5-7 Settings wiring
+>    so the Configurer port can absorb the credential push.
+>
+> 6. **`pkg/helm` missing the external-integration verification trio.**
+>    CLAUDE.md "How to Add a New External Integration" requires
+>    `example_test.go` + `live_test.go` (build tag `live`) + Makefile
+>    `verify-X-mock` / `verify-X-live` targets. `pkg/source_collection`
+>    and `pkg/nvidia` ship the trio; `pkg/helm` predates the rule and
+>    currently substitutes `engine_envtest_test.go` for in-process
+>    verification. Live OCI pulls (Pull is the only method envtest cannot
+>    reach a real upstream for) are unverified end-to-end. Track adding
+>    the trio when P5-7 wires real registry credentials, since the live
+>    target needs an authenticated OCI endpoint.
 
 ---
 
