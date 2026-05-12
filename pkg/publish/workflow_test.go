@@ -49,13 +49,35 @@ func draftBundle(ns, name string) *aifv1.Bundle {
 	}
 }
 
+// changesRequestedBundle returns a Bundle in ChangesRequested phase with both Submission and Review set,
+// since ChangesRequested implies a prior submission that was reviewed.
 func changesRequestedBundle(ns, name string) *aifv1.Bundle {
 	b := draftBundle(ns, name)
 	b.Status.Phase = aifv1.BundlePhaseChangesRequested
+	b.Status.Submission = &aifv1.SubmissionStatus{
+		ProposedVersion:    "1.0.0",
+		ChangeDescription:  "initial release",
+		SubmittedBy:        "alice",
+		SubmittedAt:        metav1.Now(),
+		GenerationAtSubmit: b.Generation,
+	}
 	b.Status.Review = &aifv1.ReviewStatus{
 		ReviewerComment: "needs work",
 		ReviewedBy:      "reviewer",
 		ReviewedAt:      metav1.Now(),
+	}
+	return b
+}
+
+func submittedBundle(ns, name string) *aifv1.Bundle {
+	b := draftBundle(ns, name)
+	b.Status.Phase = aifv1.BundlePhaseSubmitted
+	b.Status.Submission = &aifv1.SubmissionStatus{
+		ProposedVersion:    "1.0.0",
+		ChangeDescription:  "initial release",
+		SubmittedBy:        "alice",
+		SubmittedAt:        metav1.Now(),
+		GenerationAtSubmit: b.Generation,
 	}
 	return b
 }
@@ -194,12 +216,89 @@ func TestSubmit_ConflictOnUpdate_ReturnsPublishConflict(t *testing.T) {
 	assert.Empty(t, rec.Events, "no event should be recorded on conflict")
 }
 
-// Keep the other ErrNotImplemented tests for methods not yet implemented.
-func TestWorkflow_Withdraw_ReturnsErrNotImplemented(t *testing.T) {
-	wf, _ := newTestWorkflow(bundle.NewFakeRepository())
-	_, err := wf.Withdraw(context.Background(), "ns", "name", "user")
-	assert.True(t, errors.Is(err, ErrNotImplemented))
+func TestWithdraw_SubmittedToDraft(t *testing.T) {
+	repo := bundle.NewFakeRepository()
+	repo.Seed(submittedBundle("ns", "my-bundle"))
+	wf, rec := newTestWorkflow(repo)
+
+	got, err := wf.Withdraw(context.Background(), "ns", "my-bundle", "alice")
+
+	require.NoError(t, err)
+	assert.Equal(t, aifv1.BundlePhaseDraft, got.Phase)
+	assert.Nil(t, got.Submission, "submission should be cleared")
+	assert.Nil(t, got.Review, "review should be cleared")
+
+	require.Len(t, rec.Events, 1)
+	assert.Contains(t, rec.Events[0], "BundleWithdrawn:ns/my-bundle:alice")
 }
+
+func TestWithdraw_ChangesRequestedToDraft(t *testing.T) {
+	repo := bundle.NewFakeRepository()
+	repo.Seed(changesRequestedBundle("ns", "my-bundle"))
+	wf, rec := newTestWorkflow(repo)
+
+	got, err := wf.Withdraw(context.Background(), "ns", "my-bundle", "bob")
+
+	require.NoError(t, err)
+	assert.Equal(t, aifv1.BundlePhaseDraft, got.Phase)
+	assert.Nil(t, got.Submission)
+	assert.Nil(t, got.Review)
+
+	require.Len(t, rec.Events, 1)
+	assert.Contains(t, rec.Events[0], "BundleWithdrawn:ns/my-bundle:bob")
+}
+
+func TestWithdraw_DraftReturnsInvalidTransition(t *testing.T) {
+	repo := bundle.NewFakeRepository()
+	repo.Seed(draftBundle("ns", "my-bundle"))
+	wf, rec := newTestWorkflow(repo)
+
+	_, err := wf.Withdraw(context.Background(), "ns", "my-bundle", "alice")
+
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrInvalidTransition))
+	assert.Empty(t, rec.Events, "no event should be recorded on failed withdraw")
+}
+
+func TestWithdraw_BundleNotFound(t *testing.T) {
+	repo := bundle.NewFakeRepository()
+	wf, _ := newTestWorkflow(repo)
+
+	_, err := wf.Withdraw(context.Background(), "ns", "missing", "alice")
+
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrBundleNotFound))
+}
+
+func TestWithdraw_ConflictOnUpdate(t *testing.T) {
+	repo := bundle.NewFakeRepository()
+	repo.Seed(submittedBundle("ns", "my-bundle"))
+	repo.UpdateStatusErr = apierrors.NewConflict(
+		schema.GroupResource{Group: "ai.suse.com", Resource: "bundles"},
+		"my-bundle",
+		errors.New("resourceVersion changed"),
+	)
+	wf, rec := newTestWorkflow(repo)
+
+	_, err := wf.Withdraw(context.Background(), "ns", "my-bundle", "alice")
+
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrPublishConflict))
+	assert.Empty(t, rec.Events, "no event should be recorded on conflict")
+}
+
+func TestWithdraw_UserRequired(t *testing.T) {
+	repo := bundle.NewFakeRepository()
+	repo.Seed(submittedBundle("ns", "my-bundle"))
+	wf, _ := newTestWorkflow(repo)
+
+	_, err := wf.Withdraw(context.Background(), "ns", "my-bundle", "")
+
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrUserRequired), "got: %v", err)
+}
+
+// Keep the other ErrNotImplemented tests for methods not yet implemented.
 
 func TestWorkflow_RequestChanges_ReturnsErrNotImplemented(t *testing.T) {
 	wf, _ := newTestWorkflow(bundle.NewFakeRepository())

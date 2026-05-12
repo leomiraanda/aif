@@ -61,6 +61,39 @@ func testDraftBundle(ns, name string) *aifv1.Bundle {
 	}
 }
 
+func testSubmittedBundle(ns, name string) *aifv1.Bundle {
+	b := testDraftBundle(ns, name)
+	b.Status.Phase = aifv1.BundlePhaseSubmitted
+	b.Status.Submission = &aifv1.SubmissionStatus{
+		ProposedVersion:    "1.0.0",
+		ChangeDescription:  "initial release",
+		SubmittedBy:        "alice",
+		SubmittedAt:        metav1.Now(),
+		GenerationAtSubmit: b.Generation,
+	}
+	return b
+}
+
+// testChangesRequestedBundle returns a Bundle in ChangesRequested phase with both Submission and Review set,
+// since ChangesRequested implies a prior submission that was reviewed.
+func testChangesRequestedBundle(ns, name string) *aifv1.Bundle {
+	b := testDraftBundle(ns, name)
+	b.Status.Phase = aifv1.BundlePhaseChangesRequested
+	b.Status.Submission = &aifv1.SubmissionStatus{
+		ProposedVersion:    "1.0.0",
+		ChangeDescription:  "initial release",
+		SubmittedBy:        "alice",
+		SubmittedAt:        metav1.Now(),
+		GenerationAtSubmit: b.Generation,
+	}
+	b.Status.Review = &aifv1.ReviewStatus{
+		ReviewerComment: "needs work",
+		ReviewedBy:      "reviewer",
+		ReviewedAt:      metav1.Now(),
+	}
+	return b
+}
+
 func TestSubmitHandler_DraftToSubmitted(t *testing.T) {
 	mux, _ := setupPublishTest(testDraftBundle("ns", "my-bundle"))
 
@@ -76,7 +109,11 @@ func TestSubmitHandler_DraftToSubmitted(t *testing.T) {
 
 	var resp map[string]any
 	require.NoError(t, json.NewDecoder(w.Body).Decode(&resp))
+	assert.Equal(t, "ns", resp["namespace"])
+	assert.Equal(t, "my-bundle", resp["name"])
 	assert.Equal(t, "Submitted", resp["phase"])
+	assert.Equal(t, "Test", resp["title"])
+	assert.NotNil(t, resp["submission"])
 }
 
 func TestSubmitHandler_ChangesRequestedToSubmitted(t *testing.T) {
@@ -247,6 +284,149 @@ func TestSubmitHandler_RepositoryError_Returns500(t *testing.T) {
 	body := `{"proposedVersion":"1.0.0"}`
 	req := httptest.NewRequest("POST", "/api/v1/bundles/ns/my-bundle/submit", bytes.NewBufferString(body))
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Impersonate-User", "alice")
+
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusInternalServerError, w.Code)
+}
+
+func TestWithdrawHandler_SubmittedToDraft_200(t *testing.T) {
+	mux, _ := setupPublishTest(testSubmittedBundle("ns", "my-bundle"))
+
+	req := httptest.NewRequest("POST", "/api/v1/bundles/ns/my-bundle/withdraw", nil)
+	req.Header.Set("Impersonate-User", "alice")
+
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	var resp map[string]any
+	require.NoError(t, json.NewDecoder(w.Body).Decode(&resp))
+	assert.Equal(t, "ns", resp["namespace"])
+	assert.Equal(t, "my-bundle", resp["name"])
+	assert.Equal(t, "Draft", resp["phase"])
+	assert.Equal(t, "Test", resp["title"])
+	assert.Nil(t, resp["submission"], "submission should be absent after withdraw")
+	assert.Nil(t, resp["review"], "review should be absent after withdraw")
+}
+
+func TestWithdrawHandler_ChangesRequestedToDraft_200(t *testing.T) {
+	mux, _ := setupPublishTest(testChangesRequestedBundle("ns", "my-bundle"))
+
+	req := httptest.NewRequest("POST", "/api/v1/bundles/ns/my-bundle/withdraw", nil)
+	req.Header.Set("Impersonate-User", "alice")
+
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	var resp map[string]any
+	require.NoError(t, json.NewDecoder(w.Body).Decode(&resp))
+	assert.Equal(t, "ns", resp["namespace"])
+	assert.Equal(t, "my-bundle", resp["name"])
+	assert.Equal(t, "Draft", resp["phase"])
+	assert.Nil(t, resp["submission"], "submission should be absent after withdraw")
+	assert.Nil(t, resp["review"], "review should be absent after withdraw")
+}
+
+func TestWithdrawHandler_DraftPhase_Returns409(t *testing.T) {
+	mux, _ := setupPublishTest(testDraftBundle("ns", "my-bundle"))
+
+	req := httptest.NewRequest("POST", "/api/v1/bundles/ns/my-bundle/withdraw", nil)
+	req.Header.Set("Impersonate-User", "alice")
+
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusConflict, w.Code)
+
+	var apiErr APIError
+	require.NoError(t, json.NewDecoder(w.Body).Decode(&apiErr))
+	assert.Equal(t, ErrCodeInvalidTransition, apiErr.Code)
+}
+
+func TestWithdrawHandler_NotFound_Returns404(t *testing.T) {
+	mux, _ := setupPublishTest()
+
+	req := httptest.NewRequest("POST", "/api/v1/bundles/ns/missing/withdraw", nil)
+	req.Header.Set("Impersonate-User", "alice")
+
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusNotFound, w.Code)
+}
+
+func TestWithdrawHandler_NoUser_Returns403(t *testing.T) {
+	mux, _ := setupPublishTest(testSubmittedBundle("ns", "my-bundle"))
+
+	req := httptest.NewRequest("POST", "/api/v1/bundles/ns/my-bundle/withdraw", nil)
+	// No Impersonate-User header
+
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusForbidden, w.Code)
+}
+
+func TestWithdrawHandler_ConflictOnUpdate_Returns409(t *testing.T) {
+	repo := bundle.NewFakeRepository()
+	repo.Seed(testSubmittedBundle("ns", "my-bundle"))
+	repo.UpdateStatusErr = apierrors.NewConflict(
+		schema.GroupResource{Group: "ai.suse.com", Resource: "bundles"},
+		"my-bundle",
+		errors.New("resourceVersion changed"),
+	)
+
+	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+	wf := publish.New(publish.Deps{
+		Bundles:    repo,
+		Blueprints: blueprint.NewFakeRepository(),
+		Authz:      publish.AllowAllAuthorizer{},
+		Recorder:   &publish.FakeEventRecorder{},
+		Logger:     logger,
+	})
+
+	handler := NewPublishHandler(wf, logger)
+	mux := http.NewServeMux()
+	handler.Register(mux)
+
+	req := httptest.NewRequest("POST", "/api/v1/bundles/ns/my-bundle/withdraw", nil)
+	req.Header.Set("Impersonate-User", "alice")
+
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusConflict, w.Code)
+
+	var apiErr APIError
+	require.NoError(t, json.NewDecoder(w.Body).Decode(&apiErr))
+	assert.Equal(t, ErrCodePublishConflict, apiErr.Code)
+}
+
+func TestWithdrawHandler_RepositoryError_Returns500(t *testing.T) {
+	repo := bundle.NewFakeRepository()
+	repo.Seed(testSubmittedBundle("ns", "my-bundle"))
+	repo.UpdateStatusErr = errors.New("etcd timeout")
+
+	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+	wf := publish.New(publish.Deps{
+		Bundles:    repo,
+		Blueprints: blueprint.NewFakeRepository(),
+		Authz:      publish.AllowAllAuthorizer{},
+		Recorder:   &publish.FakeEventRecorder{},
+		Logger:     logger,
+	})
+
+	handler := NewPublishHandler(wf, logger)
+	mux := http.NewServeMux()
+	handler.Register(mux)
+
+	req := httptest.NewRequest("POST", "/api/v1/bundles/ns/my-bundle/withdraw", nil)
 	req.Header.Set("Impersonate-User", "alice")
 
 	w := httptest.NewRecorder()
