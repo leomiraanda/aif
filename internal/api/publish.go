@@ -7,6 +7,8 @@ import (
 	"log/slog"
 	"net/http"
 
+	aifv1 "github.com/SUSE/aif/api/v1alpha1"
+	"github.com/SUSE/aif/pkg/bundle"
 	"github.com/SUSE/aif/pkg/publish"
 )
 
@@ -31,17 +33,32 @@ type submitRequest struct {
 	ChangeDescription string `json:"changeDescription"`
 }
 
-type submitResponse struct {
-	Phase             string `json:"phase"`
-	ProposedVersion   string `json:"proposedVersion"`
-	ChangeDescription string `json:"changeDescription,omitempty"`
-	SubmittedBy       string `json:"submittedBy"`
+type bundleResponse struct {
+	Namespace         string                       `json:"namespace"`
+	Name              string                       `json:"name"`
+	Phase             string                       `json:"phase"`
+	Title             string                       `json:"title"`
+	TargetBlueprint   string                       `json:"targetBlueprint"`
+	UseCase           string                       `json:"useCase"`
+	Components        []aifv1.ComponentRef          `json:"components"`
+	Submission        *aifv1.SubmissionStatus       `json:"submission,omitempty"`
+	Review            *aifv1.ReviewStatus           `json:"review,omitempty"`
+	PublishedVersions []aifv1.PublishedVersionRef   `json:"publishedVersions,omitempty"`
 }
 
-type withdrawResponse struct {
-	Namespace string `json:"namespace"`
-	Name      string `json:"name"`
-	Phase     string `json:"phase"`
+func newBundleResponse(b bundle.Bundle) bundleResponse {
+	return bundleResponse{
+		Namespace:         b.Namespace,
+		Name:              b.Name,
+		Phase:             string(b.Phase),
+		Title:             b.Title,
+		TargetBlueprint:   b.TargetBlueprint,
+		UseCase:           b.UseCase,
+		Components:        b.Components,
+		Submission:        b.Submission,
+		Review:            b.Review,
+		PublishedVersions: b.PublishedVersions,
+	}
 }
 
 func (h *PublishHandler) submit(w http.ResponseWriter, r *http.Request) {
@@ -75,21 +92,11 @@ func (h *PublishHandler) submit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if result.Submission == nil {
-		writeError(w, http.StatusInternalServerError, ErrInternal)
-		return
-	}
-
 	LoggerFromContext(r.Context()).Info("bundle submitted",
 		"namespace", ns, "name", name,
 		"proposedVersion", body.ProposedVersion, "submittedBy", user)
 
-	writeJSON(w, http.StatusOK, submitResponse{
-		Phase:             string(result.Phase),
-		ProposedVersion:   result.Submission.ProposedVersion,
-		ChangeDescription: result.Submission.ChangeDescription,
-		SubmittedBy:       result.Submission.SubmittedBy,
-	})
+	writeJSON(w, http.StatusOK, newBundleResponse(result))
 }
 
 // mapPublishErr translates a pkg/publish domain sentinel into the corresponding
@@ -143,11 +150,7 @@ func (h *PublishHandler) withdraw(w http.ResponseWriter, r *http.Request) {
 	LoggerFromContext(r.Context()).Info("bundle withdrawn",
 		"namespace", ns, "name", name, "withdrawnBy", user)
 
-	writeJSON(w, http.StatusOK, withdrawResponse{
-		Namespace: result.Namespace,
-		Name:      result.Name,
-		Phase:     string(result.Phase),
-	})
+	writeJSON(w, http.StatusOK, newBundleResponse(result))
 }
 
 func (h *PublishHandler) approve(w http.ResponseWriter, r *http.Request) {

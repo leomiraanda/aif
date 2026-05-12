@@ -109,7 +109,11 @@ func TestSubmitHandler_DraftToSubmitted(t *testing.T) {
 
 	var resp map[string]any
 	require.NoError(t, json.NewDecoder(w.Body).Decode(&resp))
+	assert.Equal(t, "ns", resp["namespace"])
+	assert.Equal(t, "my-bundle", resp["name"])
 	assert.Equal(t, "Submitted", resp["phase"])
+	assert.Equal(t, "Test", resp["title"])
+	assert.NotNil(t, resp["submission"])
 }
 
 func TestSubmitHandler_ChangesRequestedToSubmitted(t *testing.T) {
@@ -304,6 +308,9 @@ func TestWithdrawHandler_SubmittedToDraft_200(t *testing.T) {
 	assert.Equal(t, "ns", resp["namespace"])
 	assert.Equal(t, "my-bundle", resp["name"])
 	assert.Equal(t, "Draft", resp["phase"])
+	assert.Equal(t, "Test", resp["title"])
+	assert.Nil(t, resp["submission"], "submission should be absent after withdraw")
+	assert.Nil(t, resp["review"], "review should be absent after withdraw")
 }
 
 func TestWithdrawHandler_ChangesRequestedToDraft_200(t *testing.T) {
@@ -322,6 +329,8 @@ func TestWithdrawHandler_ChangesRequestedToDraft_200(t *testing.T) {
 	assert.Equal(t, "ns", resp["namespace"])
 	assert.Equal(t, "my-bundle", resp["name"])
 	assert.Equal(t, "Draft", resp["phase"])
+	assert.Nil(t, resp["submission"], "submission should be absent after withdraw")
+	assert.Nil(t, resp["review"], "review should be absent after withdraw")
 }
 
 func TestWithdrawHandler_DraftPhase_Returns409(t *testing.T) {
