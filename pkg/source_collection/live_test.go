@@ -6,12 +6,17 @@
 // (or `make verify-appco-live`).
 //
 // Required env vars — these are *distinct* from the SUSE Registry creds
-// used by pkg/nvidia's live test, even though customers often reuse the
-// same value (per ARCHITECTURE.md §13.2: credentials live under
-// `Settings.spec.applicationCollection.{user, token}`, separate from
-// `Settings.suseRegistry.{user, token}`):
-//   SUSE_APPCO_USER   — SUSE Application Collection username
-//   SUSE_APPCO_TOKEN  — SUSE Application Collection access token
+// used by pkg/nvidia's live test (per ARCHITECTURE.md §13.2: credentials
+// live under `Settings.spec.applicationCollection.{user, token}`, separate
+// from `Settings.suseRegistry.{user, token}`):
+//   SUSE_APPCO_USER     — SUSE Application Collection username
+//   SUSE_APPCO_TOKEN    — SUSE Application Collection access token
+//
+// Optional:
+//   SUSE_APPCO_API_URL  — overrides the production default
+//                         (https://api.apps.rancher.io)
+//   SUSE_APPCO_OCI_HOST — when set, also exercises the AnnotationReader
+//                         against the OCI host
 package source_collection
 
 import (
@@ -38,10 +43,14 @@ func TestLive_ListsCatalog_FromApplicationCollection(t *testing.T) {
 		t.Skip("SUSE_APPCO_USER and SUSE_APPCO_TOKEN must both be set for live test")
 	}
 
+	apiURL := os.Getenv("SUSE_APPCO_API_URL")
+	if apiURL == "" {
+		apiURL = "https://api.apps.rancher.io"
+	}
+
 	c, ar := NewClient(silentLogger())
-	// Empty APIURL → effectiveSettings() applies the production default
-	// (https://api.apps.rancher.io). Same Basic-auth flow as production.
 	c.UpdateSettings(EngineSettings{
+		APIURL:   apiURL,
 		Username: user,
 		Token:    token,
 		OCIHost:  os.Getenv("SUSE_APPCO_OCI_HOST"), // optional; empty → ChartAnnotations returns ErrNotConfigured (skipped below)
