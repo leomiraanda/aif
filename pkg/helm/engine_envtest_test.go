@@ -135,22 +135,28 @@ func TestEngine_HappyPath_Envtest(t *testing.T) {
 }
 
 // localChartRunner overrides Pull to copy a local chart directory into a
-// fresh temp subdir under destDir (so the engine's defer cleanup — whether
-// os.Remove or os.RemoveAll, see Task 13 — never touches the testdata
-// source). Every other runner method delegates to realRunner.
+// fresh per-pull subdir under destDir, then returns a path *inside* that
+// subdir so the engine's defer (os.RemoveAll(filepath.Dir(chartPath)))
+// cleans the subdir without touching siblings or the testdata source.
+// Every other runner method delegates to realRunner.
 type localChartRunner struct {
 	realRunner
 	srcChart string
 }
 
 func (r *localChartRunner) Pull(_ context.Context, _ *action.Configuration, _, destDir string) (string, error) {
-	dst, err := os.MkdirTemp(destDir, "chart-")
+	pullDir, err := os.MkdirTemp(destDir, "chart-")
 	if err != nil {
 		return "", err
 	}
-	if err := os.CopyFS(dst, os.DirFS(r.srcChart)); err != nil {
-		_ = os.RemoveAll(dst)
+	chartCopy := filepath.Join(pullDir, "chart")
+	if err := os.MkdirAll(chartCopy, 0o755); err != nil {
+		_ = os.RemoveAll(pullDir)
 		return "", err
 	}
-	return dst, nil
+	if err := os.CopyFS(chartCopy, os.DirFS(r.srcChart)); err != nil {
+		_ = os.RemoveAll(pullDir)
+		return "", err
+	}
+	return chartCopy, nil
 }

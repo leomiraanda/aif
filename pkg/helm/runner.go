@@ -2,6 +2,9 @@ package helm
 
 import (
 	"context"
+	"fmt"
+	"os"
+	"path/filepath"
 	"time"
 
 	"helm.sh/helm/v3/pkg/action"
@@ -122,6 +125,17 @@ func (realRunner) Exists(_ context.Context, cfg *action.Configuration, name stri
 	return len(releases) > 0, nil
 }
 
+// Pull writes the chart .tgz into a per-pull subdirectory of destDir and
+// returns the path to the .tgz. Two contracts to know:
+//
+//   - action.Pull.Run returns a status message string, NOT the .tgz path.
+//     Callers must locate the file inside DestDir themselves.
+//   - DestDir is shared across pulls if the engine is reused; without a
+//     per-pull subdir, two concurrent pulls of the same chart ref would
+//     race on the same <chart>-<version>.tgz path.
+//
+// The engine cleans up via os.RemoveAll(filepath.Dir(returnedPath)), which
+// removes the per-pull subdir.
 func (realRunner) Pull(_ context.Context, cfg *action.Configuration, ref, destDir string) (string, error) {
 	regClient, err := registry.NewClient()
 	if err != nil {
@@ -129,8 +143,27 @@ func (realRunner) Pull(_ context.Context, cfg *action.Configuration, ref, destDi
 	}
 	cfg.RegistryClient = regClient
 
+	pullDir, err := os.MkdirTemp(destDir, "chart-")
+	if err != nil {
+		return "", fmt.Errorf("create pull tempdir: %w", err)
+	}
+
 	pull := action.NewPullWithOpts(action.WithConfig(cfg))
 	pull.Settings = cli.New()
-	pull.DestDir = destDir
-	return pull.Run(ref)
+	pull.DestDir = pullDir
+	if _, err := pull.Run(ref); err != nil {
+		_ = os.RemoveAll(pullDir)
+		return "", err
+	}
+
+	matches, err := filepath.Glob(filepath.Join(pullDir, "*.tgz"))
+	if err != nil {
+		_ = os.RemoveAll(pullDir)
+		return "", fmt.Errorf("glob pulled chart: %w", err)
+	}
+	if len(matches) == 0 {
+		_ = os.RemoveAll(pullDir)
+		return "", fmt.Errorf("pulled chart .tgz not found in %s", pullDir)
+	}
+	return matches[0], nil
 }

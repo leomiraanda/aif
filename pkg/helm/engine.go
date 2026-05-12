@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"sort"
 	"time"
 
@@ -51,7 +52,10 @@ func (e *engine) InstallChartFromRepo(ctx context.Context, req InstallRequest) (
 		// per format, so Join is the idiomatic way to expose both.
 		return ReleaseStatus{}, errors.Join(ErrPullFailed, fmt.Errorf("ref %s: %w", req.ChartRef, err))
 	}
-	defer func() { _ = os.RemoveAll(chartPath) }()
+	// Pull's contract (per realRunner.Pull godoc) is "returned path lives
+	// inside a per-pull subdir of e.chartDir"; remove the parent so the
+	// subdir doesn't leak alongside the .tgz.
+	defer func() { _ = os.RemoveAll(filepath.Dir(chartPath)) }()
 
 	ch, err := loader.Load(chartPath)
 	if err != nil {
