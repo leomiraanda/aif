@@ -1,4 +1,3 @@
-// pkg/helm/helm_test.go
 package helm
 
 import (
@@ -38,7 +37,13 @@ func TestEngine_UpdateSettings_Race(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			for j := 0; j < iters; j++ {
-				_ = e.snapshot()
+				// Mirrors the documented sole-reader pattern on engine.mu:
+				// acquire RLock, snapshot the value, release. P5-7 will
+				// add the first production reader (Pull credential lookup)
+				// using the same shape.
+				e.mu.RLock()
+				_ = e.settings
+				e.mu.RUnlock()
 			}
 		}()
 	}

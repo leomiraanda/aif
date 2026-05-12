@@ -1,4 +1,3 @@
-// pkg/helm/errors.go
 package helm
 
 import "errors"

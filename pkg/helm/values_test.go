@@ -1,4 +1,3 @@
-// pkg/helm/values_test.go
 package helm
 
 import (

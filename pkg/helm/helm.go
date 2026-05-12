@@ -1,4 +1,3 @@
-// pkg/helm/helm.go
 package helm
 
 import (
@@ -23,6 +22,11 @@ type engine struct {
 	chartDir   string
 	cfgFactory func(namespace string) (*action.Configuration, error)
 
+	// mu guards settings per §8.2.1. UpdateSettings is the SOLE writer.
+	// Future readers (P5-7 will add the first production caller during
+	// Pull credential wiring) MUST acquire mu.RLock() once at method
+	// entry, copy the struct out, and use the copy for the rest of the
+	// call — never hold the lock across SDK calls.
 	mu       sync.RWMutex
 	settings EngineSettings
 }
@@ -67,17 +71,3 @@ func New(logger *slog.Logger, config *rest.Config, opts ...Option) Engine {
 	return e
 }
 
-// snapshot returns the current settings under a read lock. Callers MUST
-// invoke this once at method entry and use the returned struct for the
-// remainder of the call; never hold the lock across SDK calls.
-//
-// Currently exercised only by helm_test.go's -race test; P5-7 will add the
-// production callers that read EngineSettings during pullChart() to wire
-// OCI registry auth.
-//
-//nolint:unused // reserved for P5-7 (Settings reconciler integration)
-func (e *engine) snapshot() EngineSettings {
-	e.mu.RLock()
-	defer e.mu.RUnlock()
-	return e.settings
-}

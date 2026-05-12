@@ -1,4 +1,3 @@
-// pkg/helm/values.go
 package helm
 
 import "log/slog"
