@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"io"
 	"net/http"
 	"strings"
 
@@ -110,15 +109,7 @@ func (c *apiClient) getOCIBytes(ctx context.Context, s EngineSettings, url strin
 	switch resp.StatusCode {
 	case http.StatusOK:
 		const maxBlobSize = 16 << 20
-		lr := &io.LimitedReader{R: resp.Body, N: maxBlobSize + 1}
-		buf, err := io.ReadAll(lr)
-		if err != nil {
-			return nil, fmt.Errorf("read body: %w", err)
-		}
-		if int64(len(buf)) > maxBlobSize {
-			return nil, fmt.Errorf("blob exceeds %d-byte limit", maxBlobSize)
-		}
-		return buf, nil
+		return helm_oci.ReadAllLimited(resp.Body, maxBlobSize)
 	case http.StatusNotFound:
 		return nil, fmt.Errorf("%w: HTTP %d", ErrChartNotFound, resp.StatusCode)
 	case http.StatusUnauthorized, http.StatusForbidden:

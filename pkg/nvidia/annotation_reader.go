@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"io"
 	"net/http"
 
 	"github.com/SUSE/aif/pkg/helm_oci"
@@ -112,21 +111,9 @@ func (d *discoveryImpl) fetchBytes(ctx context.Context, c *registryClient, path 
 		return nil, fmt.Errorf("%w: %s", ErrUnexpectedResponse, resp.Status)
 	}
 	const maxBlobSize = 16 << 20 // 16 MiB; Helm charts are tiny
-	return readAllLimited(resp.Body, maxBlobSize)
-}
-
-// readAllLimited reads up to limit+1 bytes from r and returns
-// ErrUnexpectedResponse if the stream is larger than limit. Charts are
-// sub-MiB in practice; the cap is a defense against a malicious or
-// misconfigured registry returning multi-GiB blobs.
-func readAllLimited(r io.Reader, limit int64) ([]byte, error) {
-	lr := &io.LimitedReader{R: r, N: limit + 1}
-	buf, err := io.ReadAll(lr)
+	buf, err := helm_oci.ReadAllLimited(resp.Body, maxBlobSize)
 	if err != nil {
-		return nil, fmt.Errorf("%w: read body: %v", ErrUnexpectedResponse, err)
-	}
-	if int64(len(buf)) > limit {
-		return nil, fmt.Errorf("%w: blob exceeds %d-byte limit", ErrUnexpectedResponse, limit)
+		return nil, fmt.Errorf("%w: %v", ErrUnexpectedResponse, err)
 	}
 	return buf, nil
 }

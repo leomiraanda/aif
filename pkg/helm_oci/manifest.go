@@ -28,7 +28,7 @@ type ociLayer struct {
 func FindChartLayerDigest(manifest []byte) (string, error) {
 	var m ociManifest
 	if err := json.Unmarshal(manifest, &m); err != nil {
-		return "", fmt.Errorf("%w: %v", ErrManifestMalformed, err)
+		return "", fmt.Errorf("%w: %w", ErrManifestMalformed, err)
 	}
 	for _, layer := range m.Layers {
 		if layer.MediaType == chartContentMediaType {
