@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"sort"
 	"time"
 
 	"helm.sh/helm/v3/pkg/action"
@@ -109,15 +110,62 @@ func (e *engine) Uninstall(ctx context.Context, namespace, releaseName string) e
 	return nil
 }
 
-// Status, Rollback, History — stubs replaced in Task 7.
+// Status returns the current Helm release status. Returns
+// ErrReleaseNotFound if the release does not exist.
 func (e *engine) Status(ctx context.Context, namespace, releaseName string) (ReleaseStatus, error) {
-	return ReleaseStatus{}, errors.New("not implemented")
+	cfg, err := e.cfgFactory(namespace)
+	if err != nil {
+		return ReleaseStatus{}, fmt.Errorf("failed to create action config: %w", err)
+	}
+	rel, err := e.runner.Get(ctx, cfg, releaseName)
+	if err != nil {
+		if errors.Is(err, driver.ErrReleaseNotFound) {
+			return ReleaseStatus{}, ErrReleaseNotFound
+		}
+		return ReleaseStatus{}, fmt.Errorf("helm get failed: %w", err)
+	}
+	return toReleaseStatus(rel), nil
 }
+
+// Rollback rolls back to a specific revision (per §4.4 Recovery procedure).
 func (e *engine) Rollback(ctx context.Context, namespace, releaseName string, revision int) error {
-	return errors.New("not implemented")
+	cfg, err := e.cfgFactory(namespace)
+	if err != nil {
+		return fmt.Errorf("failed to create action config: %w", err)
+	}
+	if err := e.runner.Rollback(ctx, cfg, releaseName, revision); err != nil {
+		return fmt.Errorf("helm rollback failed: %w", err)
+	}
+	return nil
 }
+
+// History returns release revision history sorted newest-first.
 func (e *engine) History(ctx context.Context, namespace, releaseName string) ([]RevisionInfo, error) {
-	return nil, errors.New("not implemented")
+	cfg, err := e.cfgFactory(namespace)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create action config: %w", err)
+	}
+	rels, err := e.runner.History(ctx, cfg, releaseName)
+	if err != nil {
+		if errors.Is(err, driver.ErrReleaseNotFound) {
+			return nil, ErrReleaseNotFound
+		}
+		return nil, fmt.Errorf("helm history failed: %w", err)
+	}
+	out := make([]RevisionInfo, 0, len(rels))
+	for _, r := range rels {
+		if r == nil || r.Info == nil {
+			continue
+		}
+		out = append(out, RevisionInfo{
+			Revision:    r.Version,
+			Updated:     r.Info.LastDeployed.Time,
+			Status:      r.Info.Status.String(),
+			Description: r.Info.Description,
+		})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Updated.After(out[j].Updated) })
+	return out, nil
 }
 
 // UpdateSettings is the SOLE writer of e.settings per §8.2.1. Takes a write

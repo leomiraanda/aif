@@ -7,7 +7,9 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"sort"
 	"testing"
+	"time"
 
 	"helm.sh/helm/v3/pkg/action"
 	helmrelease "helm.sh/helm/v3/pkg/release"
@@ -204,5 +206,81 @@ func TestUninstall_OtherError_Wrapped(t *testing.T) {
 	err := e.Uninstall(context.Background(), "ns", "x")
 	if err == nil || !errors.Is(err, fr.uninstallErr) {
 		t.Fatalf("expected wrapped 'kaboom' error, got %v", err)
+	}
+}
+
+func TestStatus_Found_TranslatesRelease(t *testing.T) {
+	fr := &fakeRunner{getRel: testRelease("ext", 7)}
+	e := newTestEngine(t, fr)
+
+	got, err := e.Status(context.Background(), "ns", "ext")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.Revision != 7 {
+		t.Errorf("expected revision 7, got %d", got.Revision)
+	}
+	if got.Status != "deployed" {
+		t.Errorf("expected status 'deployed', got %q", got.Status)
+	}
+}
+
+func TestStatus_NotFound_ReturnsErrReleaseNotFound(t *testing.T) {
+	fr := &fakeRunner{getErr: driver.ErrReleaseNotFound}
+	e := newTestEngine(t, fr)
+
+	_, err := e.Status(context.Background(), "ns", "missing")
+	if !errors.Is(err, ErrReleaseNotFound) {
+		t.Fatalf("expected ErrReleaseNotFound, got %v", err)
+	}
+}
+
+func TestHistory_SortsNewestFirst(t *testing.T) {
+	old := testRelease("ext", 1)
+	old.Info.LastDeployed = helmtime.Time{Time: time.Now().Add(-time.Hour)}
+	mid := testRelease("ext", 2)
+	mid.Info.LastDeployed = helmtime.Time{Time: time.Now().Add(-time.Minute)}
+	newest := testRelease("ext", 3) // helmtime.Now() inside testRelease
+
+	fr := &fakeRunner{historyRels: []*helmrelease.Release{old, mid, newest}}
+	e := newTestEngine(t, fr)
+
+	got, err := e.History(context.Background(), "ns", "ext")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(got) != 3 {
+		t.Fatalf("expected 3 revisions, got %d", len(got))
+	}
+	if !sort.SliceIsSorted(got, func(i, j int) bool { return got[i].Updated.After(got[j].Updated) }) {
+		t.Errorf("history not sorted newest-first: %+v", got)
+	}
+	if got[0].Revision != 3 {
+		t.Errorf("expected newest revision 3 first, got %d", got[0].Revision)
+	}
+}
+
+func TestRollback_PassesRevisionToRunner(t *testing.T) {
+	fr := &fakeRunner{}
+	e := newTestEngine(t, fr)
+
+	if err := e.Rollback(context.Background(), "ns", "ext", 5); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got := fr.calls; len(got) != 1 || got[0] != "Rollback" {
+		t.Errorf("expected one Rollback call, got %v", got)
+	}
+}
+
+func TestRollback_RunnerError_Wrapped(t *testing.T) {
+	fr := &fakeRunner{rollbackErr: errors.New("boom")}
+	e := newTestEngine(t, fr)
+
+	err := e.Rollback(context.Background(), "ns", "ext", 1)
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !errors.Is(err, fr.rollbackErr) {
+		t.Errorf("expected wrapped 'boom', got %v", err)
 	}
 }
