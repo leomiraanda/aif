@@ -82,12 +82,12 @@ func (c *apiClient) headOCIManifest(ctx context.Context, s EngineSettings, url s
 		return "", fmt.Errorf("%w: %v", ErrUpstreamUnavailable, err)
 	}
 	defer func() { _ = resp.Body.Close() }()
-	switch {
-	case resp.StatusCode == http.StatusOK:
+	switch resp.StatusCode {
+	case http.StatusOK:
 		return resp.Header.Get("Docker-Content-Digest"), nil
-	case resp.StatusCode == http.StatusNotFound:
+	case http.StatusNotFound:
 		return "", fmt.Errorf("%w: HTTP %d", ErrChartNotFound, resp.StatusCode)
-	case resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden:
+	case http.StatusUnauthorized, http.StatusForbidden:
 		return "", fmt.Errorf("%w: HTTP %d", ErrAuthFailed, resp.StatusCode)
 	default:
 		return "", fmt.Errorf("unexpected HTTP %d", resp.StatusCode)
@@ -107,8 +107,8 @@ func (c *apiClient) getOCIBytes(ctx context.Context, s EngineSettings, url strin
 		return nil, fmt.Errorf("%w: %v", ErrUpstreamUnavailable, err)
 	}
 	defer func() { _ = resp.Body.Close() }()
-	switch {
-	case resp.StatusCode == http.StatusOK:
+	switch resp.StatusCode {
+	case http.StatusOK:
 		const maxBlobSize = 16 << 20
 		lr := &io.LimitedReader{R: resp.Body, N: maxBlobSize + 1}
 		buf, err := io.ReadAll(lr)
@@ -119,9 +119,9 @@ func (c *apiClient) getOCIBytes(ctx context.Context, s EngineSettings, url strin
 			return nil, fmt.Errorf("blob exceeds %d-byte limit", maxBlobSize)
 		}
 		return buf, nil
-	case resp.StatusCode == http.StatusNotFound:
+	case http.StatusNotFound:
 		return nil, fmt.Errorf("%w: HTTP %d", ErrChartNotFound, resp.StatusCode)
-	case resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden:
+	case http.StatusUnauthorized, http.StatusForbidden:
 		return nil, fmt.Errorf("%w: HTTP %d", ErrAuthFailed, resp.StatusCode)
 	default:
 		return nil, fmt.Errorf("unexpected HTTP %d", resp.StatusCode)
