@@ -2,6 +2,7 @@ package apps
 
 import (
 	"context"
+	"errors"
 	stderrors "errors"
 	"io"
 	"log/slog"
@@ -59,6 +60,24 @@ func (f *fakeNVIDIADiscovery) UpdateSettings(s nvidia.EngineSettings) {
 	f.settingsCalls = append(f.settingsCalls, s)
 }
 
+type fakeNvidiaAnnotationReader struct {
+	mu          sync.Mutex
+	calls       []string
+	annotations map[string]map[string]string // key: "<chart>:<version>"
+	errs        map[string]error
+}
+
+func (f *fakeNvidiaAnnotationReader) ChartAnnotations(_ context.Context, chart, version string) (map[string]string, error) {
+	key := chart + ":" + version
+	f.mu.Lock()
+	f.calls = append(f.calls, key)
+	f.mu.Unlock()
+	if err, ok := f.errs[key]; ok {
+		return nil, err
+	}
+	return f.annotations[key], nil
+}
+
 func discardLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }
@@ -87,7 +106,7 @@ func sampleNIMEntries() []nvidia.NIMEntry {
 // --- Behavior: Name ---
 
 func TestNVIDIASource_Name_IsNvidia(t *testing.T) {
-	s := NewNVIDIASource(&fakeNVIDIADiscovery{}, discardLogger(), 10*time.Minute)
+	s := NewNVIDIASource(&fakeNVIDIADiscovery{}, &fakeNvidiaAnnotationReader{}, discardLogger(), 10*time.Minute)
 	if got := s.Name(); got != "nvidia" {
 		t.Errorf("Name() = %q, want %q", got, "nvidia")
 	}
@@ -97,7 +116,7 @@ func TestNVIDIASource_Name_IsNvidia(t *testing.T) {
 
 func TestNVIDIASource_RefreshThenList_ReturnsNamespacedApps(t *testing.T) {
 	d := &fakeNVIDIADiscovery{indexResult: sampleNIMEntries()}
-	s := NewNVIDIASource(d, discardLogger(), 10*time.Minute)
+	s := NewNVIDIASource(d, &fakeNvidiaAnnotationReader{}, discardLogger(), 10*time.Minute)
 
 	if err := s.Refresh(context.Background()); err != nil {
 		t.Fatalf("Refresh failed: %v", err)
@@ -161,7 +180,7 @@ func TestNVIDIASource_RefreshThenList_ReturnsNamespacedApps(t *testing.T) {
 // --- Behavior: List before Refresh returns empty (not error) ---
 
 func TestNVIDIASource_ListBeforeRefresh_ReturnsEmpty(t *testing.T) {
-	s := NewNVIDIASource(&fakeNVIDIADiscovery{}, discardLogger(), 10*time.Minute)
+	s := NewNVIDIASource(&fakeNVIDIADiscovery{}, &fakeNvidiaAnnotationReader{}, discardLogger(), 10*time.Minute)
 	apps, err := s.List(context.Background())
 	if err != nil {
 		t.Fatalf("List failed: %v", err)
@@ -175,7 +194,7 @@ func TestNVIDIASource_ListBeforeRefresh_ReturnsEmpty(t *testing.T) {
 
 func TestNVIDIASource_RefreshFailure_LeavesPriorCacheIntact(t *testing.T) {
 	d := &fakeNVIDIADiscovery{indexResult: sampleNIMEntries()}
-	s := NewNVIDIASource(d, discardLogger(), 10*time.Minute)
+	s := NewNVIDIASource(d, &fakeNvidiaAnnotationReader{}, discardLogger(), 10*time.Minute)
 
 	// First Refresh succeeds.
 	if err := s.Refresh(context.Background()); err != nil {
@@ -207,7 +226,7 @@ func TestNVIDIASource_RefreshFailure_LeavesPriorCacheIntact(t *testing.T) {
 
 func TestNVIDIASource_Refresh_UpdatesStatus(t *testing.T) {
 	d := &fakeNVIDIADiscovery{indexResult: sampleNIMEntries()}
-	s := NewNVIDIASource(d, discardLogger(), 10*time.Minute)
+	s := NewNVIDIASource(d, &fakeNvidiaAnnotationReader{}, discardLogger(), 10*time.Minute)
 
 	before := time.Now()
 	if err := s.Refresh(context.Background()); err != nil {
@@ -241,7 +260,7 @@ func TestNVIDIASource_Refresh_UpdatesStatus(t *testing.T) {
 
 func TestNVIDIASource_UpdateSettings_ForwardsRegistrySliceToEngine(t *testing.T) {
 	d := &fakeNVIDIADiscovery{}
-	s := NewNVIDIASource(d, discardLogger(), 10*time.Minute)
+	s := NewNVIDIASource(d, &fakeNvidiaAnnotationReader{}, discardLogger(), 10*time.Minute)
 
 	s.UpdateSettings(EngineSettings{
 		SUSERegistry: RegistrySettings{
@@ -283,7 +302,7 @@ var _ Lifecycle = (*NVIDIASource)(nil)
 
 func TestNVIDIASource_Start_TickerTriggersRefresh(t *testing.T) {
 	d := &fakeNVIDIADiscovery{indexResult: sampleNIMEntries()}
-	s := NewNVIDIASource(d, discardLogger(), 5*time.Millisecond)
+	s := NewNVIDIASource(d, &fakeNvidiaAnnotationReader{}, discardLogger(), 5*time.Millisecond)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	s.Start(ctx)
@@ -321,5 +340,122 @@ func TestNVIDIASource_Start_TickerTriggersRefresh(t *testing.T) {
 	d.mu.Unlock()
 	if stillAfter > afterCancel {
 		t.Errorf("ticker continued after ctx cancel: %d → %d", afterCancel, stillAfter)
+	}
+}
+
+func TestNVIDIASource_Refresh_PopulatesReferenceBlueprintAndOverrides(t *testing.T) {
+	disc := &fakeNVIDIADiscovery{
+		indexResult: []nvidia.NIMEntry{
+			{ID: "nim-llm:1.0.0", Chart: "nim-llm", Version: "1.0.0", DisplayName: "nim-llm",
+				Type: nvidia.TypeLLM, ChartRef: "oci://example/ai/charts/nvidia/nim-llm:1.0.0"},
+		},
+	}
+	annReader := &fakeNvidiaAnnotationReader{
+		annotations: map[string]map[string]string{
+			"nim-llm:1.0.0": {
+				"ai.suse.com/role":         "reference-blueprint",
+				"ai.suse.com/display-name": "Pretty NIM",
+				"ai.suse.com/description":  "Pretty description",
+				"ai.suse.com/use-case":     "rag",
+			},
+		},
+	}
+	src := NewNVIDIASource(disc, annReader, discardLogger(), time.Minute)
+	if err := src.Refresh(context.Background()); err != nil {
+		t.Fatalf("Refresh: %v", err)
+	}
+	apps, _ := src.List(context.Background())
+	if len(apps) != 1 {
+		t.Fatalf("expected 1 app, got %d", len(apps))
+	}
+	a := apps[0]
+	if !a.ReferenceBlueprint {
+		t.Errorf("ReferenceBlueprint: got false, want true")
+	}
+	if a.DisplayName != "Pretty NIM" {
+		t.Errorf("DisplayName: got %q, want %q", a.DisplayName, "Pretty NIM")
+	}
+	if a.Description != "Pretty description" {
+		t.Errorf("Description: got %q", a.Description)
+	}
+	if a.UseCase != "rag" {
+		t.Errorf("UseCase: got %q, want rag", a.UseCase)
+	}
+}
+
+func TestNVIDIASource_Refresh_LeavesReferenceBlueprintFalse_WhenNoAnnotation(t *testing.T) {
+	disc := &fakeNVIDIADiscovery{
+		indexResult: []nvidia.NIMEntry{
+			{ID: "nim-llm:1.0.0", Chart: "nim-llm", Version: "1.0.0",
+				ChartRef: "oci://example/ai/charts/nvidia/nim-llm:1.0.0"},
+		},
+	}
+	annReader := &fakeNvidiaAnnotationReader{annotations: nil}
+	src := NewNVIDIASource(disc, annReader, discardLogger(), time.Minute)
+	_ = src.Refresh(context.Background())
+
+	apps, _ := src.List(context.Background())
+	if apps[0].ReferenceBlueprint {
+		t.Fatalf("expected ReferenceBlueprint=false, got true")
+	}
+}
+
+func TestNVIDIASource_Refresh_SurvivesPerChartAnnotationError(t *testing.T) {
+	disc := &fakeNVIDIADiscovery{
+		indexResult: []nvidia.NIMEntry{
+			{ID: "good:1.0.0", Chart: "good", Version: "1.0.0",
+				ChartRef: "oci://example/ai/charts/nvidia/good:1.0.0"},
+			{ID: "bad:1.0.0", Chart: "bad", Version: "1.0.0",
+				ChartRef: "oci://example/ai/charts/nvidia/bad:1.0.0"},
+		},
+	}
+	annReader := &fakeNvidiaAnnotationReader{
+		annotations: map[string]map[string]string{
+			"good:1.0.0": {"ai.suse.com/role": "reference-blueprint"},
+		},
+		errs: map[string]error{
+			"bad:1.0.0": errors.New("annotation fetch failed"),
+		},
+	}
+	src := NewNVIDIASource(disc, annReader, discardLogger(), time.Minute)
+	if err := src.Refresh(context.Background()); err != nil {
+		t.Fatalf("Refresh should not fail on per-chart errors: %v", err)
+	}
+	apps, _ := src.List(context.Background())
+	if len(apps) != 2 {
+		t.Fatalf("expected 2 apps, got %d", len(apps))
+	}
+	for _, a := range apps {
+		if a.ID == "nvidia.good:1.0.0" && !a.ReferenceBlueprint {
+			t.Errorf("good app: expected ReferenceBlueprint=true")
+		}
+		if a.ID == "nvidia.bad:1.0.0" && a.ReferenceBlueprint {
+			t.Errorf("bad app: expected ReferenceBlueprint=false")
+		}
+	}
+}
+
+func TestNVIDIASource_Refresh_ShortCircuitsOnNotConfigured(t *testing.T) {
+	disc := &fakeNVIDIADiscovery{
+		indexResult: []nvidia.NIMEntry{
+			{ID: "a:1.0", Chart: "a", Version: "1.0", ChartRef: "oci://x/a:1.0"},
+			{ID: "b:1.0", Chart: "b", Version: "1.0", ChartRef: "oci://x/b:1.0"},
+		},
+	}
+	annReader := &fakeNvidiaAnnotationReader{
+		errs: map[string]error{
+			"a:1.0": nvidia.ErrNotConfigured,
+			"b:1.0": nvidia.ErrNotConfigured,
+		},
+	}
+	src := NewNVIDIASource(disc, annReader, discardLogger(), time.Minute)
+	if err := src.Refresh(context.Background()); err != nil {
+		t.Fatalf("Refresh should not fail on ErrNotConfigured: %v", err)
+	}
+	apps, _ := src.List(context.Background())
+	for _, a := range apps {
+		if a.ReferenceBlueprint {
+			t.Errorf("%s: expected ReferenceBlueprint=false when not configured", a.ID)
+		}
 	}
 }

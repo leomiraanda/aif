@@ -29,6 +29,7 @@ type App struct {
 	ChartRef           ChartRef `json:"chartRef"`
 	ProjectURL         string   `json:"projectURL"`
 	ReferenceBlueprint bool     `json:"referenceBlueprint"` // populated by P2-5; false by default
+	UseCase            string   `json:"useCase,omitempty"`  // populated from ai.suse.com/use-case (consumed by P2-7)
 }
 
 // ChartRef matches ARCHITECTURE.md §5: {repo, chart, version}.
@@ -40,8 +41,9 @@ type ChartRef struct {
 
 // ListOpts carries filters for Catalog.List. Empty fields mean no filter.
 type ListOpts struct {
-	Source   string // "" = all; otherwise must match App.Source
-	Category string // "" = all; otherwise exact match against App.Categories
+	Source                   string // "" = all; otherwise must match App.Source
+	Category                 string // "" = all; otherwise exact match against App.Categories
+	IncludeReferenceBlueprints bool // when false (zero value), apps with ReferenceBlueprint=true are filtered out
 }
 
 // EngineSettings is the Catalog-level settings push pushed by

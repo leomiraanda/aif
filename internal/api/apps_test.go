@@ -48,6 +48,9 @@ func (f *fakeCatalog) List(_ context.Context, opts apps.ListOpts) ([]apps.App, e
 				continue
 			}
 		}
+		if !opts.IncludeReferenceBlueprints && a.ReferenceBlueprint {
+			continue
+		}
 		out = append(out, a)
 	}
 	return out, nil

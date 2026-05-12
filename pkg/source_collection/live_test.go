@@ -6,12 +6,17 @@
 // (or `make verify-appco-live`).
 //
 // Required env vars — these are *distinct* from the SUSE Registry creds
-// used by pkg/nvidia's live test, even though customers often reuse the
-// same value (per ARCHITECTURE.md §13.2: credentials live under
-// `Settings.spec.applicationCollection.{user, token}`, separate from
-// `Settings.suseRegistry.{user, token}`):
-//   SUSE_APPCO_USER   — SUSE Application Collection username
-//   SUSE_APPCO_TOKEN  — SUSE Application Collection access token
+// used by pkg/nvidia's live test (per ARCHITECTURE.md §13.2: credentials
+// live under `Settings.spec.applicationCollection.{user, token}`, separate
+// from `Settings.suseRegistry.{user, token}`):
+//   SUSE_APPCO_USER     — SUSE Application Collection username
+//   SUSE_APPCO_TOKEN    — SUSE Application Collection access token
+//
+// Optional:
+//   SUSE_APPCO_API_URL  — overrides the production default
+//                         (https://api.apps.rancher.io)
+//   SUSE_APPCO_OCI_HOST — when set, also exercises the AnnotationReader
+//                         against the OCI host
 package source_collection
 
 import (
@@ -19,6 +24,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"strings"
 	"testing"
 	"time"
 )
@@ -37,12 +43,17 @@ func TestLive_ListsCatalog_FromApplicationCollection(t *testing.T) {
 		t.Skip("SUSE_APPCO_USER and SUSE_APPCO_TOKEN must both be set for live test")
 	}
 
-	c := NewClient(silentLogger())
-	// Empty APIURL → effectiveSettings() applies the production default
-	// (https://api.apps.rancher.io). Same Basic-auth flow as production.
+	apiURL := os.Getenv("SUSE_APPCO_API_URL")
+	if apiURL == "" {
+		apiURL = "https://api.apps.rancher.io"
+	}
+
+	c, ar := NewClient(silentLogger())
 	c.UpdateSettings(EngineSettings{
+		APIURL:   apiURL,
 		Username: user,
 		Token:    token,
+		OCIHost:  os.Getenv("SUSE_APPCO_OCI_HOST"), // optional; empty → ChartAnnotations returns ErrNotConfigured (skipped below)
 	})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
@@ -61,6 +72,41 @@ func TestLive_ListsCatalog_FromApplicationCollection(t *testing.T) {
 	if len(apps) == 0 {
 		t.Log("note: zero apps came back — auth handshake still validated, but the upstream catalog may be empty under the configured filter.")
 	}
+
+	// Exercise the AnnotationReader handshake — pick the first chart (if any)
+	// and fetch its annotations. Gated on SUSE_APPCO_OCI_HOST being set,
+	// since OCI access is independent from the HTTP API auth above.
+	ociHost := os.Getenv("SUSE_APPCO_OCI_HOST")
+	if len(apps) > 0 && ociHost != "" {
+		first := apps[0]
+		repo, chart := splitAppCoChartRef(first.ChartRef, ociHost, first.LatestVersion)
+		if chart == "" {
+			t.Logf("could not parse chart ref %q against OCIHost %q; skipping annotation fetch", first.ChartRef, ociHost)
+		} else {
+			ann, err := ar.ChartAnnotations(ctx, repo, chart, first.LatestVersion)
+			if err != nil {
+				t.Fatalf("ChartAnnotations(%s/%s:%s): %v", repo, chart, first.LatestVersion, err)
+			}
+			t.Logf("annotations for %s/%s:%s = %v", repo, chart, first.LatestVersion, ann)
+		}
+	}
+}
+
+// splitAppCoChartRef parses an "oci://<host>/<repo>/<chart>:<version>"
+// reference relative to the configured OCIHost into (repo, chart). Best
+// effort — returns ("", "") if the ref doesn't match the expected shape.
+func splitAppCoChartRef(chartRef, ociHost, version string) (string, string) {
+	prefix := "oci://" + strings.TrimPrefix(strings.TrimPrefix(ociHost, "https://"), "http://") + "/"
+	rest := strings.TrimPrefix(chartRef, prefix)
+	if rest == chartRef {
+		return "", ""
+	}
+	rest = strings.TrimSuffix(rest, ":"+version)
+	idx := strings.LastIndex(rest, "/")
+	if idx < 0 {
+		return "", ""
+	}
+	return rest[:idx], rest[idx+1:]
 }
 
 func silentLogger() *slog.Logger {
