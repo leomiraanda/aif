@@ -1474,6 +1474,95 @@ curl -X POST http://localhost:8080/api/v1/bundles/default/my-rag/preflight | jq
 go test -race ./pkg/helm/ -v
 ```
 
+> **Follow-up (post-merge, P4-1):**
+>
+> 1. **`MergeValues` signature drift from §6.6.** Implementation uses
+>    `func MergeValues(in MergeInput) (map[string]any, error)` with a named-layer
+>    struct and error return, instead of the spec's
+>    `func MergeValues(layers ...map[string]any) map[string]any`. Required to
+>    satisfy two acceptance bullets the variadic signature cannot satisfy:
+>    layer-2/3-only forbidden-key drop (variadic loses layer identity) and
+>    `ErrMissingImageRepository` post-merge validation (variadic has no error
+>    return). `ARCHITECTURE.md` §6.6 should be updated to match.
+>
+> 2. **`serviceAccount.create` interpretation.** §6.6 lists
+>    `serviceAccount.create` under "Forbidden top-level keys" but the literal
+>    key is nested. Implementation drops the `create` sub-key only and leaves
+>    the rest of the `serviceAccount` map (e.g., `name`, `annotations`)
+>    intact. `ARCHITECTURE.md` §6.6 should clarify partial-drop semantics.
+>
+> 3. **`Pull` not exercised by envtest.** Envtest cannot reach an OCI
+>    registry. The production `pullChart()` path is covered only by unit tests
+>    against `fakeRunner`; the envtest substitutes a `localChartRunner` that
+>    copies `testdata/tiny-chart` per-Pull. A future `live_test.go` (build
+>    tag `live`) could exercise real OCI pulls; out of scope for P4-1.
+>
+> 4. **Status / Rollback / History got envtest coverage.** The "Done When"
+>    line of P4-1 enumerates only Install/Upgrade/Uninstall/MergeValues for
+>    test coverage, but the primary AC says "Engine interface fully
+>    implemented" — interpreted strictly, all six methods got real envtest
+>    happy-path coverage in `engine_envtest_test.go`.
+>
+> 5. **Public `Engine` interface exceeds the ≤4-method ISP rule.** `Engine`
+>    has six methods (`InstallChartFromRepo`, `Uninstall`, `Status`,
+>    `Rollback`, `History`, `UpdateSettings`); CLAUDE.md "Interface size
+>    (ISP)" targets ≤4 and instructs splitting by role at five. P4-1's AC
+>    explicitly preserved `interface.go` byte-identical to `main`, so the
+>    split was out of scope here. Recorded for a future story (suggested
+>    shape: `Lifecycler` (Install/Uninstall) + `Inspector` (Status/History)
+>    + `Recoverer` (Rollback) + `Configurer` (UpdateSettings)). Splitting
+>    is a breaking change to `internal/controller/installaiextension_controller.go`
+>    and `internal/manager/setup.go` — schedule before P5-7 Settings wiring
+>    so the Configurer port can absorb the credential push.
+>
+> 6. **`pkg/helm` verification trio — half shipped, `live_test.go` deferred.**
+>    CLAUDE.md "How to Add a New External Integration" requires
+>    `example_test.go` + `live_test.go` (build tag `live`) + Makefile
+>    `verify-X-mock` / `verify-X-live` targets. P4-1 ships the in-process
+>    half: `pkg/helm/example_test.go` (`Example_fakeEngineLifecycle`,
+>    deterministic `// Output:` block) plus the `verify-helm-mock`
+>    Makefile target. The `live_test.go` half is deferred to P5-7: Pull
+>    is the only upstream-touching method, and its OCI auth wires through
+>    `EngineSettings.UpdateSettings` — implementing `live_test.go` before
+>    P5-7 means stubbing credentials twice. `verify-helm-live` lands
+>    alongside the P5-7 Settings reconciler integration.
+>
+> 7. **Reviewer-flagged production concerns deferred to consuming stories.**
+>    A second-round reviewer raised five Helm-engine production-readiness
+>    concerns. Four are out of scope for P4-1 (engine ships the
+>    primitives; recovery / scale policies belong with the consumers) and
+>    are recorded here so they aren't lost:
+>    - **`MaxHistory` on install/upgrade** — Helm defaults to 10 revision
+>      Secrets per release. Adding the knob to `InstallRequest` is a
+>      P5-2 (Workload deployer) decision, since P5-2 owns the reconcile
+>      loop that creates revisions.
+>    - **`--atomic` on install/upgrade** — atomic mode prevents broken
+>      releases on failed upgrade. Recovery policy is P5-2's charter
+>      (`ARCHITECTURE.md §4.4` "Recovery procedure"); pre-deciding
+>      atomic-by-default in `pkg/helm` would constrain that design.
+>    - **Pending-install / pending-upgrade recovery** — engine already
+>      surfaces these via `Status` (returns `release.Status.String()`
+>      verbatim per §4.4); interpretation and cleanup are reconciler
+>      decisions and belong with P5-2.
+>    - **Chart pull caching** — content-addressed cache keyed by
+>      `ref+digest`. YAGNI today (pulls happen on spec change, not per
+>      reconcile); revisit when telemetry shows pull cost matters at
+>      fleet scale.
+>
+>    The fifth concern (per-release locking) is rejected as a misdiagnosis:
+>    controller-runtime's workqueue serializes reconciles per object and
+>    leader election prevents multi-instance races; Helm's storage uses
+>    k8s API server optimistic concurrency (409 on conflict, not
+>    corruption). No engine-level mutex needed.
+>
+>    The same review surfaced two real bugs that are fixed in this PR
+>    (not deferred): `realRunner.Pull` was returning `action.Pull.Run`'s
+>    status-message string instead of the `.tgz` path (latent because
+>    only `fakeRunner` and `localChartRunner` are exercised in tests),
+>    and concurrent pulls of the same ref raced on the same `.tgz` path
+>    inside the shared `chartDir`. Both are addressed by the per-pull
+>    `MkdirTemp` + `*.tgz` glob rewrite.
+
 ---
 
 **ID:** P4-2
