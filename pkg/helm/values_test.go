@@ -4,6 +4,7 @@ package helm
 import (
 	"bytes"
 	"context"
+	"errors"
 	"log/slog"
 	"reflect"
 	"testing"
@@ -235,3 +236,42 @@ func TestMergeValues_DropsForbiddenKeys_TrustedLayersUntouched(t *testing.T) {
 
 // _ silences the context import — added because the next task uses it.
 var _ = context.Background
+
+func TestMergeValues_RequiresImageRepository_Absent(t *testing.T) {
+	_, err := MergeValues(MergeInput{
+		ChartDefaults: map[string]any{"replicas": 3}, // no image
+	})
+	if !errors.Is(err, ErrMissingImageRepository) {
+		t.Fatalf("expected ErrMissingImageRepository, got %v", err)
+	}
+}
+
+func TestMergeValues_RequiresImageRepository_Empty(t *testing.T) {
+	_, err := MergeValues(MergeInput{
+		ChartDefaults: map[string]any{"image": map[string]any{"repository": ""}},
+	})
+	if !errors.Is(err, ErrMissingImageRepository) {
+		t.Fatalf("expected ErrMissingImageRepository, got %v", err)
+	}
+}
+
+func TestMergeValues_RequiresImageRepository_NotAMap(t *testing.T) {
+	_, err := MergeValues(MergeInput{
+		ChartDefaults: map[string]any{"image": "not-a-map"},
+	})
+	if !errors.Is(err, ErrMissingImageRepository) {
+		t.Fatalf("expected ErrMissingImageRepository when image is not a map, got %v", err)
+	}
+}
+
+func TestMergeValues_RequiresImageRepository_Present(t *testing.T) {
+	out, err := MergeValues(MergeInput{
+		ChartDefaults: map[string]any{"image": map[string]any{"repository": "registry.suse.com/x"}},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got := out["image"].(map[string]any)["repository"]; got != "registry.suse.com/x" {
+		t.Errorf("image.repository not preserved: %v", got)
+	}
+}

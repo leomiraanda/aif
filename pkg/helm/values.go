@@ -44,6 +44,10 @@ func MergeValues(in MergeInput) (map[string]any, error) {
 	out = mergeMap(out, bp)
 	out = mergeMap(out, wl)
 	out = mergeMap(out, deepCopyMap(in.NIMGenerated))
+
+	if err := validateMerged(out); err != nil {
+		return nil, err
+	}
 	return out, nil
 }
 
@@ -124,4 +128,18 @@ func deepCopyValue(v any) any {
 	default:
 		return v
 	}
+}
+
+// validateMerged enforces §6.6 "Required after merge". Currently checks only
+// image.repository non-empty; extend here when §6.6 grows new requirements.
+func validateMerged(merged map[string]any) error {
+	img, ok := merged["image"].(map[string]any)
+	if !ok {
+		return ErrMissingImageRepository
+	}
+	repo, _ := img["repository"].(string)
+	if repo == "" {
+		return ErrMissingImageRepository
+	}
+	return nil
 }
