@@ -91,6 +91,7 @@ func blueprintFromApp(a apps.App, name string) Blueprint {
 	if useCase == "" {
 		useCase = "other"
 	}
+	now := time.Now().UTC()
 
 	return Blueprint{
 		Name:    name,
@@ -99,7 +100,7 @@ func blueprintFromApp(a apps.App, name string) Blueprint {
 		UseCase: useCase,
 		ChangeDescription: fmt.Sprintf("Auto-wrapped from %s/%s:%s at %s",
 			a.ChartRef.Repo, a.ChartRef.Chart, a.ChartRef.Version,
-			time.Now().UTC().Format(time.RFC3339)),
+			now.Format(time.RFC3339)),
 		Source: Source{
 			Type: SourceTypeWrapsVendorChart,
 			Vendor: &VendorChartRef{
@@ -119,7 +120,7 @@ func blueprintFromApp(a apps.App, name string) Blueprint {
 			},
 		}},
 		PublishedBy: "aif-system",
-		PublishedAt: time.Now().UTC(),
+		PublishedAt: now,
 		Status:      Status{Phase: PhaseActive},
 	}
 }

@@ -2,6 +2,8 @@ package blueprint
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"testing"
@@ -15,8 +17,18 @@ type fakeCatalog struct {
 	err  error
 }
 
-func (c *fakeCatalog) List(_ context.Context, _ apps.ListOpts) ([]apps.App, error) {
-	return c.apps, c.err
+func (c *fakeCatalog) List(_ context.Context, opts apps.ListOpts) ([]apps.App, error) {
+	if c.err != nil {
+		return nil, c.err
+	}
+	var out []apps.App
+	for _, a := range c.apps {
+		if !opts.IncludeReferenceBlueprints && a.ReferenceBlueprint {
+			continue
+		}
+		out = append(out, a)
+	}
+	return out, nil
 }
 func (c *fakeCatalog) Get(_ context.Context, _ string) (apps.App, error) {
 	return apps.App{}, nil
@@ -259,5 +271,21 @@ func TestWrapper_AlreadyWithdrawn_NoEventReemit(t *testing.T) {
 
 	if len(emitter.withdrawn) != 0 {
 		t.Errorf("withdrawn events = %d, want 0 (already withdrawn)", len(emitter.withdrawn))
+	}
+}
+
+func TestWrapper_CatalogListError_Propagates(t *testing.T) {
+	store := NewFakeRepository()
+	emitter := &fakeEventEmitter{}
+	catalogErr := fmt.Errorf("upstream timeout")
+	catalog := &fakeCatalog{err: catalogErr}
+	w := NewWrapper(catalog, store, emitter, discardLogger())
+
+	err := w.WrapDetectedCharts(context.Background())
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !errors.Is(err, catalogErr) {
+		t.Errorf("error = %v, want wrapping of %v", err, catalogErr)
 	}
 }

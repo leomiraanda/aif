@@ -6,6 +6,7 @@ import (
 
 	aifv1 "github.com/SUSE/aif/api/v1alpha1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )
@@ -136,5 +137,10 @@ func (f *FakeRepository) Withdraw(_ context.Context, name string) error {
 		return apierrors.NewNotFound(schema.GroupResource{Group: "ai.suse.com", Resource: "blueprints"}, name)
 	}
 	bp.Status.Phase = aifv1.BlueprintPhaseWithdrawn
+	bp.Status.Deprecation = &aifv1.DeprecationStatus{
+		Reason:     "Vendor chart no longer present in catalog",
+		ActionedBy: "aif-system",
+		ActionedAt: metav1.Now(),
+	}
 	return nil
 }
