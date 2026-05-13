@@ -1,6 +1,9 @@
 package helm
 
-import "log/slog"
+import (
+	"log/slog"
+	"strings"
+)
 
 // MergeInput names the four input layers of §6.6 (layers 1-4). Layer 5
 // (ApplyImageRewrites) is P4-6. Layer 6 (operator-managed imagePullSecrets)
@@ -48,6 +51,24 @@ func MergeValues(in MergeInput) (map[string]any, error) {
 		return nil, err
 	}
 	return out, nil
+}
+
+// ApplyImageRewrites walks merged Helm values and rewrites image.repository
+// and image.registry fields per the configured prefix substitution rules.
+// Pure function: returns a new map; does NOT mutate input. Idempotent.
+// Safe to call when rules is nil or empty (returns a deep-copy unchanged).
+//
+// See ARCHITECTURE.md §6.6 for the full walk-rule and edge-case table; this
+// godoc summarises only the public contract. Implementation lives in two
+// helpers (walkImageRefs, applyImageRefRules) that are independently
+// testable.
+func ApplyImageRewrites(values map[string]any, rules []ImageRewriteRule) map[string]any {
+	out := deepCopyMap(values)
+	if len(rules) == 0 {
+		return out
+	}
+	walkImageRefs(out, func(s string) string { return applyImageRefRules(s, rules) })
+	return out
 }
 
 // dropForbiddenKeys removes the §6.6 forbidden top-level keys from layer
@@ -141,4 +162,80 @@ func validateMerged(merged map[string]any) error {
 		return ErrMissingImageRepository
 	}
 	return nil
+}
+
+// applyImageRefRules returns refStr with the first matching rule's Match
+// prefix replaced by the rule's Replace prefix. Rules are scanned in order;
+// first match wins; no chaining (the rewritten value is not re-scanned).
+// Returns refStr unchanged if no rule matches, refStr is empty, or rules
+// is empty. A rule with empty Match is skipped (would match everything).
+func applyImageRefRules(refStr string, rules []ImageRewriteRule) string {
+	if refStr == "" {
+		return refStr
+	}
+	for _, rule := range rules {
+		if rule.Match == "" {
+			continue
+		}
+		if strings.HasPrefix(refStr, rule.Match) {
+			return rule.Replace + refStr[len(rule.Match):]
+		}
+	}
+	return refStr
+}
+
+// maxWalkDepth bounds walkImageRefs recursion against pathological inputs
+// (per ARCHITECTURE.md §6.6 godoc — "Recursion depth limit: 16").
+const maxWalkDepth = 16
+
+// walkImageRefs walks values recursively (depth-capped at maxWalkDepth).
+// For every image-bearing field it finds, calls visit(refStr) and writes
+// back the returned replacement. Mutates the input tree IN PLACE — callers
+// MUST pass a deep copy if the input is shared.
+//
+// Image-bearing fields (per ARCHITECTURE.md §6.6 walk rules):
+//   - any key named "image" with a string value
+//   - any key named "image" with a map[string]any value: only the submap's
+//     "repository" and "registry" string sub-keys are visited; the image
+//     submap is otherwise treated as a leaf (sibling fields like "tag" or
+//     "pullPolicy" are preserved untouched)
+//   - non-string, non-map values for "image" are left alone (defensive
+//     against chart bugs that put an int / bool / nil there)
+//
+// Knows nothing about rules.
+func walkImageRefs(values map[string]any, visit func(string) string) {
+	walkValuesNode(values, visit, 0)
+}
+
+// walkValuesNode is the recursive worker. Accepts any so it can recurse
+// uniformly through maps and lists.
+func walkValuesNode(node any, visit func(string) string, depth int) {
+	if depth >= maxWalkDepth {
+		return
+	}
+	switch n := node.(type) {
+	case map[string]any:
+		for k, v := range n {
+			if k == "image" {
+				switch iv := v.(type) {
+				case string:
+					n[k] = visit(iv)
+				case map[string]any:
+					if repo, ok := iv["repository"].(string); ok {
+						iv["repository"] = visit(repo)
+					}
+					if reg, ok := iv["registry"].(string); ok {
+						iv["registry"] = visit(reg)
+					}
+				}
+				// Non-string, non-map image values: leave unchanged.
+				continue
+			}
+			walkValuesNode(v, visit, depth+1)
+		}
+	case []any:
+		for _, elem := range n {
+			walkValuesNode(elem, visit, depth+1)
+		}
+	}
 }

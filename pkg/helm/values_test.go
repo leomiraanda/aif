@@ -5,6 +5,8 @@ import (
 	"errors"
 	"log/slog"
 	"reflect"
+	"sort"
+	"strconv"
 	"testing"
 )
 
@@ -268,5 +270,473 @@ func TestMergeValues_RequiresImageRepository_Present(t *testing.T) {
 	}
 	if got := out["image"].(map[string]any)["repository"]; got != "registry.suse.com/x" {
 		t.Errorf("image.repository not preserved: %v", got)
+	}
+}
+
+func TestApplyImageRefRules_FirstMatchWins(t *testing.T) {
+	rules := []ImageRewriteRule{
+		{Match: "registry.suse.com/", Replace: "harbor.example.com/suse/"},
+		{Match: "registry.suse.com/ai/", Replace: "WRONG/"},
+	}
+	got := applyImageRefRules("registry.suse.com/ai/llm:1.0", rules)
+	want := "harbor.example.com/suse/ai/llm:1.0"
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestApplyImageRefRules_NoMatch_Unchanged(t *testing.T) {
+	rules := []ImageRewriteRule{{Match: "ghcr.io/", Replace: "harbor/"}}
+	got := applyImageRefRules("registry.suse.com/foo:1", rules)
+	if got != "registry.suse.com/foo:1" {
+		t.Errorf("expected unchanged, got %q", got)
+	}
+}
+
+func TestApplyImageRefRules_EmptyMatchSkipped(t *testing.T) {
+	rules := []ImageRewriteRule{
+		{Match: "", Replace: "ANYTHING"},
+		{Match: "x/", Replace: "y/"},
+	}
+	got := applyImageRefRules("x/foo", rules)
+	if got != "y/foo" {
+		t.Errorf("got %q, want y/foo", got)
+	}
+}
+
+func TestApplyImageRefRules_EmptyRefStr(t *testing.T) {
+	rules := []ImageRewriteRule{{Match: "x/", Replace: "y/"}}
+	if got := applyImageRefRules("", rules); got != "" {
+		t.Errorf("expected empty, got %q", got)
+	}
+}
+
+func TestApplyImageRefRules_NilRules(t *testing.T) {
+	if got := applyImageRefRules("foo", nil); got != "foo" {
+		t.Errorf("expected unchanged, got %q", got)
+	}
+}
+
+func TestWalkImageRefs_StringImage(t *testing.T) {
+	visited := []string{}
+	v := map[string]any{
+		"image": "registry.suse.com/foo:1",
+	}
+	walkImageRefs(v, func(s string) string {
+		visited = append(visited, s)
+		return s + "-rewritten"
+	})
+	if len(visited) != 1 || visited[0] != "registry.suse.com/foo:1" {
+		t.Errorf("expected one visit on the image string, got %v", visited)
+	}
+	if v["image"] != "registry.suse.com/foo:1-rewritten" {
+		t.Errorf("expected rewrite to be written back, got %v", v["image"])
+	}
+}
+
+func TestWalkImageRefs_MapImage(t *testing.T) {
+	visited := []string{}
+	v := map[string]any{
+		"image": map[string]any{
+			"repository": "r/foo",
+			"registry":   "g.example.com",
+			"tag":        "1.0",
+		},
+	}
+	walkImageRefs(v, func(s string) string {
+		visited = append(visited, s)
+		return s + "!"
+	})
+	sort.Strings(visited)
+	want := []string{"g.example.com", "r/foo"}
+	if !reflect.DeepEqual(visited, want) {
+		t.Errorf("expected visits %v, got %v", want, visited)
+	}
+	img := v["image"].(map[string]any)
+	if img["repository"] != "r/foo!" {
+		t.Errorf("repository not rewritten: %v", img["repository"])
+	}
+	if img["registry"] != "g.example.com!" {
+		t.Errorf("registry not rewritten: %v", img["registry"])
+	}
+	if img["tag"] != "1.0" {
+		t.Errorf("tag must not be visited or modified, got %v", img["tag"])
+	}
+}
+
+func TestWalkImageRefs_NestedInList(t *testing.T) {
+	visited := []string{}
+	v := map[string]any{
+		"sidecars": []any{
+			map[string]any{"name": "proxy", "image": "p/img:1"},
+			map[string]any{"name": "redis", "image": "r/img:2"},
+		},
+	}
+	walkImageRefs(v, func(s string) string {
+		visited = append(visited, s)
+		return "X"
+	})
+	sort.Strings(visited)
+	if len(visited) != 2 || visited[0] != "p/img:1" || visited[1] != "r/img:2" {
+		t.Errorf("expected p/img:1 and r/img:2 visited, got %v", visited)
+	}
+	sidecars := v["sidecars"].([]any)
+	for _, s := range sidecars {
+		if s.(map[string]any)["image"] != "X" {
+			t.Errorf("sidecar image not written back: %v", s)
+		}
+	}
+}
+
+func TestWalkImageRefs_NonStringNonMapImage_Unchanged(t *testing.T) {
+	visited := []string{}
+	v := map[string]any{
+		"image": 42,
+	}
+	walkImageRefs(v, func(s string) string {
+		visited = append(visited, s)
+		return "WRONG"
+	})
+	if len(visited) != 0 {
+		t.Errorf("expected no visits for non-string/non-map image, got %v", visited)
+	}
+	if v["image"] != 42 {
+		t.Errorf("expected unchanged, got %v", v["image"])
+	}
+}
+
+func TestWalkImageRefs_DepthCap(t *testing.T) {
+	// Build a 20-deep nested map with an image at depth 0 and another at depth 20+.
+	deep := map[string]any{"image": "shallow:1"}
+	cur := deep
+	for i := 0; i < 20; i++ {
+		next := map[string]any{}
+		cur["nested"] = next
+		cur = next
+	}
+	cur["image"] = "deepest:2"
+	visited := []string{}
+	walkImageRefs(deep, func(s string) string {
+		visited = append(visited, s)
+		return s
+	})
+	found := map[string]bool{}
+	for _, s := range visited {
+		found[s] = true
+	}
+	if !found["shallow:1"] {
+		t.Errorf("expected shallow:1 to be visited, got %v", visited)
+	}
+	if found["deepest:2"] {
+		t.Errorf("did not expect deepest:2 (beyond depth cap) to be visited, got %v", visited)
+	}
+}
+
+// TestApplyImageRewrites_Spec66WorkedExample is the verbatim worked example
+// from ARCHITECTURE.md §6.6 — a top-level string image, a sidecar list with
+// one map-shaped image and one shorthand image. Locks the end-to-end
+// orchestrator behavior against the spec.
+func TestApplyImageRewrites_Spec66WorkedExample(t *testing.T) {
+	in := map[string]any{
+		"image": "registry.suse.com/ai/llm:1.0",
+		"sidecars": []any{
+			map[string]any{
+				"name": "proxy",
+				"image": map[string]any{
+					"repository": "registry.suse.com/sidecars/proxy",
+					"tag":        "2.1",
+				},
+			},
+			map[string]any{
+				"name":  "redis",
+				"image": "redis:7",
+			},
+		},
+	}
+	rules := []ImageRewriteRule{{Match: "registry.suse.com/", Replace: "harbor.example.com/suse/"}}
+	out := ApplyImageRewrites(in, rules)
+
+	if out["image"] != "harbor.example.com/suse/ai/llm:1.0" {
+		t.Errorf("top image: got %v", out["image"])
+	}
+	sidecars := out["sidecars"].([]any)
+	proxyImg := sidecars[0].(map[string]any)["image"].(map[string]any)
+	if proxyImg["repository"] != "harbor.example.com/suse/sidecars/proxy" {
+		t.Errorf("proxy repository: got %v", proxyImg["repository"])
+	}
+	if proxyImg["tag"] != "2.1" {
+		t.Errorf("proxy tag must be preserved: got %v", proxyImg["tag"])
+	}
+	redisImg := sidecars[1].(map[string]any)["image"]
+	if redisImg != "redis:7" {
+		t.Errorf("redis image must be unchanged (no host prefix): got %v", redisImg)
+	}
+}
+
+// TestApplyImageRewrites_PureFunction_InputsUnchanged mirrors the existing
+// TestMergeValues_PureFunction_InputsUnchanged. Snapshots the input via
+// deepCloneForTest, calls ApplyImageRewrites, and asserts the input is
+// deep-equal to the snapshot afterwards.
+func TestApplyImageRewrites_PureFunction_InputsUnchanged(t *testing.T) {
+	in := map[string]any{
+		"image": "registry.suse.com/foo:1",
+		"sidecars": []any{
+			map[string]any{"image": "registry.suse.com/bar:2"},
+		},
+	}
+	inSnap := deepCloneForTest(in)
+	rules := []ImageRewriteRule{{Match: "registry.suse.com/", Replace: "harbor/"}}
+	_ = ApplyImageRewrites(in, rules)
+	if !reflect.DeepEqual(in, inSnap) {
+		t.Errorf("input was mutated:\n  before: %v\n  after:  %v", inSnap, in)
+	}
+}
+
+// §6.6 required scenario 1: empty rules → input unchanged (deep-equal).
+func TestApplyImageRewrites_EmptyRules_InputUnchanged(t *testing.T) {
+	in := map[string]any{
+		"image": "registry.suse.com/foo:1",
+	}
+	out := ApplyImageRewrites(in, nil)
+	if !reflect.DeepEqual(out, in) {
+		t.Errorf("expected output to equal input when rules is nil:\n  in:  %v\n  out: %v", in, out)
+	}
+}
+
+// §6.6 required scenario 2: top-level string image is rewritten.
+func TestApplyImageRewrites_StringImage_Rewritten(t *testing.T) {
+	in := map[string]any{"image": "registry.suse.com/foo:1"}
+	rules := []ImageRewriteRule{{Match: "registry.suse.com/", Replace: "harbor.example.com/suse/"}}
+	out := ApplyImageRewrites(in, rules)
+	if out["image"] != "harbor.example.com/suse/foo:1" {
+		t.Errorf("expected rewritten, got %v", out["image"])
+	}
+}
+
+// §6.6 required scenario 3: map image with repository sub-key is rewritten.
+func TestApplyImageRewrites_MapImageRepository_Rewritten(t *testing.T) {
+	in := map[string]any{
+		"image": map[string]any{
+			"repository": "registry.suse.com/sidecars/proxy",
+			"tag":        "2.1",
+		},
+	}
+	rules := []ImageRewriteRule{{Match: "registry.suse.com/", Replace: "harbor.example.com/suse/"}}
+	out := ApplyImageRewrites(in, rules)
+	img := out["image"].(map[string]any)
+	if img["repository"] != "harbor.example.com/suse/sidecars/proxy" {
+		t.Errorf("repository not rewritten: %v", img["repository"])
+	}
+	if img["tag"] != "2.1" {
+		t.Errorf("tag must be preserved: %v", img["tag"])
+	}
+}
+
+// §6.6 required scenario 4: nested-in-list walking.
+func TestApplyImageRewrites_NestedInList_Walked(t *testing.T) {
+	in := map[string]any{
+		"sidecars": []any{
+			map[string]any{
+				"name":  "proxy",
+				"image": map[string]any{"repository": "registry.suse.com/sidecars/proxy", "tag": "2.1"},
+			},
+			map[string]any{
+				"name":  "redis",
+				"image": "redis:7",
+			},
+		},
+	}
+	rules := []ImageRewriteRule{{Match: "registry.suse.com/", Replace: "harbor.example.com/suse/"}}
+	out := ApplyImageRewrites(in, rules)
+	sidecars := out["sidecars"].([]any)
+	proxy := sidecars[0].(map[string]any)["image"].(map[string]any)
+	if proxy["repository"] != "harbor.example.com/suse/sidecars/proxy" {
+		t.Errorf("proxy image not rewritten: %v", proxy)
+	}
+	redis := sidecars[1].(map[string]any)
+	if redis["image"] != "redis:7" {
+		t.Errorf("redis image must be unchanged (no host prefix): %v", redis["image"])
+	}
+}
+
+// §6.6 required scenario 5: digest preservation (foo@sha256:... pattern).
+func TestApplyImageRewrites_DigestPreserved(t *testing.T) {
+	in := map[string]any{"image": "registry.suse.com/foo@sha256:abc123"}
+	rules := []ImageRewriteRule{{Match: "registry.suse.com/", Replace: "harbor.example.com/suse/"}}
+	out := ApplyImageRewrites(in, rules)
+	want := "harbor.example.com/suse/foo@sha256:abc123"
+	if out["image"] != want {
+		t.Errorf("got %v, want %v", out["image"], want)
+	}
+}
+
+// §6.6 required scenario 6: first match wins, no chaining (rule 2 must NOT
+// see rule 1's output).
+func TestApplyImageRewrites_FirstMatchWins_NoChaining(t *testing.T) {
+	in := map[string]any{"image": "a/foo:1"}
+	rules := []ImageRewriteRule{
+		{Match: "a/", Replace: "b/"},
+		{Match: "b/", Replace: "WRONG/"},
+	}
+	out := ApplyImageRewrites(in, rules)
+	if out["image"] != "b/foo:1" {
+		t.Errorf("expected first-rule output 'b/foo:1' (no chaining), got %v", out["image"])
+	}
+}
+
+// §6.6 required scenario 7: idempotency. Calling ApplyImageRewrites twice
+// with the same rules produces the same output.
+func TestApplyImageRewrites_Idempotency(t *testing.T) {
+	in := map[string]any{"image": "registry.suse.com/foo:1"}
+	rules := []ImageRewriteRule{{Match: "registry.suse.com/", Replace: "harbor.example.com/suse/"}}
+	once := ApplyImageRewrites(in, rules)
+	twice := ApplyImageRewrites(once, rules)
+	if !reflect.DeepEqual(once, twice) {
+		t.Errorf("not idempotent:\n  once:  %v\n  twice: %v", once, twice)
+	}
+}
+
+// §6.6 edge case: image: "" → unchanged.
+func TestApplyImageRewrites_EmptyImage_Unchanged(t *testing.T) {
+	in := map[string]any{"image": ""}
+	rules := []ImageRewriteRule{{Match: "x/", Replace: "y/"}}
+	out := ApplyImageRewrites(in, rules)
+	if out["image"] != "" {
+		t.Errorf("empty image must be unchanged, got %v", out["image"])
+	}
+}
+
+// §6.6 edge case: image: nil → unchanged.
+func TestApplyImageRewrites_NilImage_Unchanged(t *testing.T) {
+	in := map[string]any{"image": nil}
+	rules := []ImageRewriteRule{{Match: "x/", Replace: "y/"}}
+	out := ApplyImageRewrites(in, rules)
+	if out["image"] != nil {
+		t.Errorf("nil image must be unchanged, got %v", out["image"])
+	}
+}
+
+// §6.6 edge case: image as int / bool → unchanged (defensive against chart bugs).
+func TestApplyImageRewrites_NonStringNonMapImage_Unchanged(t *testing.T) {
+	cases := map[string]map[string]any{
+		"int":  {"image": 42},
+		"bool": {"image": true},
+	}
+	rules := []ImageRewriteRule{{Match: "x/", Replace: "y/"}}
+	for name, in := range cases {
+		t.Run(name, func(t *testing.T) {
+			out := ApplyImageRewrites(in, rules)
+			if !reflect.DeepEqual(out["image"], in["image"]) {
+				t.Errorf("expected unchanged for %s, got %v", name, out["image"])
+			}
+		})
+	}
+}
+
+// §6.6 edge case: rule with empty Match is skipped (would match everything).
+func TestApplyImageRewrites_EmptyMatchRule_Skipped(t *testing.T) {
+	in := map[string]any{"image": "x/foo:1"}
+	rules := []ImageRewriteRule{
+		{Match: "", Replace: "ANYTHING"},
+		{Match: "x/", Replace: "y/"},
+	}
+	out := ApplyImageRewrites(in, rules)
+	if out["image"] != "y/foo:1" {
+		t.Errorf("empty Match rule must be skipped, got %v", out["image"])
+	}
+}
+
+// §6.6 edge case: refs with non-default port (host:5000/foo) are matched
+// only when the rule includes the port.
+func TestApplyImageRewrites_RefWithPort_RuleMustIncludePort(t *testing.T) {
+	in := map[string]any{"image": "host:5000/foo:1"}
+	// Rule without port: should NOT match (prefix differs at colon).
+	out := ApplyImageRewrites(in, []ImageRewriteRule{{Match: "host/", Replace: "harbor/"}})
+	if out["image"] != "host:5000/foo:1" {
+		t.Errorf("rule without port must not match: %v", out["image"])
+	}
+	// Rule with port: should match.
+	out = ApplyImageRewrites(in, []ImageRewriteRule{{Match: "host:5000/", Replace: "harbor/"}})
+	if out["image"] != "harbor/foo:1" {
+		t.Errorf("rule with port should rewrite, got %v", out["image"])
+	}
+}
+
+// §6.6 edge case: shorthand refs without registry (just "redis:7") are not
+// rewritten (no host prefix for any rule to match).
+func TestApplyImageRewrites_ShorthandRef_NotRewritten(t *testing.T) {
+	in := map[string]any{"image": "redis:7"}
+	rules := []ImageRewriteRule{{Match: "registry.suse.com/", Replace: "harbor/"}}
+	out := ApplyImageRewrites(in, rules)
+	if out["image"] != "redis:7" {
+		t.Errorf("shorthand ref must not be rewritten, got %v", out["image"])
+	}
+}
+
+// TestWalkImageRefs_DepthCap_Boundary pins the exact maxWalkDepth boundary.
+// Builds a chain of nested maps with one image per depth: the walker must
+// visit images at depths 0..15 (in-cap) and skip the image at depth 16
+// (out-of-cap). Complements the looser depth-20 test by locking the off-by-one
+// behavior at the boundary itself.
+func TestWalkImageRefs_DepthCap_Boundary(t *testing.T) {
+	leaf := map[string]any{"image": "depth16"}
+	cur := leaf
+	for i := 15; i >= 0; i-- {
+		cur = map[string]any{"image": "depth" + strconv.Itoa(i), "nested": cur}
+	}
+	visited := map[string]bool{}
+	walkImageRefs(cur, func(s string) string {
+		visited[s] = true
+		return s
+	})
+	for i := 0; i <= 15; i++ {
+		want := "depth" + strconv.Itoa(i)
+		if !visited[want] {
+			t.Errorf("depth %d image must be visited (within maxWalkDepth=16), missing from %v", i, visited)
+		}
+	}
+	if visited["depth16"] {
+		t.Errorf("depth 16 image must NOT be visited (beyond maxWalkDepth), got %v", visited)
+	}
+}
+
+// TestWalkImageRefs_NestedInMap exercises subchart-style nesting where an
+// image lives several map keys deep without any list in between. Mirrors
+// TestWalkImageRefs_NestedInList for the map traversal path so failures
+// localize to the right code path (map descent vs list descent).
+func TestWalkImageRefs_NestedInMap(t *testing.T) {
+	visited := []string{}
+	v := map[string]any{
+		"subchart": map[string]any{
+			"image": "subchart/img:1",
+		},
+		"another": map[string]any{
+			"deep": map[string]any{
+				"image": map[string]any{
+					"repository": "registry.suse.com/x",
+					"tag":        "2",
+				},
+			},
+		},
+	}
+	walkImageRefs(v, func(s string) string {
+		visited = append(visited, s)
+		return s + "!"
+	})
+	sort.Strings(visited)
+	want := []string{"registry.suse.com/x", "subchart/img:1"}
+	if !reflect.DeepEqual(visited, want) {
+		t.Errorf("expected visits %v, got %v", want, visited)
+	}
+	sub := v["subchart"].(map[string]any)
+	if sub["image"] != "subchart/img:1!" {
+		t.Errorf("subchart.image not rewritten: %v", sub["image"])
+	}
+	deep := v["another"].(map[string]any)["deep"].(map[string]any)["image"].(map[string]any)
+	if deep["repository"] != "registry.suse.com/x!" {
+		t.Errorf("another.deep.image.repository not rewritten: %v", deep["repository"])
+	}
+	if deep["tag"] != "2" {
+		t.Errorf("another.deep.image.tag must be preserved: %v", deep["tag"])
 	}
 }
