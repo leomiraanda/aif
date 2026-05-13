@@ -1,6 +1,8 @@
 package blueprint
 
 import (
+	"context"
+
 	aifv1 "github.com/SUSE/aif/api/v1alpha1"
 )
 
@@ -13,4 +15,22 @@ type Manager interface {
 	// ComputeDeploymentCount counts Workloads sourced from this Blueprint
 	// Takes the full Workload list (controller provides it)
 	ComputeDeploymentCount(bp *aifv1.Blueprint, workloads []aifv1.Workload) int32
+}
+
+// Wrapper auto-wraps detected Reference Blueprint charts as immutable
+// single-component Blueprint CRs and withdraws orphaned wrappings.
+type Wrapper interface {
+	WrapDetectedCharts(ctx context.Context) error
+}
+
+// EventEmitter records domain events for wrapped Blueprint lifecycle.
+type EventEmitter interface {
+	// BlueprintWrappedFromVendorChart fires when a new Blueprint CR is
+	// created from a detected Reference Blueprint chart (first-time wrap).
+	BlueprintWrappedFromVendorChart(bp Blueprint)
+
+	// BlueprintWithdrawn fires when a previously-wrapped Blueprint's
+	// vendor chart is no longer present in the catalog and the Blueprint
+	// phase transitions from Active/Deprecated to Withdrawn.
+	BlueprintWithdrawn(bp Blueprint)
 }
