@@ -33,6 +33,10 @@ const (
 	SourceTypeWrapsVendorChart SourceType = "WrapsVendorChart"
 )
 
+// LabelValueWrapsVendorChart is the label value used to identify
+// wrapped Blueprints in K8s label selectors and filters.
+const LabelValueWrapsVendorChart = "wraps-vendor-chart"
+
 // ComponentKind discriminates whether a component is an App chart or another
 // Blueprint embedded into this one.
 type ComponentKind string

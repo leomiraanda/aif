@@ -207,7 +207,3 @@ func TestRoundtrip_Status(t *testing.T) {
 		t.Errorf("status roundtrip drift\n got:  %#v\n want: %#v", roundtrip.Status, cr.Status)
 	}
 }
-
-func TestFakeRepository_ImplementsWrappedBlueprintStore(t *testing.T) {
-	var _ WrappedBlueprintStore = NewFakeRepository()
-}

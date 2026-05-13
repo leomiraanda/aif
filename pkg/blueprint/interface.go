@@ -25,6 +25,12 @@ type Wrapper interface {
 
 // EventEmitter records domain events for wrapped Blueprint lifecycle.
 type EventEmitter interface {
+	// BlueprintWrappedFromVendorChart fires when a new Blueprint CR is
+	// created from a detected Reference Blueprint chart (first-time wrap).
 	BlueprintWrappedFromVendorChart(bp Blueprint)
+
+	// BlueprintWithdrawn fires when a previously-wrapped Blueprint's
+	// vendor chart is no longer present in the catalog and the Blueprint
+	// phase transitions from Active/Deprecated to Withdrawn.
 	BlueprintWithdrawn(bp Blueprint)
 }

@@ -63,7 +63,7 @@ func ToWrappedCR(b Blueprint) *aifv1.Blueprint {
 	}
 	cr.Labels["ai.suse.com/blueprint-name"] = b.Lineage
 	cr.Labels["ai.suse.com/blueprint-version"] = b.Version
-	cr.Labels["ai.suse.com/blueprint-source"] = "wraps-vendor-chart"
+	cr.Labels["ai.suse.com/blueprint-source"] = LabelValueWrapsVendorChart
 	if strings.Contains(b.Version, "-") {
 		cr.Labels["ai.suse.com/blueprint-prerelease"] = "true"
 	}

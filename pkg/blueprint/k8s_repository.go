@@ -16,10 +16,14 @@ type k8sRepository struct {
 	c client.Client
 }
 
-// NewK8sRepository returns a Repository backed by the given client.
-func NewK8sRepository(c client.Client) Repository {
+// NewK8sRepository returns the concrete k8sRepository. Callers narrow
+// to the interface they need via AsRepository / AsWrappedStore.
+func NewK8sRepository(c client.Client) *k8sRepository { //nolint:revive
 	return &k8sRepository{c: c}
 }
+
+func (r *k8sRepository) AsRepository() Repository             { return r }
+func (r *k8sRepository) AsWrappedStore() WrappedBlueprintStore { return r }
 
 func (r *k8sRepository) Get(ctx context.Context, name string) (*aifv1.Blueprint, error) {
 	var bp aifv1.Blueprint
@@ -49,13 +53,8 @@ func (r *k8sRepository) UpdateStatus(ctx context.Context, bp *aifv1.Blueprint) e
 	return r.c.Status().Update(ctx, bp)
 }
 
-// NewK8sWrappedStore returns a WrappedBlueprintStore backed by the given client.
-func NewK8sWrappedStore(c client.Client) WrappedBlueprintStore {
-	return &k8sRepository{c: c}
-}
-
 func (r *k8sRepository) ListWrapped(ctx context.Context) ([]Blueprint, error) {
-	sel, err := labels.Parse("ai.suse.com/blueprint-source=wraps-vendor-chart")
+	sel, err := labels.Parse("ai.suse.com/blueprint-source=" + LabelValueWrapsVendorChart)
 	if err != nil {
 		return nil, fmt.Errorf("parsing label selector: %w", err)
 	}

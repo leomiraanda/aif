@@ -105,7 +105,7 @@ func (f *FakeRepository) ListWrapped(_ context.Context) ([]Blueprint, error) {
 	defer f.mu.RUnlock()
 	var out []Blueprint
 	for _, bp := range f.items {
-		if bp.Labels != nil && bp.Labels["ai.suse.com/blueprint-source"] == "wraps-vendor-chart" {
+		if bp.Labels != nil && bp.Labels["ai.suse.com/blueprint-source"] == LabelValueWrapsVendorChart {
 			out = append(out, FromCR(bp))
 		}
 	}
