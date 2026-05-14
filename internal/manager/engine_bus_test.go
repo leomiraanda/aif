@@ -178,3 +178,22 @@ func TestEngineBus_Apply_NeverErrorsToday(t *testing.T) {
 		t.Fatalf("Apply must return nil today: %v", err)
 	}
 }
+
+// TestEngineBus_Apply_PushesOCIHostToAppCo: regression test against the bug
+// where the bus dropped OCIHost from the AppCo projection, silently
+// degrading source_collection.AnnotationReader (which checks OCIHost in
+// effectiveAnnotationSettings and returns ErrNotConfigured when empty).
+func TestEngineBus_Apply_PushesOCIHostToAppCo(t *testing.T) {
+	bus, _, _, _, ac := newTestBus()
+	snap := controller.SettingsSnapshot{
+		AppCollectionRegistry: "dp.apps.rancher.io",
+		AppCollectionAPI:      "https://api.apps.rancher.io",
+		AppCollectionMode:     "api",
+	}
+	if err := bus.Apply(context.Background(), snap); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if ac.Settings.OCIHost != "dp.apps.rancher.io" {
+		t.Errorf("OCIHost: got %q, want dp.apps.rancher.io (without it, AnnotationReader returns ErrNotConfigured)", ac.Settings.OCIHost)
+	}
+}

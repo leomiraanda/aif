@@ -99,8 +99,14 @@ func (b *engineBus) projectAppCo(s controller.SettingsSnapshot) source_collectio
 	if s.AppCollectionMode == "disabled" {
 		apiURL = ""
 	}
+	// OCIHost is consumed by source_collection.AnnotationReader (the
+	// chart-annotation OCI walker that backs ReferenceBlueprint detection).
+	// Without it, AnnotationReader.effectiveAnnotationSettings returns
+	// ErrNotConfigured and pkg/apps.AppCoSource.enrichWithAnnotations
+	// silently degrades on every Refresh.
 	return source_collection.EngineSettings{
 		APIURL:   apiURL,
+		OCIHost:  s.AppCollectionRegistry,
 		Username: s.AppCollectionUser,
 		Token:    s.AppCollectionToken,
 	}
