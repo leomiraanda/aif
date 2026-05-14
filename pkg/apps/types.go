@@ -15,21 +15,22 @@ import "time"
 //	nvidia.<chart>:<version>     e.g. nvidia.nim-llm:1.2.0
 //	suse.<slug>:<version>        e.g. suse.ollama:0.4.1
 type App struct {
-	ID                 string   `json:"id"`                 // namespaced; canonical key for dedupe + Get
-	Name               string   `json:"name"`               // bare chart/slug name (no namespace, no version)
-	DisplayName        string   `json:"displayName"`        // human-readable
-	Description        string   `json:"description"`
-	Publisher          string   `json:"publisher"`
-	Version            string   `json:"version"`           // chart version
-	LogoURL            string   `json:"logoURL"`
-	Source             string   `json:"source"`            // "nvidia" | "suse"
-	AssetType          string   `json:"assetType"`         // "chart" today; reserved for future asset kinds
-	Categories         []string `json:"categories"`        // flattened category names
-	Tags               []string `json:"tags"`
-	ChartRef           ChartRef `json:"chartRef"`
-	ProjectURL         string   `json:"projectURL"`
-	ReferenceBlueprint bool     `json:"referenceBlueprint"` // populated by P2-5; false by default
-	UseCase            string   `json:"useCase,omitempty"`  // populated from ai.suse.com/use-case (consumed by P2-7)
+	ID                 string     `json:"id"`                 // namespaced; canonical key for dedupe + Get
+	Name               string     `json:"name"`               // bare chart/slug name (no namespace, no version)
+	DisplayName        string     `json:"displayName"`        // human-readable
+	Description        string     `json:"description"`
+	Publisher          string     `json:"publisher"`
+	Version            string     `json:"version"`           // chart version
+	LogoURL            string     `json:"logoURL"`
+	Source             string     `json:"source"`            // "nvidia" | "suse"
+	AssetType          string     `json:"assetType"`         // "chart" today; reserved for future asset kinds
+	Categories         []string   `json:"categories"`        // flattened category names
+	Tags               []string   `json:"tags"`
+	ChartRef           ChartRef   `json:"chartRef"`
+	ProjectURL         string     `json:"projectURL"`
+	ReferenceBlueprint bool       `json:"referenceBlueprint"` // populated by P2-5; false by default
+	UseCase            string     `json:"useCase,omitempty"`  // populated from ai.suse.com/use-case (consumed by P2-7)
+	LastUpdatedAt      *time.Time `json:"lastUpdatedAt,omitempty"`
 }
 
 // ChartRef matches ARCHITECTURE.md §5: {repo, chart, version}.
@@ -80,4 +81,16 @@ type SourceStatus struct {
 	LastSuccessAt time.Time
 	LastError     error
 	EntryCount    int
+}
+
+//nolint:unused // used by source adapters in subsequent tasks
+func parseTimePtr(s string) *time.Time {
+	if s == "" {
+		return nil
+	}
+	t, err := time.Parse(time.RFC3339Nano, s)
+	if err != nil {
+		return nil
+	}
+	return &t
 }

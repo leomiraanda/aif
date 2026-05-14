@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 )
 
 // TestApp_JSONTags_MatchesArchitectureSchema pins the wire-format keys
@@ -27,6 +28,7 @@ func TestApp_JSONTags_MatchesArchitectureSchema(t *testing.T) {
 		ChartRef:           ChartRef{Repo: "oci://r", Chart: "nim-llm", Version: "1.0.0"},
 		ProjectURL:         "https://nvidia.com",
 		ReferenceBlueprint: false,
+		LastUpdatedAt:      func() *time.Time { t := time.Date(2026, 4, 30, 0, 0, 0, 0, time.UTC); return &t }(),
 	}
 
 	out, err := json.Marshal(a)
@@ -51,6 +53,7 @@ func TestApp_JSONTags_MatchesArchitectureSchema(t *testing.T) {
 		`"chartRef"`,
 		`"projectURL"`,
 		`"referenceBlueprint"`,
+		`"lastUpdatedAt"`,
 	}
 	for _, k := range wantKeys {
 		if !strings.Contains(got, k) {
@@ -69,6 +72,7 @@ func TestApp_JSONTags_MatchesArchitectureSchema(t *testing.T) {
 		`"ChartRef":`,
 		`"ProjectURL":`,
 		`"ReferenceBlueprint":`,
+		`"LastUpdatedAt":`,
 	}
 	for _, k := range forbidden {
 		if strings.Contains(got, k) {
@@ -112,6 +116,7 @@ func TestApp_JSONRoundTrip_PreservesAllFields(t *testing.T) {
 		ChartRef:           ChartRef{Repo: "oci://dp", Chart: "ollama", Version: "0.4.1"},
 		ProjectURL:         "https://ollama.com",
 		ReferenceBlueprint: true,
+		LastUpdatedAt:      func() *time.Time { t := time.Date(2026, 4, 30, 0, 0, 0, 0, time.UTC); return &t }(),
 	}
 	bytes, err := json.Marshal(want)
 	if err != nil {
@@ -129,5 +134,41 @@ func TestApp_JSONRoundTrip_PreservesAllFields(t *testing.T) {
 	}
 	if got.ChartRef.Repo != want.ChartRef.Repo {
 		t.Errorf("round-trip ChartRef mismatch: want=%+v got=%+v", want.ChartRef, got.ChartRef)
+	}
+	if (got.LastUpdatedAt == nil) != (want.LastUpdatedAt == nil) ||
+		(got.LastUpdatedAt != nil && !got.LastUpdatedAt.Equal(*want.LastUpdatedAt)) {
+		t.Errorf("round-trip LastUpdatedAt mismatch: want=%v got=%v", want.LastUpdatedAt, got.LastUpdatedAt)
+	}
+}
+
+func TestParseTimePtr_ValidRFC3339Nano(t *testing.T) {
+	got := parseTimePtr("2026-04-30T23:56:07.607227Z")
+	if got == nil {
+		t.Fatal("expected non-nil *time.Time")
+	}
+	if got.Year() != 2026 || got.Month() != time.April || got.Day() != 30 {
+		t.Errorf("unexpected date: %v", got)
+	}
+}
+
+func TestParseTimePtr_EmptyString(t *testing.T) {
+	if got := parseTimePtr(""); got != nil {
+		t.Errorf("expected nil for empty string, got %v", got)
+	}
+}
+
+func TestParseTimePtr_Malformed(t *testing.T) {
+	if got := parseTimePtr("not-a-date"); got != nil {
+		t.Errorf("expected nil for malformed input, got %v", got)
+	}
+}
+
+func TestParseTimePtr_RFC3339NoFraction(t *testing.T) {
+	got := parseTimePtr("2026-03-04T10:05:02Z")
+	if got == nil {
+		t.Fatal("expected non-nil *time.Time")
+	}
+	if got.Second() != 2 {
+		t.Errorf("unexpected second: %d", got.Second())
 	}
 }
