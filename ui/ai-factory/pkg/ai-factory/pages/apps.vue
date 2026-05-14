@@ -92,6 +92,7 @@
               <th>{{ t('aif.pages.apps.list.publisher') }}</th>
               <th>{{ t('aif.pages.apps.list.category') }}</th>
               <th>{{ t('aif.pages.apps.list.version') }}</th>
+              <th>{{ t('aif.pages.apps.list.updated') }}</th>
               <th class="text-right">{{ t('aif.pages.apps.list.actions') }}</th>
             </tr>
           </thead>
@@ -109,6 +110,7 @@
               </td>
               <td>{{ (app.categories || []).join(', ') || '—' }}</td>
               <td>{{ app.version }}</td>
+              <td>{{ formatDate(app.lastUpdatedAt) }}</td>
               <td class="text-right col-actions">
                 <button class="btn btn-sm role-primary" disabled :title="t('aif.pages.apps.card.installDisabled')" @click.stop="onInstall(app)">
                   {{ t('aif.pages.apps.card.install') }}
@@ -240,6 +242,15 @@ export default defineComponent({
       dialogApp.value = null;
     };
 
+    const formatDate = (iso) => {
+      if (!iso) {
+        return '—';
+      }
+      const d = new Date(iso);
+
+      return isNaN(d.getTime()) ? '—' : d.toLocaleDateString();
+    };
+
     const onImgError = (event) => {
       event.target.src = FALLBACK_LOGO;
     };
@@ -275,6 +286,7 @@ export default defineComponent({
       onInstall,
       onAddToBundle,
       onBundleAdded,
+      formatDate,
       onImgError
     };
   }

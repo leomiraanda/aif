@@ -20,7 +20,8 @@ const MOCK_APPS: App[] = [
     chartRef:           { repo: 'oci://registry.suse.com/ai/charts/nvidia', chart: 'nim-llm', version: '1.2.0' },
     projectURL:         'https://developer.nvidia.com/nim',
     referenceBlueprint: false,
-    useCase:            'Text generation and chat completions'
+    useCase:            'Text generation and chat completions',
+    lastUpdatedAt:      '2026-04-15T10:30:00Z'
   },
   {
     id:                 'nvidia.nim-vlm:1.0.0',
@@ -37,7 +38,8 @@ const MOCK_APPS: App[] = [
     chartRef:           { repo: 'oci://registry.suse.com/ai/charts/nvidia', chart: 'nim-vlm', version: '1.0.0' },
     projectURL:         'https://developer.nvidia.com/nim',
     referenceBlueprint: false,
-    useCase:            'Visual question answering and image captioning'
+    useCase:            'Visual question answering and image captioning',
+    lastUpdatedAt:      '2026-03-20T14:00:00Z'
   },
   {
     id:                 'nvidia.nim-llm-blueprint:1.2.0',
@@ -54,7 +56,8 @@ const MOCK_APPS: App[] = [
     chartRef:           { repo: 'oci://registry.suse.com/ai/charts/nvidia', chart: 'nim-llm', version: '1.2.0' },
     projectURL:         'https://developer.nvidia.com/nim',
     referenceBlueprint: true,
-    useCase:            'Full-stack LLM inference deployment'
+    useCase:            'Full-stack LLM inference deployment',
+    lastUpdatedAt:      '2026-04-10T08:00:00Z'
   },
   {
     id:                 'suse.gpu-operator:24.9.0',
@@ -70,7 +73,8 @@ const MOCK_APPS: App[] = [
     tags:               ['gpu', 'driver', 'operator'],
     chartRef:           { repo: 'oci://dp.apps.rancher.io/charts', chart: 'gpu-operator', version: '24.9.0' },
     projectURL:         'https://apps.rancher.io',
-    referenceBlueprint: false
+    referenceBlueprint: false,
+    lastUpdatedAt:      '2026-05-01T12:00:00Z'
   },
   {
     id:                 'suse.network-operator:24.7.0',
@@ -86,7 +90,8 @@ const MOCK_APPS: App[] = [
     tags:               ['rdma', 'gpudirect', 'sriov'],
     chartRef:           { repo: 'oci://dp.apps.rancher.io/charts', chart: 'network-operator', version: '24.7.0' },
     projectURL:         'https://apps.rancher.io',
-    referenceBlueprint: false
+    referenceBlueprint: false,
+    lastUpdatedAt:      '2026-04-20T09:30:00Z'
   },
   {
     id:                 'suse.ollama:0.5.4',
@@ -102,7 +107,8 @@ const MOCK_APPS: App[] = [
     tags:               ['llm', 'local', 'gpu'],
     chartRef:           { repo: 'oci://dp.apps.rancher.io/charts', chart: 'ollama', version: '0.5.4' },
     projectURL:         'https://apps.rancher.io',
-    referenceBlueprint: false
+    referenceBlueprint: false,
+    lastUpdatedAt:      '2026-04-30T23:56:07Z'
   },
   {
     id:                 'suse.open-webui:0.6.5',
@@ -118,7 +124,8 @@ const MOCK_APPS: App[] = [
     tags:               ['ui', 'chat', 'rag'],
     chartRef:           { repo: 'oci://dp.apps.rancher.io/charts', chart: 'open-webui', version: '0.6.5' },
     projectURL:         'https://apps.rancher.io',
-    referenceBlueprint: false
+    referenceBlueprint: false,
+    lastUpdatedAt:      '2026-05-10T16:45:00Z'
   },
   {
     id:                 'suse.milvus:2.4.0',
@@ -134,7 +141,8 @@ const MOCK_APPS: App[] = [
     tags:               ['vector', 'embeddings', 'rag'],
     chartRef:           { repo: 'oci://dp.apps.rancher.io/charts', chart: 'milvus', version: '2.4.0' },
     projectURL:         'https://apps.rancher.io',
-    referenceBlueprint: false
+    referenceBlueprint: false,
+    lastUpdatedAt:      '2026-03-15T10:00:00Z'
   }
 ];
 

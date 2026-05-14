@@ -17,6 +17,7 @@
             {{ t('aif.pages.apps.badge.referenceBlueprint') }}
           </span>
           <span class="app-card__version">v{{ app.version }}</span>
+          <span v-if="formattedDate" class="app-card__updated">{{ formattedDate }}</span>
         </div>
       </div>
       <a
@@ -79,6 +80,15 @@ export default defineComponent({
   setup(props) {
     const fallbackLogo = FALLBACK_LOGO;
 
+    const formattedDate = computed(() => {
+      if (!props.app.lastUpdatedAt) {
+        return '';
+      }
+      const d = new Date(props.app.lastUpdatedAt);
+
+      return isNaN(d.getTime()) ? '' : d.toLocaleDateString();
+    });
+
     const displayTags = computed(() => {
       const all = [...(props.app.categories || []), ...(props.app.tags || [])];
       const unique = [...new Set(all)];
@@ -90,7 +100,7 @@ export default defineComponent({
       event.target.src = FALLBACK_LOGO;
     };
 
-    return { fallbackLogo, displayTags, onImgError };
+    return { fallbackLogo, formattedDate, displayTags, onImgError };
   }
 });
 </script>
@@ -175,7 +185,8 @@ export default defineComponent({
   }
 }
 
-.app-card__version {
+.app-card__version,
+.app-card__updated {
   color: var(--muted);
   font-size: 10px;
 }

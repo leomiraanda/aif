@@ -23,6 +23,7 @@ export interface App {
   projectURL: string;
   referenceBlueprint: boolean;
   useCase?: string;
+  lastUpdatedAt?: string;
 }
 
 export interface FetchAppsParams {
