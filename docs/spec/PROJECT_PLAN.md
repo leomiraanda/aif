@@ -2114,6 +2114,50 @@ kubectl get settings -n aif -o yaml | grep -A20 'spec:'
 **Agent Prompt:**
 > Extend `api/v1alpha1/settings_types.go` with the four new field groups per `ARCHITECTURE.md §4.5`. Add typed Go structs `RegistryEndpointsSpec`, `ImageRewriteSpec`, `ImageRewriteRule`, `CatalogDiscoverySpec`, `BlueprintClassificationSpec`. All fields optional. Add CRD validation markers (enum on `applicationCollectionMode`, required-when-present on `match`/`replace`). Update `SettingsReconciler.applySettingsToEngines` to push the new fields into: `pkg/helm` (image rewrite rules), `pkg/nvidia/discovery` (registry endpoint), `pkg/source_collection` (API URL + mode), `pkg/blueprint/wrapper` (classification overrides). Each engine should default to existing behaviour when the corresponding Settings field is empty. Run `make manifests generate`. Add envtest scenarios. Done when the validation steps above all pass.
 
+> **Follow-up (post-merge, P5-7):**
+>
+> 1. **`mode=registry-fallback` semantics deferred.** Bus treats
+>    `registry-fallback` as `api` (passes the URL through). The "fall back
+>    to OCI catalog on connection error or HTTP 5xx" half of §4.5 isn't
+>    implemented because no OCI catalog walker exists for
+>    `pkg/source_collection`. Implementation scheduled alongside P3-8
+>    preflight or a dedicated story.
+>
+> 2. **Helm `imageRewrite.rules` propagation is end-to-end-tested only at
+>    the propagation layer.** P5-7's envtest asserts the rules reach
+>    `helm.Engine.UpdateSettings` via the bus (using `helm.NewFake()`
+>    recorder); the actual `MergeValues + ApplyImageRewrites` invocation
+>    chain that consumes them ships with P4-2's Workload deployer.
+>
+> 3. **`SettingsApplier` port lives in `internal/controller/`** per the
+>    rule refinement landed in CLAUDE.md (commit `31d699f`). Single
+>    consumer + thin domain → no exemption. Trigger for `pkg/settings/`
+>    extraction is P3-8 preflight (consumer #2, reads
+>    `imageRewrite` + `registryEndpoints` for air-gap-aware HEAD checks).
+>
+> 4. **`BlueprintClassification` overrides parsed but not pushed.** CR
+>    field exists per §4.5; snapshot stores it (`BlueprintForceReference`,
+>    `BlueprintForceBuildingBlock`). No engine consumes it yet (P2-7's
+>    wrapper-consumption design isn't in scope). Bus does not project it
+>    into any per-engine `UpdateSettings` until that consumer surfaces.
+>
+> 5. **§4.5 has two ways to disable HTTP catalog discovery — only one is
+>    implementable with the current CRD shape.** The
+>    `RegistryEndpoints.applicationCollectionAPI` row says "Set to empty
+>    string to disable HTTP catalog discovery"; the
+>    `CatalogDiscovery.applicationCollectionMode` row offers `disabled`
+>    as a value. With the existing `string + omitempty` field type on
+>    `ApplicationCollectionAPI`, an empty value is indistinguishable from
+>    "unset" (using "" as a meaningful disable signal would break
+>    default-when-unset behavior). Implementation designates
+>    `applicationCollectionMode=disabled` as the canonical disable
+>    signal; empty `ApplicationCollectionAPI` reverts to the default. To
+>    support the empty-string signal natively, the CRD would need to
+>    change `ApplicationCollectionAPI` from `string` to `*string`
+>    (tri-state nullable). §4.5 should be updated to drop the
+>    empty-string-disables wording in the `RegistryEndpoints` row, OR
+>    the CRD should adopt the pointer type — manager's call.
+
 ---
 
 **ID:** P5-8
