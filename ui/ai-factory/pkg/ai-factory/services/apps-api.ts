@@ -1,3 +1,6 @@
+import { getApiBase } from '../utils/api-base';
+import { mockAPI, USE_MOCK_API } from '../utils/mock-api';
+
 export interface ChartRef {
   repo: string;
   chart: string;
@@ -29,6 +32,10 @@ export interface FetchAppsParams {
 }
 
 export async function fetchApps(params?: FetchAppsParams): Promise<App[]> {
+  if (USE_MOCK_API) {
+    return mockAPI.apps.list(params);
+  }
+
   const query = new URLSearchParams();
 
   if (params?.source && params.source !== 'all') {
@@ -42,33 +49,37 @@ export async function fetchApps(params?: FetchAppsParams): Promise<App[]> {
   }
 
   const qs = query.toString();
-  const url = `/api/v1/apps${qs ? `?${qs}` : ''}`;
+  const url = `${ getApiBase() }/api/v1/apps${ qs ? `?${ qs }` : '' }`;
   const res = await fetch(url);
 
   if (!res.ok) {
-    throw new Error(`GET ${url} failed: ${res.status}`);
+    throw new Error(`GET ${ url } failed: ${ res.status }`);
   }
 
   return res.json();
 }
 
 export async function fetchApp(id: string): Promise<App> {
-  const url = `/api/v1/apps/${encodeURIComponent(id)}`;
+  const url = `${ getApiBase() }/api/v1/apps/${ encodeURIComponent(id) }`;
   const res = await fetch(url);
 
   if (!res.ok) {
-    throw new Error(`GET ${url} failed: ${res.status}`);
+    throw new Error(`GET ${ url } failed: ${ res.status }`);
   }
 
   return res.json();
 }
 
 export async function fetchCategories(): Promise<string[]> {
-  const url = '/api/v1/apps/categories';
+  if (USE_MOCK_API) {
+    return mockAPI.apps.categories();
+  }
+
+  const url = `${ getApiBase() }/api/v1/apps/categories`;
   const res = await fetch(url);
 
   if (!res.ok) {
-    throw new Error(`GET ${url} failed: ${res.status}`);
+    throw new Error(`GET ${ url } failed: ${ res.status }`);
   }
 
   return res.json();
