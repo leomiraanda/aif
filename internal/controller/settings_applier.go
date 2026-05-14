@@ -1,6 +1,10 @@
 package controller
 
-import "context"
+import (
+	"context"
+
+	aifv1 "github.com/SUSE/aif/api/v1alpha1"
+)
 
 // SettingsSnapshot is the deref'd, defaults-applied view of an aifv1.Settings
 // CR that the reconciler hands to the SettingsApplier bus.
@@ -60,4 +64,65 @@ type Credentials struct {
 // can wrap into Ready=False.
 type SettingsApplier interface {
 	Apply(ctx context.Context, s SettingsSnapshot) error
+}
+
+// translateSettings derefs an aifv1.Settings into a SettingsSnapshot,
+// applying §4.5 in-code defaults wherever a CR field is nil/empty. Pure
+// function: never reads Secrets (caller resolves first and passes
+// Credentials in), never mutates the input CR.
+func translateSettings(s *aifv1.Settings, sc, ac Credentials) SettingsSnapshot {
+	out := SettingsSnapshot{
+		SUSERegistry:          "registry.suse.com",
+		AppCollectionRegistry: "dp.apps.rancher.io",
+		AppCollectionAPI:      "https://api.apps.rancher.io",
+		AppCollectionMode:     "api",
+		ImageRewriteEnabled:   false,
+		SUSERegistryUser:      sc.User,
+		SUSERegistryToken:     sc.Token,
+		AppCollectionUser:     ac.User,
+		AppCollectionToken:    ac.Token,
+	}
+	if s == nil {
+		return out
+	}
+	if re := s.Spec.RegistryEndpoints; re != nil {
+		if re.SUSERegistry != "" {
+			out.SUSERegistry = re.SUSERegistry
+		}
+		if re.ApplicationCollection != "" {
+			out.AppCollectionRegistry = re.ApplicationCollection
+		}
+		// Symmetric with the other endpoints: empty == unset (Go's zero
+		// value for omitempty fields can't distinguish unset from explicit
+		// ""), so we keep the default. The explicit "disable HTTP discovery"
+		// signal lives on CatalogDiscovery.ApplicationCollectionMode="disabled"
+		// (handled below; the bus then projects to APIURL="").
+		if re.ApplicationCollectionAPI != "" {
+			out.AppCollectionAPI = re.ApplicationCollectionAPI
+		}
+	}
+	if ir := s.Spec.ImageRewrite; ir != nil {
+		out.ImageRewriteEnabled = ir.Enabled
+		for _, r := range ir.Rules {
+			out.ImageRewriteRules = append(out.ImageRewriteRules, ImageRewriteRule{
+				Match: r.Match, Replace: r.Replace,
+			})
+		}
+	}
+	if cd := s.Spec.CatalogDiscovery; cd != nil && cd.ApplicationCollectionMode != "" {
+		out.AppCollectionMode = cd.ApplicationCollectionMode
+	}
+	if bc := s.Spec.BlueprintClassification; bc != nil {
+		for _, c := range bc.ForceReferenceBlueprint {
+			out.BlueprintForceReference = append(out.BlueprintForceReference, ChartRef{
+				Repo: c.Repo, Chart: c.Chart,
+			})
+		}
+		for _, c := range bc.ForceBuildingBlock {
+			out.BlueprintForceBuildingBlock = append(out.BlueprintForceBuildingBlock, ChartRef{
+				Repo: c.Repo, Chart: c.Chart,
+			})
+		}
+	}
+	return out
 }
