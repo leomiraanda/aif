@@ -1043,7 +1043,7 @@ Standard error codes: `NOT_FOUND`, `INVALID_INPUT`, `INVALID_TRANSITION` (lifecy
 | `GET` | `/api/v1/apps/{id}` | — | `App` | Single app (returned regardless of `referenceBlueprint` flag) |
 | `GET` | `/api/v1/apps/categories` | — | `[]string` | Distinct category values |
 
-`App`: `{id, name, displayName, description, publisher, version, logoURL, source, assetType, categories[], tags[], chartRef:{repo,chart,version}, projectURL, referenceBlueprint: bool}`
+`App`: `{id, name, displayName, description, publisher, version, logoURL, source, assetType, categories[], tags[], chartRef:{repo,chart,version}, projectURL, referenceBlueprint: bool, lastUpdatedAt?: timestamp}`
 
 The `referenceBlueprint` field is `true` when the chart's `Chart.yaml` carries the annotation `ai.suse.com/role: reference-blueprint` (see §13.1 for the annotation contract). This drives both the **Reference Blueprint** badge in the UI and the toggle-based filtering above.
 
@@ -1061,6 +1061,7 @@ The `referenceBlueprint` field is `true` when the chart's `Chart.yaml` carries t
 | `version` | upstream `latest_version` | tag from OCI listing (highest semver) |
 | `source` | `"suse"` | `"suse-oci-fallback"` (UI uses this for the "OCI catalog" badge) |
 | `referenceBlueprint` | from `Chart.yaml` annotation (fetched lazily) | from `Chart.yaml` annotation (still works — chart fetch path is independent) |
+| `lastUpdatedAt` | upstream `last_updated_at` | `null` (OCI catalog does not expose timestamps) |
 
 The `source` discriminator (`"suse-oci-fallback"`) lets the UI render a small badge so users understand why metadata is sparse.
 
