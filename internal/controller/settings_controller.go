@@ -40,10 +40,11 @@ const (
 
 // SettingsReconciler reconciles a Settings object.
 //
-// Per ARCHITECTURE.md §6.2 / §8.2.1, P5-4 will replace direct credential
-// resolution with an EngineSettings push to pkg/{apps,git,nvidia}.Engine.
-// Until then, the reconciler resolves Secrets, validates them, and discards
-// the values — the goal of P1-4 is wiring + status only, no engine state.
+// Per ARCHITECTURE.md §6.2 / §8.2.1, the reconciler resolves Secret refs,
+// translates the CR into a controller.SettingsSnapshot via translateSettings,
+// and pushes the snapshot to all settings-aware engines via Applier.Apply
+// (production: internal/manager.engineBus; tests: FakeSettingsApplier).
+// Engines never read Settings directly. P5-7 wired this end-to-end.
 type SettingsReconciler struct {
 	client.Client
 	Scheme   *runtime.Scheme
@@ -97,9 +98,10 @@ func (r *SettingsReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 
 // reconcile performs the main reconciliation logic.
 //
-// In P1-4 the resolved Secret values are validated and then discarded; P5-4
-// will replace this with an EngineSettings push to pkg/{apps,git,nvidia}.Engine
-// per ARCHITECTURE.md §6.2.
+// Resolves Secret refs, captures (user, token) pairs into Credentials,
+// translates the CR + creds into a SettingsSnapshot, and pushes via
+// r.Applier.Apply when non-nil. Sets Ready=True on success, Ready=False
+// with the matching reason on failure. Per ARCHITECTURE.md §8.2.1.
 func (r *SettingsReconciler) reconcile(ctx context.Context, settings *aifv1.Settings) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
 
@@ -256,8 +258,9 @@ func (r *SettingsReconciler) handleDeletion(ctx context.Context, settings *aifv1
 	logger := log.FromContext(ctx)
 
 	if controllerutil.ContainsFinalizer(settings, settingsFinalizerName) {
-		// P1-4: No cleanup logic yet (no engines to disconnect)
-		// P5-4 will add engine cleanup here
+		// No engine cleanup needed: each engine's UpdateSettings is the
+		// SOLE writer for its settings cache, and engines are torn down
+		// by the operator's process lifecycle, not by Settings deletion.
 
 		controllerutil.RemoveFinalizer(settings, settingsFinalizerName)
 		if err := r.Update(ctx, settings); err != nil {

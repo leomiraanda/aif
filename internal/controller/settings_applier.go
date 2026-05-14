@@ -96,7 +96,8 @@ func translateSettings(s *aifv1.Settings, sc, ac Credentials) SettingsSnapshot {
 		// value for omitempty fields can't distinguish unset from explicit
 		// ""), so we keep the default. The explicit "disable HTTP discovery"
 		// signal lives on CatalogDiscovery.ApplicationCollectionMode="disabled"
-		// (handled below; the bus then projects to APIURL="").
+		// (handled below). Translation stops here; the bus's projection
+		// stage is the right place for any mode→URL policy.
 		if re.ApplicationCollectionAPI != "" {
 			out.AppCollectionAPI = re.ApplicationCollectionAPI
 		}

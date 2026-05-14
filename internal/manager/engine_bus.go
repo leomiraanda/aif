@@ -40,7 +40,13 @@ func NewEngineBus(
 
 // Apply projects the snapshot into per-engine EngineSettings and pushes via
 // each engine's UpdateSettings. Returns nil today (all engines non-fallible).
-// If any engine grows fallibility, aggregate via errors.Join.
+//
+// ctx is currently unused: each engine's UpdateSettings is a synchronous
+// O(1) mutex-guarded swap with no IO and no cancellation point. The
+// parameter is kept on the port signature so future cancellable engine
+// pushes (and per-engine deadline propagation) plug in without a
+// breaking-change. If any engine grows fallibility, aggregate via
+// errors.Join here.
 func (b *engineBus) Apply(_ context.Context, s controller.SettingsSnapshot) error {
 	b.helm.UpdateSettings(b.projectHelm(s))
 	b.nvidiaDisc.UpdateSettings(b.projectNvidiaDiscovery(s))

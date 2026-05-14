@@ -111,9 +111,11 @@ func main() {
 	engineBus := manager.NewEngineBus(helmEngine, nvidiaDiscovery, nvidiaDeployer, appcoClient, logger)
 
 	// Log manager types so vars stay "used" while their consumers (later
-	// stories wire gitEngine, nvidiaDeployer, etc.) come online. Logging
-	// the values directly (rather than `x != nil`) avoids staticcheck
-	// SA4023 on always-true comparisons against constructor returns.
+	// stories wire gitEngine, etc.) come online. Logging the values
+	// directly (rather than `x != nil`) avoids staticcheck SA4023 on
+	// always-true comparisons against constructor returns. engineBus
+	// is consumed by manager.NewManager below; the others land with
+	// their respective stories.
 	logger.Debug("Managers created",
 		"helmEngine", fmt.Sprintf("%T", helmEngine),
 		"discoveryClient", fmt.Sprintf("%T", discoveryClient),
@@ -123,7 +125,6 @@ func main() {
 		"appsCatalog", fmt.Sprintf("%T", appsCatalog),
 		"blueprintManager", fmt.Sprintf("%T", blueprintManager),
 		"workloadManager", fmt.Sprintf("%T", workloadManager),
-		"engineBus", fmt.Sprintf("%T", engineBus),
 	)
 
 	// Setup controller-runtime manager with all controllers and webhooks
