@@ -34,6 +34,8 @@ const (
 	eventSettingsApplied   = "SettingsApplied"
 	eventSecretNotFound    = "SecretNotFound"
 	eventInvalidSecretKey  = "InvalidSecretKey"
+	eventEnginePushFailed  = "EnginePushFailed"
+	eventReconcileFailed   = "ReconcileFailed"
 )
 
 // SettingsReconciler reconciles a Settings object.
@@ -145,10 +147,12 @@ func (r *SettingsReconciler) reconcile(ctx context.Context, settings *aifv1.Sett
 		snap := translateSettings(settings, suseCreds, appCoCreds)
 		if err := r.Applier.Apply(ctx, snap); err != nil {
 			logger.Error(err, "applier returned error")
-			r.setCondition(settings, conditions.TypeReady, metav1.ConditionFalse, conditions.ReasonReconcileFailed, "engine push failed: "+err.Error())
+			msg := "engine push failed: " + err.Error()
+			r.setCondition(settings, conditions.TypeReady, metav1.ConditionFalse, conditions.ReasonReconcileFailed, msg)
 			if updateErr := r.Status().Update(ctx, settings); updateErr != nil {
 				logger.Error(updateErr, "failed to update status after applier error")
 			}
+			r.Recorder.Eventf(settings, nil, corev1.EventTypeWarning, eventEnginePushFailed, conditions.ActionApplying, msg)
 			return ctrl.Result{}, err
 		}
 	}
@@ -213,7 +217,7 @@ func (r *SettingsReconciler) handleSecretError(ctx context.Context, settings *ai
 		eventType = eventSecretNotFound
 	} else {
 		reason = conditions.ReasonInvalidSpec
-		eventType = eventInvalidSecretKey
+		eventType = eventReconcileFailed
 	}
 
 	msg := fmt.Sprintf("Failed to resolve %s: %v", field, err)
