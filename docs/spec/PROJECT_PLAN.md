@@ -2115,6 +2115,84 @@ kubectl get settings -n aif -o yaml | grep -A20 'spec:'
 **Agent Prompt:**
 > Extend `api/v1alpha1/settings_types.go` with the four new field groups per `ARCHITECTURE.md §4.5`. Add typed Go structs `RegistryEndpointsSpec`, `ImageRewriteSpec`, `ImageRewriteRule`, `CatalogDiscoverySpec`, `BlueprintClassificationSpec`. All fields optional. Add CRD validation markers (enum on `applicationCollectionMode`, required-when-present on `match`/`replace`). Update `SettingsReconciler.applySettingsToEngines` to push the new fields into: `pkg/helm` (image rewrite rules), `pkg/nvidia/discovery` (registry endpoint), `pkg/source_collection` (API URL + mode), `pkg/blueprint/wrapper` (classification overrides). Each engine should default to existing behaviour when the corresponding Settings field is empty. Run `make manifests generate`. Add envtest scenarios. Done when the validation steps above all pass.
 
+> **Follow-up (post-merge, P5-7):**
+>
+> 1. **`mode=registry-fallback` semantics deferred.** Bus treats
+>    `registry-fallback` as `api` (passes the URL through). The "fall back
+>    to OCI catalog on connection error or HTTP 5xx" half of §4.5 isn't
+>    implemented because no OCI catalog walker exists for
+>    `pkg/source_collection`. Implementation scheduled alongside P3-8
+>    preflight or a dedicated story.
+>
+> 2. **Helm `imageRewrite.rules` propagation is end-to-end-tested only at
+>    the propagation layer.** P5-7's envtest asserts the rules reach
+>    `helm.Engine.UpdateSettings` via the bus (using `helm.NewFake()`
+>    recorder); the actual `MergeValues + ApplyImageRewrites` invocation
+>    chain that consumes them ships with P4-2's Workload deployer.
+>
+> 3. **`SettingsApplier` port lives in `internal/controller/`** per the
+>    refined "ports live with consumers" rule landed in CLAUDE.md
+>    (commit `31d699f`). The bounded-context exemption was considered
+>    and judged not to fire here:
+>    - Settings is a *control-plane configuration surface*, not a domain
+>      entity with aggregates / lifecycle / state machines. The pkg/<entity>/
+>      pattern in this codebase (pkg/blueprint, pkg/bundle, pkg/workload)
+>      applies to domain entities; Settings doesn't pattern-match.
+>    - The "domain" today is one pure translation function plus a
+>      defaults-applied snapshot — not the rich invariants/value-object
+>      hygiene criterion 2 asks for.
+>    - SettingsApplier has exactly one consumer (the SettingsReconciler);
+>      criterion 1 (multiple consumers, imminent or actual) doesn't fire.
+>    Trigger for re-evaluating extraction: P3-8 preflight (consumer #2,
+>    reads `imageRewrite` + `registryEndpoints` for air-gap-aware HEAD
+>    checks). At that point the domain has two consumers AND likely grows
+>    air-gap-aware image-ref helpers worth value-object treatment — both
+>    criteria 1 and 2 fire and `pkg/settings/` extraction earns its keep.
+>
+> 4. **`BlueprintClassification` overrides parsed but not pushed.** CR
+>    field exists per §4.5; snapshot stores it (`BlueprintForceReference`,
+>    `BlueprintForceBuildingBlock`). No engine consumes it yet (P2-7's
+>    wrapper-consumption design isn't in scope). Bus does not project it
+>    into any per-engine `UpdateSettings` until that consumer surfaces.
+>
+> 5. **§4.5 has two ways to disable HTTP catalog discovery — only one is
+>    implementable with the current CRD shape.** The
+>    `RegistryEndpoints.applicationCollectionAPI` row says "Set to empty
+>    string to disable HTTP catalog discovery"; the
+>    `CatalogDiscovery.applicationCollectionMode` row offers `disabled`
+>    as a value. With the existing `string + omitempty` field type on
+>    `ApplicationCollectionAPI`, an empty value is indistinguishable from
+>    "unset" (using "" as a meaningful disable signal would break
+>    default-when-unset behavior). Implementation designates
+>    `applicationCollectionMode=disabled` as the canonical disable
+>    signal; empty `ApplicationCollectionAPI` reverts to the default. To
+>    support the empty-string signal natively, the CRD would need to
+>    change `ApplicationCollectionAPI` from `string` to `*string`
+>    (tri-state nullable). §4.5 should be updated to drop the
+>    empty-string-disables wording in the `RegistryEndpoints` row, OR
+>    the CRD should adopt the pointer type — manager's call.
+>
+> 6. **§8.2.1 step 4 (post-push background `Refresh`) deferred for
+>    encapsulation.** The spec's example calls `nvidiaDiscovery.Refresh`
+>    and `appCollClient.Refresh` from the reconciler/bus inside a
+>    goroutine after `UpdateSettings` returns. Implementing this in
+>    `engineBus.Apply` would couple the bus to engine-specific methods
+>    that go beyond the `UpdateSettings` port — `Refresh` exists on
+>    `nvidia.Discovery` but not on `helm.Engine`/`nvidia.Deployer`/
+>    `source_collection.Client` — accumulating asymmetric per-engine
+>    knowledge that hexagonal architecture warns against. Deferred to
+>    keep the bus a pure projection. Mitigations already in place:
+>    `nvidia.Discovery` has its own per-Source ticker (default 5 min via
+>    `Settings.spec.suseRegistry.refreshIntervalMinutes`) that picks up
+>    the new endpoint on next tick; the manual refresh REST endpoint
+>    (P2-3) lets users trigger immediate refresh. Trade-off: an air-gap
+>    operator who changes the registry endpoint sees stale NIM discovery
+>    for up to one refresh interval. ARCHITECTURE.md §8.2.1 should be
+>    updated to either reflect the encapsulation choice (move the
+>    goroutine into each engine's `UpdateSettings` if the engine wants
+>    self-refresh) or document that lazy refresh via existing tickers
+>    satisfies the contract. Manager's call.
+
 ---
 
 **ID:** P5-8

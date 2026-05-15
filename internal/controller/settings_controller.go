@@ -34,18 +34,26 @@ const (
 	eventSettingsApplied   = "SettingsApplied"
 	eventSecretNotFound    = "SecretNotFound"
 	eventInvalidSecretKey  = "InvalidSecretKey"
+	eventEnginePushFailed  = "EnginePushFailed"
+	eventReconcileFailed   = "ReconcileFailed"
 )
 
 // SettingsReconciler reconciles a Settings object.
 //
-// Per ARCHITECTURE.md §6.2 / §8.2.1, P5-4 will replace direct credential
-// resolution with an EngineSettings push to pkg/{apps,git,nvidia}.Engine.
-// Until then, the reconciler resolves Secrets, validates them, and discards
-// the values — the goal of P1-4 is wiring + status only, no engine state.
+// Per ARCHITECTURE.md §6.2 / §8.2.1, the reconciler resolves Secret refs,
+// translates the CR into a controller.SettingsSnapshot via translateSettings,
+// and pushes the snapshot to all settings-aware engines via Applier.Apply
+// (production: internal/manager.engineBus; tests: FakeSettingsApplier).
+// Engines never read Settings directly. P5-7 wired this end-to-end.
 type SettingsReconciler struct {
 	client.Client
 	Scheme   *runtime.Scheme
 	Recorder events.EventRecorder
+
+	// Applier propagates the deref'd Settings snapshot to all settings-aware
+	// engines on every reconcile. Production: internal/manager.engineBus.
+	// Tests: controller.FakeSettingsApplier.
+	Applier SettingsApplier
 }
 
 // Reconcile handles Settings reconciliation
@@ -90,36 +98,64 @@ func (r *SettingsReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 
 // reconcile performs the main reconciliation logic.
 //
-// In P1-4 the resolved Secret values are validated and then discarded; P5-4
-// will replace this with an EngineSettings push to pkg/{apps,git,nvidia}.Engine
-// per ARCHITECTURE.md §6.2.
+// Resolves Secret refs, captures (user, token) pairs into Credentials,
+// translates the CR + creds into a SettingsSnapshot, and pushes via
+// r.Applier.Apply when non-nil. Sets Ready=True on success, Ready=False
+// with the matching reason on failure. Per ARCHITECTURE.md §8.2.1.
 func (r *SettingsReconciler) reconcile(ctx context.Context, settings *aifv1.Settings) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
 
-	// Resolve SUSE Registry credentials (validates Secret presence + key)
+	// Resolve SUSE Registry credentials (validates Secret presence + key,
+	// captures the resolved (user, token) pair for the snapshot).
+	var suseCreds Credentials
 	if settings.Spec.SUSERegistry != nil {
-		if _, err := r.resolveSecretKeyRef(ctx, settings.Spec.SUSERegistry.UserSecretRef); err != nil {
+		user, err := r.resolveSecretKeyRef(ctx, settings.Spec.SUSERegistry.UserSecretRef)
+		if err != nil {
 			return r.handleSecretError(ctx, settings, err, "SUSERegistry.userSecretRef")
 		}
-		if _, err := r.resolveSecretKeyRef(ctx, settings.Spec.SUSERegistry.TokenSecretRef); err != nil {
+		token, err := r.resolveSecretKeyRef(ctx, settings.Spec.SUSERegistry.TokenSecretRef)
+		if err != nil {
 			return r.handleSecretError(ctx, settings, err, "SUSERegistry.tokenSecretRef")
 		}
+		suseCreds = Credentials{User: user, Token: token}
 	}
 
-	// Resolve Application Collection credentials (validates Secret presence + key)
+	// Resolve Application Collection credentials.
+	var appCoCreds Credentials
 	if settings.Spec.ApplicationCollection != nil {
-		if _, err := r.resolveSecretKeyRef(ctx, settings.Spec.ApplicationCollection.UserSecretRef); err != nil {
+		user, err := r.resolveSecretKeyRef(ctx, settings.Spec.ApplicationCollection.UserSecretRef)
+		if err != nil {
 			return r.handleSecretError(ctx, settings, err, "ApplicationCollection.userSecretRef")
 		}
-		if _, err := r.resolveSecretKeyRef(ctx, settings.Spec.ApplicationCollection.TokenSecretRef); err != nil {
+		token, err := r.resolveSecretKeyRef(ctx, settings.Spec.ApplicationCollection.TokenSecretRef)
+		if err != nil {
 			return r.handleSecretError(ctx, settings, err, "ApplicationCollection.tokenSecretRef")
 		}
+		appCoCreds = Credentials{User: user, Token: token}
 	}
 
-	// Resolve Fleet credentials (validates Secret presence + key)
+	// Resolve Fleet credentials (validates Secret presence + key; not pushed
+	// via the bus today — Fleet is git-deployment infra, not a settings-aware
+	// engine in P5-7's scope).
 	if settings.Spec.Fleet != nil {
 		if _, err := r.resolveSecretKeyRef(ctx, settings.Spec.Fleet.CredSecretRef); err != nil {
 			return r.handleSecretError(ctx, settings, err, "Fleet.credSecretRef")
+		}
+	}
+
+	// Push the snapshot to engines via the bus. Skipped if Applier is nil
+	// (e.g., test setup that doesn't care about engine state).
+	if r.Applier != nil {
+		snap := translateSettings(settings, suseCreds, appCoCreds)
+		if err := r.Applier.Apply(ctx, snap); err != nil {
+			logger.Error(err, "applier returned error")
+			msg := "engine push failed: " + err.Error()
+			r.setCondition(settings, conditions.TypeReady, metav1.ConditionFalse, conditions.ReasonReconcileFailed, msg)
+			if updateErr := r.Status().Update(ctx, settings); updateErr != nil {
+				logger.Error(updateErr, "failed to update status after applier error")
+			}
+			r.Recorder.Eventf(settings, nil, corev1.EventTypeWarning, eventEnginePushFailed, conditions.ActionApplying, msg)
+			return ctrl.Result{}, err
 		}
 	}
 
@@ -183,7 +219,7 @@ func (r *SettingsReconciler) handleSecretError(ctx context.Context, settings *ai
 		eventType = eventSecretNotFound
 	} else {
 		reason = conditions.ReasonInvalidSpec
-		eventType = eventInvalidSecretKey
+		eventType = eventReconcileFailed
 	}
 
 	msg := fmt.Sprintf("Failed to resolve %s: %v", field, err)
@@ -222,8 +258,9 @@ func (r *SettingsReconciler) handleDeletion(ctx context.Context, settings *aifv1
 	logger := log.FromContext(ctx)
 
 	if controllerutil.ContainsFinalizer(settings, settingsFinalizerName) {
-		// P1-4: No cleanup logic yet (no engines to disconnect)
-		// P5-4 will add engine cleanup here
+		// No engine cleanup needed: each engine's UpdateSettings is the
+		// SOLE writer for its settings cache, and engines are torn down
+		// by the operator's process lifecycle, not by Settings deletion.
 
 		controllerutil.RemoveFinalizer(settings, settingsFinalizerName)
 		if err := r.Update(ctx, settings); err != nil {

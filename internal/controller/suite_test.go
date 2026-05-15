@@ -25,9 +25,10 @@ import (
 )
 
 var (
-	testEnv   *envtest.Environment
-	k8sClient client.Client
-	cancelFn  context.CancelFunc
+	testEnv         *envtest.Environment
+	k8sClient       client.Client
+	cancelFn        context.CancelFunc
+	settingsApplier *controller.FakeSettingsApplier // P5-7: assert snapshot propagation
 )
 
 func TestControllers(t *testing.T) {
@@ -91,10 +92,12 @@ var _ = BeforeSuite(func() {
 		Recorder: mgr.GetEventRecorder("workload-controller"),
 	}).SetupWithManager(mgr)).To(Succeed())
 
+	settingsApplier = &controller.FakeSettingsApplier{}
 	Expect((&controller.SettingsReconciler{
 		Client:   mgr.GetClient(),
 		Scheme:   mgr.GetScheme(),
 		Recorder: mgr.GetEventRecorder("settings-controller"),
+		Applier:  settingsApplier,
 	}).SetupWithManager(mgr)).To(Succeed())
 
 	Expect(manager.SetupWebhooks(mgr)).To(Succeed())
@@ -115,4 +118,14 @@ var _ = BeforeSuite(func() {
 var _ = AfterSuite(func() {
 	cancelFn()
 	Expect(testEnv.Stop()).To(Succeed())
+})
+
+// BeforeEach at suite level: clear the recording applier between every spec
+// across every Describe block. Without this, leftover snapshots from one
+// block could leak into another's introspection — load-bearing on Ginkgo
+// declaration order otherwise.
+var _ = BeforeEach(func() {
+	if settingsApplier != nil {
+		settingsApplier.Reset()
+	}
 })
