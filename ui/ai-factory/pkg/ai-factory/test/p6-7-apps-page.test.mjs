@@ -31,11 +31,11 @@ test('apps.vue imports and uses AddToBundleDialog component', () => {
   assert.match(source, /AddToBundleDialog/);
 });
 
-test('apps.vue imports fetchApps and fetchCategories from services', () => {
+test('apps.vue imports listApps and listCategories from operator-api', () => {
   const source = read('pages/apps.vue');
 
-  assert.match(source, /import.*fetchApps.*from.*services\/apps-api/s);
-  assert.match(source, /import.*fetchCategories.*from.*services\/apps-api/s);
+  assert.match(source, /import.*listApps.*from.*utils\/operator-api/s);
+  assert.match(source, /import.*listCategories.*from.*utils\/operator-api/s);
 });
 
 test('apps.vue has search input with correct i18n placeholder', () => {

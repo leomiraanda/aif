@@ -9,12 +9,12 @@ test('apps.vue imports match existing files', () => {
 
   assert.match(page, /from '\.\.\/components\/apps\/AppCard\.vue'/);
   assert.match(page, /from '\.\.\/components\/apps\/AddToBundleDialog\.vue'/);
-  assert.match(page, /from '\.\.\/services\/apps-api'/);
+  assert.match(page, /from '\.\.\/utils\/operator-api'/);
 
   // Verify the imported files exist by reading them (throws if missing)
   read('components/apps/AppCard.vue');
   read('components/apps/AddToBundleDialog.vue');
-  read('services/apps-api.ts');
+  read('utils/operator-api.ts');
 });
 
 test('all i18n keys used in templates exist in en-us.yaml', () => {
@@ -67,8 +67,8 @@ test('AppCard emits match what apps.vue listens for', () => {
   assert.match(page, /@add-to-bundle/);
 });
 
-test('services/apps-api.ts App interface fields align with Go types', () => {
-  const api = read('services/apps-api.ts');
+test('utils/operator-api.ts App interface fields align with Go types', () => {
+  const api = read('utils/operator-api.ts');
   const goTypes = readFileSync(new URL('../../../../../pkg/apps/types.go', import.meta.url), 'utf8');
 
   // Check that every JSON tag in Go has a matching TS field

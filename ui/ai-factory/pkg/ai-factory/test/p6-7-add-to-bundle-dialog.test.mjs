@@ -24,12 +24,11 @@ test('AddToBundleDialog.vue has two modes: existing and new', () => {
   assert.match(source, /mode/);
 });
 
-test('AddToBundleDialog.vue fetches draft bundles via Steve store', () => {
+test('AddToBundleDialog.vue creates bundles via management store', () => {
   const source = read('components/apps/AddToBundleDialog.vue');
 
-  assert.match(source, /findAll|dispatch.*aif/);
-  assert.match(source, /BUNDLE|bundle/);
-  assert.match(source, /Draft/);
+  assert.match(source, /dispatch.*management/);
+  assert.match(source, /BUNDLE|bundle/i);
 });
 
 test('AddToBundleDialog.vue builds ComponentRef with kind App', () => {

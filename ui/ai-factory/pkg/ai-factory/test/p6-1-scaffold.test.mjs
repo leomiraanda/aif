@@ -97,6 +97,8 @@ test('P6-1 entry point wires product, routes, and localization', () => {
 
   assert.match(source, /import routes from '\.\/routing'/);
   assert.match(source, /import '\.\/style\/brand\.css'/);
+  assert.doesNotMatch(source, /SteveFactory/);
+  assert.doesNotMatch(source, /addDashboardStore/);
   assert.match(source, /plugin\.addProduct\(require\('\.\/config\/aif-product'\)\)/);
   assert.match(source, /plugin\.addRoutes\(routes\)/);
   assert.match(source, /plugin\.addL10n\('en-us',\s*require\('\.\/l10n\/en-us\.yaml'\)\)/);
