@@ -1043,9 +1043,11 @@ Standard error codes: `NOT_FOUND`, `INVALID_INPUT`, `INVALID_TRANSITION` (lifecy
 | `GET` | `/api/v1/apps/{id}` | — | `App` | Single app (returned regardless of `referenceBlueprint` flag) |
 | `GET` | `/api/v1/apps/categories` | — | `[]string` | Distinct category values |
 
-`App`: `{id, name, displayName, description, publisher, version, logoURL, source, assetType, categories[], tags[], chartRef:{repo,chart,version}, projectURL, referenceBlueprint: bool}`
+`App`: `{id, name, displayName, description, publisher, version, logoURL, source, assetType, categories[], tags[], chartRef:{repo,chart,version}, projectURL, referenceBlueprint: bool, lastUpdatedAt?: timestamp}`
 
 The `referenceBlueprint` field is `true` when the chart's `Chart.yaml` carries the annotation `ai.suse.com/role: reference-blueprint` (see §13.1 for the annotation contract). This drives both the **Reference Blueprint** badge in the UI and the toggle-based filtering above.
+
+`lastUpdatedAt` is an RFC 3339 timestamp (`2026-04-30T23:56:07.607227Z`) indicating when the chart was last updated. For the AppCo source it comes from the API's `last_updated_at` field; for the NVIDIA source it is extracted from the OCI manifest annotation `org.opencontainers.image.created`. Null when the source does not provide a timestamp (e.g. OCI-fallback mode).
 
 **Degraded App schema (P5-8 OCI-fallback mode):** when `Settings.spec.catalogDiscovery.applicationCollectionMode == "registry-fallback"` AND the App Collection HTTP API is unreachable (network error or 5xx), the source_collection client falls back to listing the OCI catalog directly. The OCI catalog carries chart names + versions but NOT the rich metadata the API provides. Apps in fallback mode are emitted with these fixed sentinels:
 
@@ -1061,6 +1063,7 @@ The `referenceBlueprint` field is `true` when the chart's `Chart.yaml` carries t
 | `version` | upstream `latest_version` | tag from OCI listing (highest semver) |
 | `source` | `"suse"` | `"suse-oci-fallback"` (UI uses this for the "OCI catalog" badge) |
 | `referenceBlueprint` | from `Chart.yaml` annotation (fetched lazily) | from `Chart.yaml` annotation (still works — chart fetch path is independent) |
+| `lastUpdatedAt` | upstream `last_updated_at` | `null` (OCI catalog does not expose timestamps) |
 
 The `source` discriminator (`"suse-oci-fallback"`) lets the UI render a small badge so users understand why metadata is sparse.
 
