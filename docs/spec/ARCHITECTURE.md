@@ -1047,6 +1047,8 @@ Standard error codes: `NOT_FOUND`, `INVALID_INPUT`, `INVALID_TRANSITION` (lifecy
 
 The `referenceBlueprint` field is `true` when the chart's `Chart.yaml` carries the annotation `ai.suse.com/role: reference-blueprint` (see §13.1 for the annotation contract). This drives both the **Reference Blueprint** badge in the UI and the toggle-based filtering above.
 
+`lastUpdatedAt` is an RFC 3339 timestamp (`2026-04-30T23:56:07.607227Z`) indicating when the chart was last updated. For the AppCo source it comes from the API's `last_updated_at` field; for the NVIDIA source it is extracted from the OCI manifest annotation `org.opencontainers.image.created`. Null when the source does not provide a timestamp (e.g. OCI-fallback mode).
+
 **Degraded App schema (P5-8 OCI-fallback mode):** when `Settings.spec.catalogDiscovery.applicationCollectionMode == "registry-fallback"` AND the App Collection HTTP API is unreachable (network error or 5xx), the source_collection client falls back to listing the OCI catalog directly. The OCI catalog carries chart names + versions but NOT the rich metadata the API provides. Apps in fallback mode are emitted with these fixed sentinels:
 
 | Field | Connected (API) | Fallback (OCI catalog) |
