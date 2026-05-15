@@ -124,8 +124,9 @@ A two-developer team can run the matrix at roughly: dev-A on Backend, dev-B on U
 | `pkg/nvidia/discovery.go` | P2-1, P5-5 | The NIM index is read from SUSE Registry only. Any new code that touches `nvcr.io`, `helm.ngc.nvidia.com`, or `integrate.api.nvidia.com` is a bug — the mirror process is external to AIF. |
 | `pkg/workload/manager.go` | P5-1, P5-2, P8-1 | Interface frozen in P5-1. |
 | `internal/api/middleware.go` | P0-4, P7-5, P8-1, P8-2 | Keep middleware composable — each story adds a separate function. |
-| `ui/ai-factory/pkg/ai-factory/index.ts` | P6-1, P6-2, P6-3, P6-4 | P6-1 lands skeleton. Subsequent stories add lines for `addProduct`, `addDashboardStore`, `addRoutes`, `addL10n` — no rewrites. |
-| `ui/ai-factory/pkg/ai-factory/utils/api.js` | P6-3..P6-10 | All UI stories add new exports only — never modify existing function signatures after P6-3. |
+| `ui/ai-factory/pkg/ai-factory/index.ts` | P6-1, P6-2, P6-3, P6-4 | P6-1 lands skeleton. Subsequent stories add lines for `addProduct`, `addRoutes`, `addL10n` — no rewrites. > **Follow-up (post-merge, P6-9):** `addDashboardStore('aif', ...)` removed — the custom Steve store was dropped in favour of the built-in `management` store. Future stories must not re-add it unless a concrete need arises. |
+| `ui/ai-factory/pkg/ai-factory/utils/operator-api.ts` | P6-9 (created), P6-3..P6-10 (consumed) | Replaces the originally planned `utils/api.js`. Typed `fetch` wrapper routing all operator REST calls through the Rancher k8s-proxy. All UI stories that need operator REST calls import from this module. Never modify existing function signatures after P6-9. |
+| `ui/ai-factory/pkg/ai-factory/utils/api.js` | (superseded by `utils/operator-api.ts`) | Original plan; replaced by `operator-api.ts` in P6-9. If future needs differ from the operator REST pattern, this file may be created separately; for now, treat `operator-api.ts` as the canonical REST client module. |
 | `CLAUDE.md` | P0-0, P1-9, P3-7, P6-0, P9-5 | Append-only edits between P0-0 and P9-5. P9-5 is the only story allowed to delete content. |
 | `pkg/helm/values.go` | P4-1 (engine + MergeValues), P4-6 (ApplyImageRewrites) | P4-1 lands `MergeValues`; P4-6 adds `ApplyImageRewrites` as a separate function called after `MergeValues` and after NIM generation. No edits to existing function signatures. |
 | `api/v1alpha1/settings_types.go` | P0-2 (initial), P5-7 (air-gap fields) | P5-7 adds `registryEndpoints`, `imageRewrite`, `catalogDiscovery`, `blueprintClassification` as additive optional field groups — no removal of existing fields. |
@@ -2433,25 +2434,123 @@ yarn serve-pkgs
 ---
 
 **ID:** P6-9
-**Epic:** Settings Page (incl. Advanced Registry Endpoints section)
-**Story:** As a platform engineer, I want a Settings page exposing all four base sections plus an optional Advanced Registry Endpoints section, so that I can configure AIF for both connected and air-gapped deployments.
+**Epic:** Settings Page
+**Story:** As a platform engineer, I want a Settings page that calls custom REST API endpoints (`GET /api/v1/settings`, `PUT /api/v1/settings`) to load and persist Settings configuration, with four accordion sections including an optional Advanced section, so that I can configure AIF for both connected and air-gapped deployments.
 **Owner Hint:** UI Vue
 **Effort:** M
-**Depends On:** P6-1, P5-4, P5-7, P5-9
+**Depends On:** P6-1 (UI scaffold), P5-4 (Settings REST API endpoints), P5-7 (air-gap fields in Settings CRD)
 **Parallelizable With:** P6-7, P6-8, P6-10
-**Done When:** Settings page renders all four base sections; saving persists via `PUT /api/v1/settings`; the page-header **Advanced** toggle reveals Section 5 (Registry Endpoints); the Test Connection button calls `POST /api/v1/settings/test-connection` and renders per-endpoint results.
+**Done When:** Settings page loads Settings via `getSettings()` REST API call, renders four accordion sections (SUSE Application Collection, SUSE Registry, Fleet/GitOps, Advanced Registry Endpoints), persists via `putSettings()` REST API call with Apply button, and Vitest tests cover spec transformation logic (`buildSpec`, `buildCrdSpec`). Settings CR must exist (created via `kubectl apply` or by operator); page displays error banner on 404.
 
 **Acceptance Criteria:**
-- [ ] `pages/settings.vue` matches `SOFTWARE_SPEC.md §9` (including the new Section 5)
-- [ ] NO "NVIDIA NGC" or "Internal Registry" sections
-- [ ] Section 4 is read-only and shows the `kubectl create secret docker-registry` helper
-- [ ] **Page-header Advanced toggle** (off by default). When on, Section 5 — Registry Endpoints (Advanced) renders below Section 4. When off, Section 5 is hidden but its current values are preserved (not cleared).
-- [ ] **Section 5 fields** match `SOFTWARE_SPEC.md §9 Section 5` exactly: SUSE Registry endpoint, SUSE Application Collection endpoint, SUSE Application Collection API, Catalog Discovery Mode (radio: API / Registry Fallback / Disabled), Image Rewrite Rules (repeating list of `{match, replace}` pairs with add/remove buttons), Test Connection button.
-- [ ] **Test Connection button** calls `POST /api/v1/settings/test-connection` (P5-9) and renders per-endpoint results (green checkmark + latency / red X + error) in a small panel below the button. Doesn't trigger a Save.
-- [ ] **"Custom registry endpoints active" chip** in the page header, rendered whenever any field in Section 5 differs from the upstream defaults (`registry.suse.com`, `dp.apps.rancher.io`, `https://api.apps.rancher.io`, mode=`api`, no rewrite rules), regardless of the Advanced toggle state.
-- [ ] Save / Reset buttons + toast feedback
-- [ ] Vitest covers save flow, validation, the Advanced toggle, the Test Connection button, the chip visibility, and the rules add/remove flow
 
+**Architecture & Data Flow:**
+- [ ] Settings page uses **custom REST API client** pattern via `utils/operator-api.ts`
+- [ ] Import functions: `import { getSettings, putSettings } from '../utils/operator-api'`
+- [ ] Settings loaded via `const data = await getSettings()` in `async fetch()` hook — calls `GET /api/v1/settings` through Rancher proxy
+- [ ] Settings saved via `await putSettings(crdSpec)` — calls `PUT /api/v1/settings` with `{ spec: crdSpec }` body
+- [ ] Settings CR must exist before page loads (manually created via `kubectl apply -f examples/settings-smoke.yaml` or auto-created by operator bootstrap) — page displays error banner if 404
+- [ ] `models/ai.suse.com.settings.js` **removed** (commit 54ca63f) — does NOT use Steve model or management store
+- [ ] Product config does NOT register Settings type (no CRD model needed for REST API approach)
+
+**REST API Client (utils/operator-api.ts):**
+- [ ] `getSettings()` function: returns `operatorFetch('/api/v1/settings')` — proxy URL pattern `/k8s/clusters/local/api/v1/namespaces/aif/services/http:aif-operator:8080/proxy/api/v1/settings`
+- [ ] `putSettings(spec)` function: returns `operatorFetch('/api/v1/settings', { method: 'PUT', body: JSON.stringify({ spec }) })`
+- [ ] `operatorFetch()` helper handles Rancher proxy URL construction, sets `Content-Type: application/json`, parses JSON response, throws `OperatorError` with `status` and `code` on failure
+- [ ] Constants imported from `config/types.ts`: `MANAGEMENT_CLUSTER = 'local'`, `OPERATOR_NAMESPACE = 'aif'`, `OPERATOR_SERVICE = 'aif-operator'`, `OPERATOR_PORT = 8080`
+
+**Page Structure (Accordion-Based, NOT CruResource):**
+- [ ] `pages/settings.vue` does **NOT** use `CruResource` wrapper — uses custom accordion layout with `Loading` and `Banner` components
+- [ ] `async fetch()` loads data via `getSettings()`; builds UI spec via `this.spec = this.buildSpec(data.spec)`; sets `loaded = true`
+- [ ] 404 handling: sets `loadError = true` when `e?.status === 404`; displays error banner
+- [ ] Generic error handling: sets `fetchErrorMessage = e?.message || String(e)` for non-404 errors
+- [ ] Loading state: `<Loading v-if="!loaded" />` displays spinner while fetching
+- [ ] Error state: `<Banner v-if="loadError" color="error">` displays Settings not found message
+
+**Accordion Sections (No Separate Components):**
+- [ ] Four accordion sections implemented inline in `pages/settings.vue` template (NOT separate component files)
+- [ ] Each section uses collapsible accordion pattern with `expanded` state object in `data()`: `expanded: { fleet: false, appCollection: true, suseRegistry: false, advanced: false }`
+- [ ] Section 1 — **SUSE Application Collection** (expanded by default: `appCollection: true`):
+  - [ ] Fields: `userSecretRef` (SecretSelector), `tokenSecretRef` (SecretSelector), `categories` (LabeledInput with comma-separated string, computed getter/setter `categoriesString`)
+  - [ ] Binds to `spec.applicationCollection.*` in component `data()`
+  - [ ] Title from `t('aif.pages.settings.sections.appCollection.title')`
+- [ ] Section 2 — **SUSE Registry**:
+  - [ ] Fields: `userSecretRef` (SecretSelector), `tokenSecretRef` (SecretSelector), `refreshIntervalMinutes` (LabeledInput type=number with validation `>= 1`)
+  - [ ] Binds to `spec.suseRegistry.*`
+  - [ ] Title from `t('aif.pages.settings.sections.suseRegistry.title')`
+- [ ] Section 3 — **Fleet / GitOps**:
+  - [ ] Fields: `repoURL` (LabeledInput), `branch` (LabeledInput, default `'main'`), `authType` (LabeledSelect with options: none/ssh/token/basic), `credSecretRef` (SecretSelector, shown only when `authType !== ''`)
+  - [ ] Binds to `spec.fleet.*`
+  - [ ] Title from `t('aif.pages.settings.sections.fleet.title')`
+  - [ ] `authTypeOptions` computed property provides dropdown options with l10n labels
+- [ ] Section 4 — **Advanced Registry Endpoints**:
+  - [ ] Fields: `registryEndpoints.suseRegistry` (LabeledInput), `registryEndpoints.applicationCollection` (LabeledInput), `registryEndpoints.applicationCollectionAPI` (LabeledInput), `catalogDiscovery.applicationCollectionMode` (LabeledSelect with options: api/registry-fallback/disabled), `imageRewrite.enabled` (Checkbox), `imageRewrite.rules[]` (repeating list of `{match, replace}` pairs with add/remove buttons)
+  - [ ] Binds to `spec.registryEndpoints.*`, `spec.catalogDiscovery.*`, `spec.imageRewrite.*`
+  - [ ] Title from `t('aif.pages.settings.sections.advanced.title')`
+  - [ ] `catalogDiscoveryOptions` computed property provides dropdown options with l10n labels
+
+**Spec Transformation Logic:**
+- [ ] `buildSpec(crdSpec)` method: transforms incoming CRD spec (from `getSettings()` response) to UI form spec; handles defaults and null-safety for all fields
+- [ ] `buildCrdSpec(spec)` method: takes UI form spec as parameter, transforms it back to CRD spec shape for `putSettings()` call; filters out empty/default values per CRD schema
+- [ ] `emptySpec()` method: returns fresh spec object with all fields initialized to empty/default values
+- [ ] `toSelectorValue(secretKeyRef)` helper: wraps CRD `SecretKeySelector` object (`{name, namespace, key}`) in Rancher shell `SecretSelector` component format: `{ valueFrom: { secretKeyRef: {...} } }`
+- [ ] `fromSelectorValue(val)` helper: extracts `SecretKeySelector` object from `SecretSelector` wrapper format: `val?.valueFrom?.secretKeyRef || null`
+- [ ] Null/undefined safety: all field access uses optional chaining (`crdSpec.fleet?.repoURL`) and nullish coalescing (`?? defaultValue`)
+
+**Save/Apply Button:**
+- [ ] `AsyncButton` component from `@shell/components/AsyncButton` used for Apply button
+- [ ] Button text: `{{ t('aif.pages.settings.apply') }}`
+- [ ] Button positioned at bottom-right of page via `.footer-bar` flex container
+- [ ] On click: calls `save(buttonDone)` method with button callback
+- [ ] `async save(buttonDone)` method:
+  1. Clears errors: `this.errors = []`
+  2. Builds CRD spec via `const crdSpec = this.buildCrdSpec(this.spec)`
+  3. Calls `const data = await putSettings(crdSpec)`
+  4. On success: refreshes UI spec from response `this.spec = this.buildSpec(data.spec)`, then `buttonDone(true)` — AsyncButton shows success state
+  5. On error: sets error array `this.errors = [msg]`; `buttonDone(false)` — AsyncButton shows error state; error banner displayed via `v-for="err in errors"`
+- [ ] No navigation on save success (stays on Settings page)
+- [ ] Error feedback via Banner component array (NOT toast) + AsyncButton state
+
+**Styling:**
+- [ ] Page uses custom CSS (scoped styles in `<style scoped>` block)
+- [ ] Accordion sections use standard Rancher shell accordion pattern (no custom accordion component)
+- [ ] Form fields use standard Rancher shell form components: `LabeledInput`, `LabeledSelect`, `Checkbox`, `SecretSelector`
+- [ ] Responsive layout using Rancher shell's built-in responsive grid classes
+- [ ] No custom CSS classes for sections — uses Rancher shell defaults
+
+**Vitest Test Coverage:**
+- [ ] Test file exists: `tests/unit/pages/settings.spec.ts` (33 tests)
+- [ ] Tests cover:
+  - **`buildSpec()` transformation:** 9 test cases covering all CRD fields → UI spec transformation, null-safety, default values
+  - **`buildCrdSpec()` reverse transformation:** 8 test cases covering UI spec → CRD spec, filtering empty values, nested object construction
+  - **`toSelectorValue()` helper:** 8 test cases covering SecretKeySelector → string format, null handling, edge cases
+  - **`fromSelectorValue()` helper:** 8 test cases covering string format → SecretKeySelector object, parsing edge cases
+- [ ] Tests use Vitest (`describe`, `it`, `expect`) with table-driven test pattern
+- [ ] NO component-level tests (page not tested with mount/shallowMount) — tests focus on pure transformation logic only
+
+**Dependencies Clarification:**
+- [ ] **DOES depend on P5-4** (custom REST API) — uses `getSettings()` / `putSettings()` which call `GET /api/v1/settings` and `PUT /api/v1/settings`
+- [ ] **Does NOT depend on P5-9** (test-connection endpoint) — Test Connection button NOT implemented in this story
+- [ ] **Depends on P5-7** (air-gap fields) — reads `spec.registryEndpoints`, `imageRewrite`, `catalogDiscovery` from CRD
+
+**Validation:**
+```bash
+# Build UI extension
+cd ui/ai-factory && yarn build
+
+# Run Vitest unit tests
+yarn test:unit
+
+# Run Vitest with coverage
+yarn test:coverage
+
+# Vitest UI (interactive test runner)
+yarn test:unit:ui
+
+```
+
+**Agent Prompt:**
+> Implement the Settings page using **custom REST API client pattern**. Architecture: `pages/settings.vue` with inline accordion sections (NO separate components, NO CruResource wrapper). Data loading: `async fetch() { const data = await getSettings(); this.spec = this.buildSpec(data.spec); }` where `getSettings()` is imported from `utils/operator-api.ts` and calls `GET /api/v1/settings` via Rancher proxy. Spec transformation: `buildSpec(crdSpec)` (CRD → UI), `buildCrdSpec(spec)` (UI → CRD with parameter), `toSelectorValue(ref)` (wraps SecretKeySelector in `{ valueFrom: { secretKeyRef } }` envelope), `fromSelectorValue(val)` (extracts `.valueFrom.secretKeyRef`). Save flow: `async save(buttonDone) { this.errors = []; const data = await putSettings(this.buildCrdSpec(this.spec)); this.spec = this.buildSpec(data.spec); buttonDone(true); }` with try/catch setting `this.errors = [msg]` on failure. Four accordion sections: SUSE Application Collection (expanded by default), SUSE Registry, Fleet/GitOps, Advanced (Registry Endpoints + Catalog Discovery + Image Rewrite). SecretSelector components use `toSelectorValue/fromSelectorValue` for binding. Apply button: `<AsyncButton @click="save" />` at bottom-right via `.footer-bar` flex. Error state: 404 → `loadError=true` → error Banner; fetch errors → `fetchErrorMessage` → error Banner; save errors → `errors[]` array → `v-for` Banners. L10n keys namespace `aif.pages.settings.*` in `en-us.yaml`.
 ---
 
 **ID:** P6-10
