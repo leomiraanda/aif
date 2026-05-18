@@ -2,7 +2,9 @@ package controller
 
 import (
 	"context"
+	stderrors "errors"
 	"fmt"
+	"time"
 
 	aifv1 "github.com/SUSE/aif/api/v1alpha1"
 	"github.com/SUSE/aif/pkg/conditions"
@@ -66,10 +68,7 @@ func (r *WorkloadReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 	}
 
 	// Main reconciliation
-	if err := r.reconcile(ctx, &w); err != nil {
-		logger.Error(err, "reconciliation failed")
-		return ctrl.Result{}, err
-	}
+	deployErr := r.reconcile(ctx, &w)
 
 	// Update status
 	if err := r.Status().Update(ctx, &w); err != nil {
@@ -77,7 +76,13 @@ func (r *WorkloadReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		return ctrl.Result{}, err
 	}
 
-	return ctrl.Result{}, nil
+	// Calculate requeue interval from deployer error
+	var requeueAfter time.Duration
+	if deployErr != nil {
+		_, requeueAfter, _ = mapDeployError(deployErr)
+	}
+
+	return ctrl.Result{RequeueAfter: requeueAfter}, nil
 }
 
 // validateSource validates the Workload source discriminated union
@@ -103,6 +108,26 @@ func (r *WorkloadReconciler) validateSource(w *aifv1.Workload) error {
 
 	default:
 		return fmt.Errorf("invalid source.kind: %s", w.Spec.Source.Kind)
+	}
+}
+
+// mapDeployError translates a Deployer error into (reason, requeueAfter,
+// terminal) per spec §6.3. Returns ("", 0, false) for nil errors — caller
+// handles the success path separately.
+func mapDeployError(err error) (reason string, requeueAfter time.Duration, terminal bool) {
+	switch {
+	case err == nil:
+		return "", 0, false
+	case stderrors.Is(err, workload.ErrNestedBlueprintNotSupported):
+		return conditions.ReasonUnsupportedComposition, 0, true
+	case stderrors.Is(err, workload.ErrSourceNotResolved):
+		return conditions.ReasonSourceNotResolved, 30 * time.Second, false
+	case stderrors.Is(err, workload.ErrComponentInstallFailed):
+		return conditions.ReasonComponentInstallFailed, 30 * time.Second, false
+	case stderrors.Is(err, workload.ErrComponentUninstallFailed):
+		return conditions.ReasonOrphanCleanupPending, 30 * time.Second, false
+	default:
+		return conditions.ReasonReconcileFailed, 30 * time.Second, false
 	}
 }
 
@@ -142,20 +167,25 @@ func (r *WorkloadReconciler) reconcile(ctx context.Context, w *aifv1.Workload) e
 	result, deployErr := r.Deployer.Deploy(ctx, req)
 	workload.ApplyDeployResult(w, result)
 
-	// Error → condition mapping is implemented in Task 27. For now, set a
-	// minimal condition so the build is green and existing tests can be
-	// updated incrementally.
+	// Map deployer error/result to Ready condition per spec §6.3
 	ready := metav1.Condition{
 		Type:               conditions.TypeReady,
 		ObservedGeneration: w.Generation,
 	}
 	if deployErr == nil {
-		ready.Status = metav1.ConditionTrue
-		ready.Reason = conditions.ReasonInstalled
-		ready.Message = "All components deployed"
+		if result.Phase == workload.PhaseRunning {
+			ready.Status = metav1.ConditionTrue
+			ready.Reason = conditions.ReasonInstalled
+			ready.Message = "All components deployed"
+		} else {
+			ready.Status = metav1.ConditionFalse
+			ready.Reason = conditions.ReasonInstalling
+			ready.Message = fmt.Sprintf("Workload phase %q", result.Phase)
+		}
 	} else {
+		reason, _, _ := mapDeployError(deployErr)
 		ready.Status = metav1.ConditionFalse
-		ready.Reason = conditions.ReasonReconcileFailed
+		ready.Reason = reason
 		ready.Message = deployErr.Error()
 	}
 	r.setCondition(w, ready)
@@ -166,7 +196,8 @@ func (r *WorkloadReconciler) reconcile(ctx context.Context, w *aifv1.Workload) e
 	// Set ObservedGeneration
 	w.Status.ObservedGeneration = w.Generation
 
-	return nil
+	// Return deployErr for requeue calculation (caller handles mapping)
+	return deployErr
 }
 
 // handleDeletion handles Workload deletion with finalizer cleanup
