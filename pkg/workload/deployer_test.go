@@ -467,6 +467,83 @@ func (s *stubNvidiaDeployer) GenerateValues(_ context.Context, req nvidia.Genera
 
 func (s *stubNvidiaDeployer) UpdateSettings(_ nvidia.EngineSettings) {}
 
+func TestDeploy_DriftCleanup_UninstallsOrphans(t *testing.T) {
+	d := newTestDeployer(t)
+	// FakeEngine default install returns deployed; default uninstall returns nil.
+
+	req := DeployRequest{
+		Namespace: "ns", ID: "wid", SpecName: "n",
+		Source: SourceRef{Kind: SourceKindApp, App: &AppRef{Repo: "r", Chart: "milvus", Version: "1"}},
+		Previous: []ComponentRelease{
+			{Name: "n", ReleaseName: ComposeReleaseName("wid", "n"), Status: "deployed"},
+			{Name: "old", ReleaseName: "wid-old", Status: "deployed"},
+		},
+	}
+
+	result, err := d.Deploy(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Deploy: %v", err)
+	}
+
+	helmEng := d.helm.(*helm.FakeEngine)
+	uninstalls := filterUninstallCalls(helmEng.Calls)
+	if len(uninstalls) != 1 || uninstalls[0].Name != "wid-old" {
+		t.Errorf("uninstalls=%+v, want [wid-old]", uninstalls)
+	}
+	for _, c := range result.Components {
+		if c.Name == "old" {
+			t.Errorf("orphan 'old' present in result: %+v", c)
+		}
+	}
+}
+
+func TestDeploy_OrphanUninstallFails_RecordsStatus(t *testing.T) {
+	d := newTestDeployer(t)
+	helmEng := d.helm.(*helm.FakeEngine)
+	helmEng.UninstallResult = func(ns, release string) error {
+		if release == "wid-old" {
+			return errors.New("transient failure")
+		}
+		return nil
+	}
+
+	req := DeployRequest{
+		Namespace: "ns", ID: "wid", SpecName: "n",
+		Source:   SourceRef{Kind: SourceKindApp, App: &AppRef{Repo: "r", Chart: "milvus", Version: "1"}},
+		Previous: []ComponentRelease{
+			{Name: "n", ReleaseName: ComposeReleaseName("wid", "n"), Status: "deployed"},
+			{Name: "old", ReleaseName: "wid-old", Status: "deployed"},
+		},
+	}
+
+	result, err := d.Deploy(context.Background(), req)
+	if !errors.Is(err, ErrComponentUninstallFailed) {
+		t.Errorf("err=%v, want ErrComponentUninstallFailed", err)
+	}
+
+	var foundOld *ComponentRelease
+	for i := range result.Components {
+		if result.Components[i].Name == "old" {
+			foundOld = &result.Components[i]
+		}
+	}
+	if foundOld == nil || foundOld.Status != "orphan-uninstall-failed" {
+		t.Errorf("expected 'old' with Status=orphan-uninstall-failed, got %+v", foundOld)
+	}
+}
+
+// filterUninstallCalls — companion to filterInstallCalls (added in Task 19)
+// for filtering the FakeEngine.Calls log by Method.
+func filterUninstallCalls(calls []helm.FakeCall) []helm.FakeCall {
+	out := make([]helm.FakeCall, 0, len(calls))
+	for _, c := range calls {
+		if c.Method == "Uninstall" {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
 // newTestDeployer is a helper used by all deployer_test.go tests.
 // Builds a real *deployer with fakes for every dependency.
 //

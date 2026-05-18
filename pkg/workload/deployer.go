@@ -74,6 +74,21 @@ func (d *deployer) Deploy(ctx context.Context, req DeployRequest) (DeployResult,
 		}
 	}
 
+	// Orphan cleanup: uninstall releases that were previously installed but
+	// are no longer in the desired set. Failures keep the orphan visible in
+	// status with marker status; phase aggregation (Task 22) will see
+	// "orphan-uninstall-failed" and surface phase=Deploying until clean.
+	orphans := detectOrphans(req.Previous, desired)
+	for _, orphan := range orphans {
+		if uerr := d.helm.Uninstall(ctx, req.Namespace, orphan.ReleaseName); uerr != nil {
+			orphan.Status = "orphan-uninstall-failed"
+			components = append(components, orphan)
+			errs = append(errs, errors.Join(ErrComponentUninstallFailed,
+				fmt.Errorf("orphan %q: %w", orphan.Name, uerr)))
+		}
+		// Successful uninstall: orphan is implicitly dropped (not appended to components).
+	}
+
 	// Phase aggregation is Task 22; placeholder behavior here so tests can
 	// distinguish "empty/error" from "non-empty/no-error".
 	phase := PhasePending
