@@ -2,13 +2,18 @@ package workload
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
+	"time"
 
 	"github.com/SUSE/aif/pkg/blueprint"
 	"github.com/SUSE/aif/pkg/bundle"
 	"github.com/SUSE/aif/pkg/helm"
 	"github.com/SUSE/aif/pkg/nvidia"
+
+	"sigs.k8s.io/yaml"
 )
 
 // deployer is the production Deployer. Pure orchestrator: holds
@@ -51,9 +56,105 @@ func NewDeployer(
 }
 
 // Deploy is implemented incrementally in tasks 15-25.
-func (d *deployer) Deploy(_ context.Context, _ DeployRequest) (DeployResult, error) {
-	// Tasks 15-25 fill this in.
-	return DeployResult{}, nil
+func (d *deployer) Deploy(ctx context.Context, req DeployRequest) (DeployResult, error) {
+	desired, observedGen, err := d.resolveSource(ctx, req)
+	if err != nil {
+		return DeployResult{ObservedBundleGeneration: observedGen}, err
+	}
+
+	var (
+		components []ComponentRelease
+		errs       []error
+	)
+	for _, dc := range desired {
+		release, derr := d.installComponent(ctx, req, dc)
+		components = append(components, release)
+		if derr != nil {
+			errs = append(errs, derr)
+		}
+	}
+
+	// Phase aggregation is Task 22; placeholder behavior here so tests can
+	// distinguish "empty/error" from "non-empty/no-error".
+	phase := PhasePending
+	if len(components) > 0 {
+		phase = PhaseRunning
+	}
+
+	return DeployResult{
+		Components:               components,
+		ObservedBundleGeneration: observedGen,
+		Phase:                    phase,
+	}, errors.Join(errs...)
+}
+
+// installComponent runs a single component install: parses overrides,
+// composes release name, builds the helm.InstallRequest, calls the engine,
+// and translates the result into a ComponentRelease.
+//
+// NIM detection (layer 4) is added in Task 20.
+func (d *deployer) installComponent(ctx context.Context, req DeployRequest, dc desiredComponent) (ComponentRelease, error) {
+	bpOverrides, err := parseYAMLOverrides(dc.blueprintOverride)
+	if err != nil {
+		return ComponentRelease{Name: dc.name, Status: "failed"},
+			errors.Join(ErrComponentInstallFailed,
+				fmt.Errorf("parse blueprint override for %q: %w", dc.name, err))
+	}
+	wlOverrides, err := parseYAMLOverrides(req.Overrides[dc.name])
+	if err != nil {
+		return ComponentRelease{Name: dc.name, Status: "failed"},
+			errors.Join(ErrComponentInstallFailed,
+				fmt.Errorf("parse workload override for %q: %w", dc.name, err))
+	}
+
+	chartRef := composeChartRef(dc.repo, dc.chart, dc.version)
+	releaseName := ComposeReleaseName(req.ID, dc.name)
+
+	status, ierr := d.helm.InstallChartFromRepo(ctx, helm.InstallRequest{
+		Namespace:   req.Namespace,
+		ReleaseName: releaseName,
+		ChartRef:    chartRef,
+		Overrides: helm.Overrides{
+			Blueprint: bpOverrides,
+			Workload:  wlOverrides,
+			// NIMGenerated added in Task 20.
+		},
+		Wait:    false,
+		Timeout: 5 * time.Minute,
+	})
+	rel := ComponentRelease{
+		Name:        dc.name,
+		ReleaseName: releaseName,
+		ChartRef:    chartRef,
+		Status:      status.Status,
+		Revision:    int32(status.Revision),
+	}
+	if ierr != nil {
+		rel.Status = "failed"
+		return rel, errors.Join(ErrComponentInstallFailed, fmt.Errorf("helm install %q: %w", dc.name, ierr))
+	}
+	return rel, nil
+}
+
+// parseYAMLOverrides parses a YAML string from the user CR's
+// valueOverrides map into a Go map. Empty/whitespace input → nil map
+// (treated as "no overrides"). Invalid YAML → error.
+func parseYAMLOverrides(raw string) (map[string]any, error) {
+	if strings.TrimSpace(raw) == "" {
+		return nil, nil
+	}
+	var out map[string]any
+	if err := yaml.Unmarshal([]byte(raw), &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// composeChartRef builds the OCI chart ref string from {repo, chart, version}.
+// Trims trailing slash on repo to avoid `oci://r//chart:1.0`.
+func composeChartRef(repo, chart, version string) string {
+	repo = strings.TrimRight(repo, "/")
+	return fmt.Sprintf("%s/%s:%s", repo, chart, version)
 }
 
 // Teardown is implemented in task 24.

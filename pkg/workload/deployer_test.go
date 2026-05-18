@@ -203,6 +203,117 @@ func TestDetectOrphans_EmptyDesired_ReturnsAllPrevious(t *testing.T) {
 	}
 }
 
+func TestDeploy_App_NonNIM_HappyPath(t *testing.T) {
+	d := newTestDeployer(t)
+	// FakeEngine default returns Status="deployed", Revision=1 — no override needed.
+
+	req := DeployRequest{
+		Namespace: "ns", ID: "wid", SpecName: "my-llm",
+		Source: SourceRef{Kind: SourceKindApp, App: &AppRef{Repo: "oci://r", Chart: "milvus", Version: "1.0"}},
+		Overrides: map[string]string{"my-llm": "replicaCount: 5"},
+	}
+
+	result, err := d.Deploy(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Deploy: %v", err)
+	}
+
+	if len(result.Components) != 1 {
+		t.Fatalf("Components len=%d, want 1", len(result.Components))
+	}
+	c := result.Components[0]
+	if c.Name != "my-llm" {
+		t.Errorf("Name=%q, want my-llm", c.Name)
+	}
+	wantRelease := ComposeReleaseName("wid", "my-llm")
+	if c.ReleaseName != wantRelease {
+		t.Errorf("ReleaseName=%q, want %q", c.ReleaseName, wantRelease)
+	}
+	if c.Status != "deployed" {
+		t.Errorf("Status=%q, want deployed", c.Status)
+	}
+
+	helmEng := d.helm.(*helm.FakeEngine)
+	installs := filterInstallCalls(helmEng.Calls)
+	if len(installs) != 1 {
+		t.Fatalf("install calls=%d, want 1", len(installs))
+	}
+	call := installs[0]
+	if call.Request.ChartRef != "oci://r/milvus:1.0" {
+		t.Errorf("ChartRef=%q, want oci://r/milvus:1.0", call.Request.ChartRef)
+	}
+	rc, ok := call.Request.Overrides.Workload["replicaCount"]
+	if !ok {
+		t.Errorf("Workload override missing replicaCount: %+v", call.Request.Overrides.Workload)
+	}
+	// YAML unmarshals integers as float64 OR int depending on the library;
+	// sigs.k8s.io/yaml routes through JSON, so it's float64. Accept either.
+	switch v := rc.(type) {
+	case int, int32, int64:
+		if v != 5 && v != int32(5) && v != int64(5) {
+			t.Errorf("replicaCount=%v, want 5", v)
+		}
+	case float64:
+		if v != 5 {
+			t.Errorf("replicaCount=%v, want 5", v)
+		}
+	default:
+		t.Errorf("replicaCount type=%T value=%v, want numeric 5", rc, rc)
+	}
+	if call.Request.Overrides.NIMGenerated != nil {
+		t.Errorf("NIMGenerated=%+v, want nil (non-NIM)", call.Request.Overrides.NIMGenerated)
+	}
+}
+
+func TestDeploy_Blueprint_3Components_InstallsInOrder(t *testing.T) {
+	d := newTestDeployer(t)
+
+	bpRepo := d.blueprintRepo.(*blueprint.FakeRepository)
+	bpRepo.Seed(&aifv1.Blueprint{
+		ObjectMeta: metav1.ObjectMeta{Name: "rag-1.0"},
+		Spec: aifv1.BlueprintSpec{
+			Components: []aifv1.ComponentRef{
+				{Name: "llm", Kind: aifv1.ComponentKindApp, App: &aifv1.AppRef{Repo: "r", Chart: "milvus", Version: "1"}},
+				{Name: "vec", Kind: aifv1.ComponentKindApp, App: &aifv1.AppRef{Repo: "r", Chart: "vec", Version: "1"}},
+				{Name: "ret", Kind: aifv1.ComponentKindApp, App: &aifv1.AppRef{Repo: "r", Chart: "ret", Version: "1"}},
+			},
+		},
+	})
+
+	req := DeployRequest{
+		Namespace: "ns", ID: "wid",
+		Source: SourceRef{Kind: SourceKindBlueprint, Blueprint: &BlueprintRef{Name: "rag", Version: "1.0"}},
+	}
+
+	result, err := d.Deploy(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Deploy: %v", err)
+	}
+
+	if len(result.Components) != 3 {
+		t.Fatalf("Components len=%d, want 3", len(result.Components))
+	}
+	wantOrder := []string{"llm", "vec", "ret"}
+	for i, name := range wantOrder {
+		if result.Components[i].Name != name {
+			t.Errorf("Components[%d].Name=%q, want %q", i, result.Components[i].Name, name)
+		}
+	}
+}
+
+// filterInstallCalls returns only the InstallChartFromRepo entries from the
+// FakeEngine call log — there's no per-method slice; the fake records all
+// methods in one Calls slice.
+func filterInstallCalls(calls []helm.FakeCall) []helm.FakeCall {
+	out := make([]helm.FakeCall, 0, len(calls))
+	for _, c := range calls {
+		if c.Method == "InstallChartFromRepo" {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
 // newTestDeployer is a helper used by all deployer_test.go tests.
 // Builds a real *deployer with fakes for every dependency.
 //
