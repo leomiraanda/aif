@@ -223,13 +223,15 @@ export default defineComponent({
         draftBundles.value = (allBundles || []).filter(
           (b) => !b.status?.phase || b.status.phase === 'Draft'
         );
-      } catch {
+      } catch (err) {
+        console.error('AddToBundleDialog: failed to load bundles', err); // eslint-disable-line no-console
         draftBundles.value = [];
       }
 
       try {
         namespaces.value = await store.dispatch('management/findAll', { type: NAMESPACE }) || [];
-      } catch {
+      } catch (err) {
+        console.error('AddToBundleDialog: failed to load namespaces', err); // eslint-disable-line no-console
         namespaces.value = [];
       }
     });

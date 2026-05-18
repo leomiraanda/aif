@@ -216,7 +216,8 @@ export default defineComponent({
     const loadCategories = async () => {
       try {
         categories.value = await listCategories();
-      } catch {
+      } catch (err) {
+        console.error('AppsPage: failed to load categories', err); // eslint-disable-line no-console
         categories.value = [];
       }
     };
