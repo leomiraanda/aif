@@ -147,8 +147,8 @@ test('apps.vue persists includeRefBlueprints toggle to localStorage', () => {
   assert.match(source, /localStorage\.setItem\(STORAGE_KEY/);
 });
 
-test('apps.vue injects t() into setup so error path does not throw', () => {
+test('apps.vue injects t() into setup with proxy binding so runtime calls do not lose this', () => {
   const source = read('pages/apps.vue');
 
-  assert.match(source, /const t = instance\?\.proxy\?\.t/);
+  assert.match(source, /const t = instance\?\.proxy\?\.t\?\.bind\(instance\.proxy\)/);
 });

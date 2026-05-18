@@ -103,7 +103,7 @@ export default defineComponent({
   setup(props, { emit }) {
     const instance = getCurrentInstance();
     const store = inject('$store') || instance?.proxy?.$store;
-    const t = instance?.proxy?.t || ((key) => key);
+    const t = instance?.proxy?.t?.bind(instance.proxy) || ((key) => key);
 
     const mode = ref('existing');
     const selectedBundle = ref(null);

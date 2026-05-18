@@ -164,7 +164,7 @@ export default defineComponent({
   setup() {
     const instance = getCurrentInstance();
     const store = instance?.proxy?.$store;
-    const t = instance?.proxy?.t || ((key) => key);
+    const t = instance?.proxy?.t?.bind(instance.proxy) || ((key) => key);
 
     const loading = ref(true);
     const error = ref('');
