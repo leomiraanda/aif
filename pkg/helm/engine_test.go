@@ -505,3 +505,65 @@ func TestInstallChartFromRepo_NoRewrite_WhenRulesEmpty(t *testing.T) {
 		t.Errorf("image.repository=%v, want unchanged", image["repository"])
 	}
 }
+
+func TestInstallChartFromRepo_AppendsImagePullSecretsAsLayer6(t *testing.T) {
+	runner := newRecordingRunner(t,
+		withChartDefaults(map[string]any{"image": map[string]any{"repository": "registry.suse.com/x", "tag": "1"}}),
+		withInstallSucceeds(),
+	)
+	e := newTestEngine(t, runner)
+
+	_, err := e.InstallChartFromRepo(context.Background(), InstallRequest{
+		Namespace: "ns", ReleaseName: "rel", ChartRef: "oci://x/y:1",
+	})
+	if err != nil {
+		t.Fatalf("install: %v", err)
+	}
+
+	got := runner.lastInstallValues()
+	ips, ok := got["imagePullSecrets"].([]any)
+	if !ok {
+		t.Fatalf("imagePullSecrets missing or wrong type: %T", got["imagePullSecrets"])
+	}
+	if len(ips) != 1 {
+		t.Fatalf("imagePullSecrets len=%d, want 1", len(ips))
+	}
+	entry, ok := ips[0].(map[string]any)
+	if !ok || entry["name"] != "suse-registry-creds" {
+		t.Errorf("imagePullSecrets[0]=%v, want {name: suse-registry-creds}", ips[0])
+	}
+}
+
+func TestInstallChartFromRepo_OverridesPullSecretEntry_StillEmits(t *testing.T) {
+	// User-supplied imagePullSecrets are forbidden top-level keys (per
+	// MergeValues policy); they should be silently dropped from layer 3,
+	// then layer 6 adds the constant entry. Result: still exactly 1 entry.
+	runner := newRecordingRunner(t,
+		withChartDefaults(map[string]any{"image": map[string]any{"repository": "registry.suse.com/x", "tag": "1"}}),
+		withInstallSucceeds(),
+	)
+	e := newTestEngine(t, runner)
+
+	_, err := e.InstallChartFromRepo(context.Background(), InstallRequest{
+		Namespace: "ns", ReleaseName: "rel", ChartRef: "oci://x/y:1",
+		Overrides: Overrides{Workload: map[string]any{
+			"imagePullSecrets": []any{map[string]any{"name": "evil"}},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("install: %v", err)
+	}
+
+	got := runner.lastInstallValues()
+	ips, ok := got["imagePullSecrets"].([]any)
+	if !ok {
+		t.Fatalf("imagePullSecrets missing or wrong type: %T", got["imagePullSecrets"])
+	}
+	if len(ips) != 1 {
+		t.Fatalf("imagePullSecrets len=%d, want 1 (user override dropped, constant added)", len(ips))
+	}
+	entry, ok := ips[0].(map[string]any)
+	if !ok || entry["name"] != "suse-registry-creds" {
+		t.Errorf("imagePullSecrets[0]=%v, want {name: suse-registry-creds}", ips[0])
+	}
+}

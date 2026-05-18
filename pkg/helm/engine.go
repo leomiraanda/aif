@@ -78,6 +78,13 @@ func (e *engine) InstallChartFromRepo(ctx context.Context, req InstallRequest) (
 		merged = ApplyImageRewrites(merged, settings.ImageRewrite.Rules)
 	}
 
+	// Layer 6: operator-managed imagePullSecrets (always last; user overrides
+	// of this top-level key were dropped in MergeValues per §6.6).
+	const operatorPullSecretName = "suse-registry-creds"
+	merged["imagePullSecrets"] = []any{
+		map[string]any{"name": operatorPullSecretName},
+	}
+
 	timeout := req.Timeout
 	if timeout == 0 {
 		timeout = defaultInstallTimeout
