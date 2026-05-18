@@ -9,6 +9,7 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -467,6 +468,110 @@ var _ = Describe("Workload finalizer cleanup (P4-2)", func() {
 			err := k8sClient.Get(ctx, key, &got)
 			return errors.IsNotFound(err)
 		}, timeout, interval).Should(BeTrue())
+	})
+})
+
+var _ = Describe("Workload deployer events (P4-2)", func() {
+	const timeout = 30 * time.Second
+	const interval = 250 * time.Millisecond
+	ctx := context.Background()
+
+	eventReasons := func(w *aifv1.Workload) []string {
+		var events corev1.EventList
+		_ = k8sClient.List(ctx, &events, client.InNamespace(w.Namespace))
+		var reasons []string
+		for _, e := range events.Items {
+			if e.InvolvedObject.UID == w.UID {
+				reasons = append(reasons, e.Reason)
+			}
+		}
+		return reasons
+	}
+
+	It("emits Running event on Deploying→Running transition", func() {
+		// First reconcile: Deploying.
+		fakeDeployer.DeployResult = workload.DeployResult{
+			Phase:      workload.PhaseDeploying,
+			Components: []workload.ComponentRelease{{Name: "n", Status: "pending-install"}},
+		}
+
+		name := "wid-evt-" + randomSuffix()
+		w := &aifv1.Workload{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default"},
+			Spec:       aifv1.WorkloadSpec{Name: "n", Source: aifv1.WorkloadSource{Kind: aifv1.WorkloadSourceKindApp, App: &aifv1.AppRef{Repo: "r", Chart: "c", Version: "1"}}},
+		}
+		Expect(k8sClient.Create(ctx, w)).To(Succeed())
+		key := client.ObjectKeyFromObject(w)
+
+		Eventually(func(g Gomega) {
+			var got aifv1.Workload
+			g.Expect(k8sClient.Get(ctx, key, &got)).To(Succeed())
+			g.Expect(string(got.Status.Phase)).To(Equal(string(aifv1.WorkloadPhaseDeploying)))
+		}, timeout, interval).Should(Succeed())
+
+		// Switch fake to Running.
+		fakeDeployer.DeployResult = workload.DeployResult{
+			Phase:      workload.PhaseRunning,
+			Components: []workload.ComponentRelease{{Name: "n", Status: "deployed"}},
+		}
+
+		// Touch the Workload so the reconciler re-runs (status update doesn't auto-trigger a re-reconcile in envtest).
+		Eventually(func(g Gomega) {
+			var got aifv1.Workload
+			g.Expect(k8sClient.Get(ctx, key, &got)).To(Succeed())
+			if got.Annotations == nil {
+				got.Annotations = map[string]string{}
+			}
+			got.Annotations["touch"] = "1"
+			g.Expect(k8sClient.Update(ctx, &got)).To(Succeed())
+		}, timeout, interval).Should(Succeed())
+
+		Eventually(func(g Gomega) {
+			var got aifv1.Workload
+			g.Expect(k8sClient.Get(ctx, key, &got)).To(Succeed())
+			g.Expect(string(got.Status.Phase)).To(Equal(string(aifv1.WorkloadPhaseRunning)))
+		}, timeout, interval).Should(Succeed())
+
+		// Verify event present.
+		Eventually(func() []string {
+			var got aifv1.Workload
+			_ = k8sClient.Get(ctx, key, &got)
+			return eventReasons(&got)
+		}, timeout, interval).Should(ContainElement("Running"))
+
+		// Cleanup
+		Expect(k8sClient.Delete(ctx, w)).To(Succeed())
+	})
+
+	It("emits BundleTestGenerationDrift when observed != recorded", func() {
+		fakeDeployer.DeployResult = workload.DeployResult{
+			Phase:                    workload.PhaseRunning,
+			ObservedBundleGeneration: 9, // recorded was 5
+			Components:               []workload.ComponentRelease{{Name: "c", Status: "deployed"}},
+		}
+
+		name := "wid-drift-" + randomSuffix()
+		w := &aifv1.Workload{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default"},
+			Spec: aifv1.WorkloadSpec{
+				Name: "c",
+				Source: aifv1.WorkloadSource{
+					Kind:       aifv1.WorkloadSourceKindBundleTest,
+					BundleTest: &aifv1.BundleTestRef{Namespace: "default", Name: "b1", Generation: 5},
+				},
+			},
+		}
+		Expect(k8sClient.Create(ctx, w)).To(Succeed())
+		key := client.ObjectKeyFromObject(w)
+
+		Eventually(func() []string {
+			var got aifv1.Workload
+			_ = k8sClient.Get(ctx, key, &got)
+			return eventReasons(&got)
+		}, timeout, interval).Should(ContainElement("BundleTestGenerationDrift"))
+
+		// Cleanup
+		Expect(k8sClient.Delete(ctx, w)).To(Succeed())
 	})
 })
 

@@ -164,9 +164,13 @@ func (r *WorkloadReconciler) reconcile(ctx context.Context, w *aifv1.Workload) e
 	}
 
 	// P4-2: Translate to DeployRequest, call Deployer, apply result.
+	priorPhase := w.Status.Phase
 	req := workload.WorkloadToDeployRequest(w)
 	result, deployErr := r.Deployer.Deploy(ctx, req)
 	workload.ApplyDeployResult(w, result)
+
+	// §6.4 events
+	r.emitDeployEvents(w, priorPhase, result, deployErr)
 
 	// Map deployer error/result to Ready condition per spec §6.3
 	ready := metav1.Condition{
@@ -238,6 +242,51 @@ func (r *WorkloadReconciler) handleDeletion(ctx context.Context, w *aifv1.Worklo
 // status hasn't actually changed (pre-setting it breaks that contract).
 func (r *WorkloadReconciler) setCondition(w *aifv1.Workload, condition metav1.Condition) {
 	conditions.Set(&w.Status.Conditions, condition)
+}
+
+// emitDeployEvents emits §6.4 events for the deploy result. Stateless —
+// EventRecorder aggregates duplicate Reason/Message within a window.
+func (r *WorkloadReconciler) emitDeployEvents(
+	w *aifv1.Workload,
+	priorPhase aifv1.WorkloadPhase,
+	result workload.DeployResult,
+	deployErr error,
+) {
+	newPhase := aifv1.WorkloadPhase(result.Phase)
+	if priorPhase != newPhase {
+		switch newPhase {
+		case aifv1.WorkloadPhaseDeploying:
+			r.Recorder.Eventf(w, nil, corev1.EventTypeNormal, "Deploying",
+				conditions.ActionReconciling, "Workload deployment in progress")
+		case aifv1.WorkloadPhaseRunning:
+			r.Recorder.Eventf(w, nil, corev1.EventTypeNormal, "Running",
+				conditions.ActionReconciling, "All components deployed")
+		case aifv1.WorkloadPhaseFailed:
+			r.Recorder.Eventf(w, nil, corev1.EventTypeWarning, "ComponentInstallFailed",
+				conditions.ActionInstalling, "One or more components failed: %v", deployErr)
+		}
+	}
+
+	// BundleTest generation drift
+	if w.Spec.Source.Kind == aifv1.WorkloadSourceKindBundleTest &&
+		w.Spec.Source.BundleTest != nil &&
+		result.ObservedBundleGeneration != 0 &&
+		result.ObservedBundleGeneration != w.Spec.Source.BundleTest.Generation {
+		r.Recorder.Eventf(w, nil, corev1.EventTypeNormal, "BundleTestGenerationDrift",
+			conditions.ActionReconciling,
+			"Bundle generation drifted: recorded=%d observed=%d",
+			w.Spec.Source.BundleTest.Generation, result.ObservedBundleGeneration)
+	}
+
+	// Source-not-resolved + nested-Blueprint reject events
+	if stderrors.Is(deployErr, workload.ErrSourceNotResolved) {
+		r.Recorder.Eventf(w, nil, corev1.EventTypeWarning, "SourceNotResolved",
+			conditions.ActionResolving, "%v", deployErr)
+	}
+	if stderrors.Is(deployErr, workload.ErrNestedBlueprintNotSupported) {
+		r.Recorder.Eventf(w, nil, corev1.EventTypeWarning, "NestedBlueprintRejected",
+			conditions.ActionValidating, "%v", deployErr)
+	}
 }
 
 // SetupWithManager sets up the controller with the Manager
