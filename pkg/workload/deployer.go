@@ -60,3 +60,42 @@ func (d *deployer) Teardown(_ context.Context, _ string, _ []ComponentRelease) e
 	// Task 24 fills this in.
 	return nil
 }
+
+// desiredComponent is the deployer-internal projection of a component
+// to install. Carries everything needed to assemble an InstallRequest.
+type desiredComponent struct {
+	name              string // componentName (release-name suffix; valueOverrides key)
+	repo              string // OCI host + path (e.g. "oci://registry.suse.com/ai/charts")
+	chart             string // chart name (e.g. "nim-llm")
+	version           string // chart version
+	blueprintOverride string // YAML string from Blueprint.spec.valueOverrides[name]; "" for App/BundleTest
+}
+
+// resolveSource translates req.Source into the ordered list of components
+// to install plus the observed bundle generation (BundleTest only).
+//
+// Returns ErrSourceNotResolved if the source CR is not found.
+// Returns ErrNestedBlueprintNotSupported if any child component has Kind=Blueprint.
+func (d *deployer) resolveSource(ctx context.Context, req DeployRequest) ([]desiredComponent, int64, error) {
+	switch req.Source.Kind {
+	case SourceKindApp:
+		if req.Source.App == nil {
+			return nil, 0, ErrSourceNotResolved
+		}
+		return []desiredComponent{{
+			name:    req.SpecName,
+			repo:    req.Source.App.Repo,
+			chart:   req.Source.App.Chart,
+			version: req.Source.App.Version,
+		}}, 0, nil
+
+	case SourceKindBlueprint:
+		// Task 16 implements this branch.
+		return nil, 0, ErrSourceNotResolved
+
+	case SourceKindBundleTest:
+		// Task 17 implements this branch.
+		return nil, 0, ErrSourceNotResolved
+	}
+	return nil, 0, ErrSourceNotResolved
+}
