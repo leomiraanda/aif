@@ -119,7 +119,8 @@ func (d *deployer) installComponent(ctx context.Context, req DeployRequest, dc d
 
 	// NIM detection: ask Discovery whether this chart:version is a known NIM.
 	// Found → call GenerateValues with resolved GPU count; layer 4 = result.
-	// Not found (ErrNIMNotFound or any error) → non-NIM, layer 4 stays nil.
+	// Not found (ErrNIMNotFound) → silently skip (expected for non-NIMs).
+	// Any other error → log warning and treat as non-NIM.
 	var nimGenerated map[string]any
 	if entry, derr := d.nvidiaDisc.Get(ctx, fmt.Sprintf("%s:%s", dc.chart, dc.version)); derr == nil {
 		// gpuCount is a deployer-protocol field, read ONLY from workloadOverrides
@@ -136,6 +137,12 @@ func (d *deployer) installComponent(ctx context.Context, req DeployRequest, dc d
 				errors.Join(ErrComponentInstallFailed, fmt.Errorf("nvidia.GenerateValues for %q: %w", dc.name, gerr))
 		}
 		nimGenerated = generated
+	} else if !errors.Is(derr, nvidia.ErrNIMNotFound) {
+		d.logger.Warn("nvidia.Discovery.Get returned non-NotFound error; treating component as non-NIM",
+			slog.String("component", dc.name),
+			slog.String("chart", dc.chart),
+			slog.String("version", dc.version),
+			slog.String("err", derr.Error()))
 	}
 
 	chartRef := composeChartRef(dc.repo, dc.chart, dc.version)
@@ -201,6 +208,9 @@ func (d *deployer) Teardown(ctx context.Context, namespace string, releases []Co
 	}
 	var errs []error
 	for _, r := range releases {
+		if err := ctx.Err(); err != nil {
+			return errors.Join(append(errs, err)...)
+		}
 		if err := d.helm.Uninstall(ctx, namespace, r.ReleaseName); err != nil {
 			errs = append(errs, fmt.Errorf("uninstall %q: %w", r.ReleaseName, err))
 		}

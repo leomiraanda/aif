@@ -208,7 +208,9 @@ func (r *WorkloadReconciler) reconcile(ctx context.Context, w *aifv1.Workload) e
 	r.setCondition(w, ready)
 
 	// Record success event
-	r.Recorder.Eventf(w, nil, "Normal", "WorkloadCreated", conditions.ActionValidating, "Workload validated successfully")
+	if deployErr == nil {
+		r.Recorder.Eventf(w, nil, "Normal", "WorkloadCreated", conditions.ActionValidating, "Workload validated successfully")
+	}
 
 	// Set ObservedGeneration
 	w.Status.ObservedGeneration = w.Generation
@@ -264,7 +266,11 @@ func (r *WorkloadReconciler) emitDeployEvents(
 	result workload.DeployResult,
 	deployErr error,
 ) {
-	newPhase := aifv1.WorkloadPhase(result.Phase)
+	// Use w.Status.Phase (post-preservation) rather than result.Phase
+	// (pre-preservation). The reconciler may have restored priorPhase for
+	// un-classified errors; emit phase-transition events based on the final
+	// persisted phase, not the raw deployer output.
+	newPhase := w.Status.Phase
 	if priorPhase != newPhase {
 		switch newPhase {
 		case aifv1.WorkloadPhaseDeploying:

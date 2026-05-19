@@ -106,7 +106,6 @@ func main() {
 	// after ctrl.NewManager below (they need the manager's client). Defer
 	// construction until that's available.
 	var publishWorkflow publish.Workflow
-	workloadManager := workload.New(logger)
 
 	// Bus that propagates Settings to all engines on every reconcile (P5-7).
 	engineBus := manager.NewEngineBus(helmEngine, nvidiaDiscovery, nvidiaDeployer, appcoClient, logger)
@@ -125,7 +124,6 @@ func main() {
 		"nvidiaDeployer", fmt.Sprintf("%T", nvidiaDeployer),
 		"appsCatalog", fmt.Sprintf("%T", appsCatalog),
 		"blueprintManager", fmt.Sprintf("%T", blueprintManager),
-		"workloadManager", fmt.Sprintf("%T", workloadManager),
 	)
 
 	// Setup controller-runtime manager with all controllers and webhooks

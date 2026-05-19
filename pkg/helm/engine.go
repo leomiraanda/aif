@@ -72,23 +72,27 @@ func (e *engine) InstallChartFromRepo(ctx context.Context, req InstallRequest) (
 		return ReleaseStatus{}, mergeErr
 	}
 
-	// §6.6 invariant: validate image.repository presence when the caller
-	// requires it (AI workload deployers set RequireImageRepository true;
-	// non-image callers like InstallAIExtension leave it false).
-	if req.RequireImageRepository {
-		if err := validateMerged(merged); err != nil {
-			return ReleaseStatus{}, err
-		}
-	}
-
 	// Layer 5: image rewrite from EngineSettings (P4-6 + P5-7).
 	settings := e.snapshot()
 	if settings.ImageRewrite.Enabled && len(settings.ImageRewrite.Rules) > 0 {
 		merged = ApplyImageRewrites(merged, settings.ImageRewrite.Rules)
 	}
 
+	// §6.6 invariant: validate image.repository presence when the caller
+	// requires it (AI workload deployers set RequireImageRepository true;
+	// non-image callers like InstallAIExtension leave it false). Validate
+	// AFTER all layered transforms so a misconfigured rewrite rule that
+	// produces an empty image.repository is caught.
+	if req.RequireImageRepository {
+		if err := validateMerged(merged); err != nil {
+			return ReleaseStatus{}, err
+		}
+	}
+
 	// Layer 6: operator-managed imagePullSecrets (always last; user overrides
 	// of this top-level key were dropped in MergeValues per §6.6).
+	// TODO(P5-7/P5-5): make this configurable via EngineSettings.PullSecretName
+	// once the pull-secret reconciler (P5-5) owns the Secret lifecycle.
 	const operatorPullSecretName = "suse-registry-creds"
 	merged["imagePullSecrets"] = []any{
 		map[string]any{"name": operatorPullSecretName},
