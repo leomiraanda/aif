@@ -719,6 +719,45 @@ var _ = Describe("Workload deployer envtest scenarios (P4-2)", func() {
 
 		Expect(k8sClient.Delete(ctx, w)).To(Succeed())
 	})
+
+	It("Nested Blueprint surfaces UnsupportedComposition; phase Failed; stable across reconciles", func() {
+		name := "wid-e2e4-" + randomSuffix()
+		fakeDeployer.SetDeployErr(workload.ErrNestedBlueprintNotSupported)
+		fakeDeployer.SetDeployResult(workload.DeployResult{Phase: workload.PhaseFailed})
+
+		w := &aifv1.Workload{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default"},
+			Spec: aifv1.WorkloadSpec{
+				Name: "n",
+				Source: aifv1.WorkloadSource{
+					Kind:      aifv1.WorkloadSourceKindBlueprint,
+					Blueprint: &aifv1.BlueprintRef{Name: "outer", Version: "1.0"},
+				},
+			},
+		}
+		Expect(k8sClient.Create(ctx, w)).To(Succeed())
+		key := client.ObjectKeyFromObject(w)
+
+		readyReason := func() string {
+			var got aifv1.Workload
+			_ = k8sClient.Get(ctx, key, &got)
+			for _, c := range got.Status.Conditions {
+				if c.Type == conditions.TypeReady {
+					return c.Reason
+				}
+			}
+			return ""
+		}
+
+		Eventually(readyReason, timeout, interval).Should(Equal(conditions.ReasonUnsupportedComposition))
+
+		// No requeue → reason should stay stable.
+		Consistently(readyReason, "3s", interval).Should(Equal(conditions.ReasonUnsupportedComposition))
+
+		// Clear err so deletion's Teardown succeeds (FakeDeployer's TeardownErr is nil by default).
+		fakeDeployer.SetDeployErr(nil)
+		Expect(k8sClient.Delete(ctx, w)).To(Succeed())
+	})
 })
 
 // randomSuffix returns a short random string suitable for unique resource
