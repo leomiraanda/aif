@@ -624,6 +624,47 @@ var _ = Describe("Workload deployer envtest scenarios (P4-2)", func() {
 
 		Expect(k8sClient.Delete(ctx, w)).To(Succeed())
 	})
+
+	It("Blueprint-source workload records 3 components in source order", func() {
+		name := "wid-e2e2-" + randomSuffix()
+		fakeDeployer.SetDeployResult(workload.DeployResult{
+			Phase: workload.PhaseRunning,
+			Components: []workload.ComponentRelease{
+				{Name: "llm", ReleaseName: name + "-llm", Status: "deployed"},
+				{Name: "vec", ReleaseName: name + "-vec", Status: "deployed"},
+				{Name: "ret", ReleaseName: name + "-ret", Status: "deployed"},
+			},
+		})
+
+		w := &aifv1.Workload{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default"},
+			Spec: aifv1.WorkloadSpec{
+				Name: "rag",
+				Source: aifv1.WorkloadSource{
+					Kind:      aifv1.WorkloadSourceKindBlueprint,
+					Blueprint: &aifv1.BlueprintRef{Name: "rag", Version: "1.0"},
+				},
+			},
+		}
+		Expect(k8sClient.Create(ctx, w)).To(Succeed())
+		key := client.ObjectKeyFromObject(w)
+
+		Eventually(func() int {
+			var got aifv1.Workload
+			_ = k8sClient.Get(ctx, key, &got)
+			return len(got.Status.ComponentReleases)
+		}, timeout, interval).Should(Equal(3))
+
+		var got aifv1.Workload
+		Expect(k8sClient.Get(ctx, key, &got)).To(Succeed())
+		Expect([]string{
+			got.Status.ComponentReleases[0].Name,
+			got.Status.ComponentReleases[1].Name,
+			got.Status.ComponentReleases[2].Name,
+		}).To(Equal([]string{"llm", "vec", "ret"}))
+
+		Expect(k8sClient.Delete(ctx, w)).To(Succeed())
+	})
 })
 
 // randomSuffix returns a short random string suitable for unique resource
