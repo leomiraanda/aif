@@ -169,6 +169,18 @@ func (r *WorkloadReconciler) reconcile(ctx context.Context, w *aifv1.Workload) e
 	result, deployErr := r.Deployer.Deploy(ctx, req)
 	workload.ApplyDeployResult(w, result)
 
+	// Phase-preservation invariant (spec §6.3): un-classified errors must not
+	// lower the user-visible phase. The mapped error path for known sentinels
+	// (UnsupportedComposition, SourceNotResolved, etc.) intentionally sets a
+	// specific Phase via the deployer's DeployResult; only the catch-all branch
+	// needs preservation.
+	if deployErr != nil {
+		reason, _, _ := mapDeployError(deployErr)
+		if reason == conditions.ReasonReconcileFailed && w.Status.Phase == "" {
+			w.Status.Phase = priorPhase
+		}
+	}
+
 	// §6.4 events
 	r.emitDeployEvents(w, priorPhase, result, deployErr)
 

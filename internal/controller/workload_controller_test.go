@@ -816,6 +816,70 @@ var _ = Describe("Workload deployer envtest scenarios (P4-2)", func() {
 
 		Expect(k8sClient.Delete(ctx, w)).To(Succeed())
 	})
+
+	It("preserves prior phase on un-classified errors", func() {
+		name := "wid-preserve-" + randomSuffix()
+		// First reconcile: succeed → Running
+		fakeDeployer.SetDeployResult(workload.DeployResult{
+			Phase: workload.PhaseRunning,
+			Components: []workload.ComponentRelease{
+				{Name: "n", ReleaseName: name + "-n", Status: "deployed"},
+			},
+		})
+
+		w := &aifv1.Workload{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default"},
+			Spec: aifv1.WorkloadSpec{
+				Name: "n",
+				Source: aifv1.WorkloadSource{
+					Kind: aifv1.WorkloadSourceKindApp,
+					App:  &aifv1.AppRef{Repo: "r", Chart: "c", Version: "1"},
+				},
+			},
+		}
+		Expect(k8sClient.Create(ctx, w)).To(Succeed())
+		key := client.ObjectKeyFromObject(w)
+
+		Eventually(func() aifv1.WorkloadPhase {
+			var got aifv1.Workload
+			_ = k8sClient.Get(ctx, key, &got)
+			return got.Status.Phase
+		}, timeout, interval).Should(Equal(aifv1.WorkloadPhaseRunning))
+
+		// Now flip to un-classified error → phase must stay Running.
+		fakeDeployer.SetDeployErr(stderrors.New("transient bug"))
+		fakeDeployer.SetDeployResult(workload.DeployResult{})
+
+		// Trigger a re-reconcile.
+		Eventually(func(g Gomega) {
+			var got aifv1.Workload
+			g.Expect(k8sClient.Get(ctx, key, &got)).To(Succeed())
+			if got.Annotations == nil {
+				got.Annotations = map[string]string{}
+			}
+			got.Annotations["touch"] = randomSuffix()
+			g.Expect(k8sClient.Update(ctx, &got)).To(Succeed())
+		}, timeout, interval).Should(Succeed())
+
+		// Wait for reconcile + assert phase preserved.
+		Eventually(func() string {
+			var got aifv1.Workload
+			_ = k8sClient.Get(ctx, key, &got)
+			for _, c := range got.Status.Conditions {
+				if c.Type == conditions.TypeReady {
+					return c.Reason
+				}
+			}
+			return ""
+		}, timeout, interval).Should(Equal(conditions.ReasonReconcileFailed))
+
+		var got aifv1.Workload
+		Expect(k8sClient.Get(ctx, key, &got)).To(Succeed())
+		Expect(got.Status.Phase).To(Equal(aifv1.WorkloadPhaseRunning))
+
+		fakeDeployer.SetDeployErr(nil)
+		Expect(k8sClient.Delete(ctx, w)).To(Succeed())
+	})
 })
 
 // randomSuffix returns a short random string suitable for unique resource
