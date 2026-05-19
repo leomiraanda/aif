@@ -191,7 +191,7 @@ func main() {
 	)
 
 	publishHandler := api.NewPublishHandler(publishWorkflow, logger)
-	settingsHandler := api.NewSettingsHandler(mgr.GetClient())
+	settingsHandler := api.NewSettingsHandler(mgr.GetClient(), nil) // nil applier: engine propagation is async via SettingsReconciler
 
 	// Setup API server
 	mux := http.NewServeMux()

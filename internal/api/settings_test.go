@@ -34,9 +34,9 @@ func newSettingsFakeClient(t *testing.T, objects ...client.Object) client.Client
 		Build()
 }
 
-func newSettingsHandlerForTest(c client.Client) http.Handler {
+func newSettingsHandlerForTest(c client.Client, applier SettingsApplier) http.Handler {
 	mux := http.NewServeMux()
-	NewSettingsHandler(c).Register(mux)
+	NewSettingsHandler(c, applier).Register(mux)
 	return mux
 }
 
@@ -57,7 +57,7 @@ func TestSettingsHandler_Get_Returns200WithCurrentSpec(t *testing.T) {
 	existing.Spec.Fleet = &aifv1.FleetConfig{RepoURL: "https://git.example.com"}
 
 	c := newSettingsFakeClient(t, existing)
-	h := newSettingsHandlerForTest(c)
+	h := newSettingsHandlerForTest(c, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/settings", nil)
 	rec := httptest.NewRecorder()
@@ -83,7 +83,7 @@ func TestSettingsHandler_Get_Returns200WithCurrentSpec(t *testing.T) {
 
 func TestSettingsHandler_Get_Returns404WhenNoCR(t *testing.T) {
 	c := newSettingsFakeClient(t) // no objects seeded
-	h := newSettingsHandlerForTest(c)
+	h := newSettingsHandlerForTest(c, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/settings", nil)
 	rec := httptest.NewRecorder()
@@ -106,7 +106,7 @@ func TestSettingsHandler_Get_Returns404WhenNoCR(t *testing.T) {
 
 func TestSettingsHandler_Put_Returns200AndUpdatesCR(t *testing.T) {
 	c := newSettingsFakeClient(t, sampleSettingsCR())
-	h := newSettingsHandlerForTest(c)
+	h := newSettingsHandlerForTest(c, nil)
 
 	body := `{"spec":{"fleet":{"repoURL":"https://git.example.com","branch":"main"}}}`
 	req := httptest.NewRequest(http.MethodPut, "/api/v1/settings", strings.NewReader(body))
@@ -136,18 +136,28 @@ func TestSettingsHandler_Put_Returns200AndUpdatesCR(t *testing.T) {
 	}
 }
 
+// fakeSettingsApplier is a recording SettingsApplier for test (d).
+// Tracks Apply calls to verify the handler never drives engine propagation.
+type fakeSettingsApplier struct {
+	calls int
+}
+
+func (f *fakeSettingsApplier) Apply(_ context.Context, _ SettingsSnapshot) error {
+	f.calls++
+	return nil
+}
+
 // --- (d) PUT /api/v1/settings does not synchronously drive the engine bus ---
 //
-// NewSettingsHandler takes only (client.Client) — no applier/bus parameter.
-// The structural guarantee is in the constructor signature: the handler cannot
-// call an engine bus it was never given. Engine propagation is async, driven
-// by SettingsReconciler on the next reconcile loop (ARCHITECTURE.md §8.2.1).
-// This test verifies a successful PUT completes without error, proving the
-// handler is self-contained and requires no engine wiring to function.
+// Engine propagation is async, driven by SettingsReconciler on the next
+// reconcile loop (ARCHITECTURE.md §8.2.1). This test injects a FakeSettingsApplier
+// and asserts zero Apply calls after a successful PUT, guarding against future
+// refactors that might accidentally call Apply synchronously.
 
 func TestSettingsHandler_Put_DoesNotDriveEngineBus(t *testing.T) {
 	c := newSettingsFakeClient(t, sampleSettingsCR())
-	h := newSettingsHandlerForTest(c)
+	applier := &fakeSettingsApplier{}
+	h := newSettingsHandlerForTest(c, applier)
 
 	body := `{"spec":{"fleet":{"repoURL":"https://git.example.com"}}}`
 	req := httptest.NewRequest(http.MethodPut, "/api/v1/settings", strings.NewReader(body))
@@ -157,13 +167,18 @@ func TestSettingsHandler_Put_DoesNotDriveEngineBus(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("PUT status = %d, want 200; body=%s", rec.Code, rec.Body.String())
 	}
+
+	// The handler MUST NOT call applier.Apply — reconcile is async.
+	if applier.calls != 0 {
+		t.Errorf("applier.Apply called %d times, want 0 (engine propagation is async)", applier.calls)
+	}
 }
 
 // --- PUT with invalid JSON returns 400 ---
 
 func TestSettingsHandler_Put_InvalidJSON_Returns400(t *testing.T) {
 	c := newSettingsFakeClient(t)
-	h := newSettingsHandlerForTest(c)
+	h := newSettingsHandlerForTest(c, nil)
 
 	req := httptest.NewRequest(http.MethodPut, "/api/v1/settings", strings.NewReader("{invalid"))
 	rec := httptest.NewRecorder()

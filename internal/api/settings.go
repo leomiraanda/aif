@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -18,19 +19,37 @@ const (
 	settingsFieldOwner = "aif-operator-api"
 )
 
+// SettingsApplier is the port for asynchronous engine-settings propagation.
+// Implemented by controller.SettingsReconciler's engine bus in production.
+// The handler MUST NOT call this — it exists only for future-proofing tests
+// to catch accidental synchronous Apply calls if the handler is later refactored.
+type SettingsApplier interface {
+	Apply(ctx context.Context, s SettingsSnapshot) error
+}
+
+// SettingsSnapshot is a subset of Settings spec fields needed by engines.
+// Matches controller.SettingsSnapshot; duplicated here to avoid importing internal/controller.
+type SettingsSnapshot struct {
+	// Extend as needed when engines consume more fields
+}
+
 // SettingsHandler serves GET /api/v1/settings and PUT /api/v1/settings.
 // The handler reads and writes the singleton Settings CR directly.
 // Credential resolution and engine propagation are asynchronous — driven by
 // the SettingsReconciler on the next reconcile loop (ARCHITECTURE.md §8.2.1).
 // No goroutines are started here.
 type SettingsHandler struct {
-	client client.Client
+	client   client.Client
+	applier  SettingsApplier // MUST remain nil in production; exists only for test guards
 }
 
 // NewSettingsHandler constructs a SettingsHandler bound to the K8s client.
+// The optional applier parameter exists only for test injection to guard against
+// future refactors that might accidentally call Apply synchronously. In production,
+// pass nil — engine propagation is async via SettingsReconciler (ARCHITECTURE.md §8.2.1).
 // All request-scoped logging uses LoggerFromContext — no logger field needed.
-func NewSettingsHandler(c client.Client) *SettingsHandler {
-	return &SettingsHandler{client: c}
+func NewSettingsHandler(c client.Client, applier SettingsApplier) *SettingsHandler {
+	return &SettingsHandler{client: c, applier: applier}
 }
 
 // Register wires GET /api/v1/settings and PUT /api/v1/settings onto the mux.
@@ -50,7 +69,7 @@ func (h *SettingsHandler) getSettings(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		LoggerFromContext(r.Context()).Warn("settings handler: Get failed", slog.Any("error", err))
-		writeError(w, http.StatusInternalServerError, err)
+		writeError(w, http.StatusInternalServerError, fmt.Errorf("%w: failed to read settings", ErrInternal))
 		return
 	}
 	writeJSON(w, http.StatusOK, &settings)
@@ -91,7 +110,7 @@ func (h *SettingsHandler) putSettings(w http.ResponseWriter, r *http.Request) {
 		client.FieldOwner(settingsFieldOwner),
 	); err != nil {
 		LoggerFromContext(r.Context()).Warn("settings handler: Apply failed", slog.Any("error", err))
-		writeError(w, http.StatusInternalServerError, err)
+		writeError(w, http.StatusInternalServerError, fmt.Errorf("%w: failed to save settings", ErrInternal))
 		return
 	}
 
