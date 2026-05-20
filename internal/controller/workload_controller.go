@@ -169,14 +169,25 @@ func (r *WorkloadReconciler) reconcile(ctx context.Context, w *aifv1.Workload) e
 	result, deployErr := r.Deployer.Deploy(ctx, req)
 	workload.ApplyDeployResult(w, result)
 
-	// Phase-preservation invariant (P4-2 design spec §6.3): un-classified
-	// errors must not lower the user-visible phase. The mapped error path for
-	// known sentinels (UnsupportedComposition, SourceNotResolved, etc.)
-	// intentionally sets a specific Phase via the deployer's DeployResult; only
-	// the catch-all branch needs preservation.
+	// P5-1: controller owns Phase. Compute it from the freshly-written
+	// Components via the canonical pipeline (PhaseInputFromCR feeds
+	// RecomputePhase). The fuller controller rewrite — including counter
+	// mutations, threshold promotion, and Degraded/RecoveryInProgress
+	// transitions — lands in commit 5 (Tasks 17-21). This commit only
+	// performs the minimal bridge required to keep the build green after
+	// DeployResult.Phase is removed.
+	phase := workload.RecomputePhase(workload.PhaseInputFromCR(w))
+	w.Status.Phase = workload.PhaseToCR(phase)
+
+	// Phase-preservation invariant (P4-2 design spec §6.3, latent-bug-fixed
+	// per P5-1 spec §3): un-classified errors must not lower the
+	// user-visible phase. RecomputePhase always returns at least PhasePending
+	// (so the original *phase == "" guard never fires); preserve whenever
+	// prior is non-empty and the error is unclassified. Commit 5's
+	// applyErrorPhaseOverrides formalises this.
 	if deployErr != nil {
 		reason, _, _ := mapDeployError(deployErr)
-		if reason == conditions.ReasonReconcileFailed && w.Status.Phase == "" {
+		if reason == conditions.ReasonReconcileFailed && priorPhase != "" {
 			w.Status.Phase = priorPhase
 		}
 	}
@@ -184,20 +195,21 @@ func (r *WorkloadReconciler) reconcile(ctx context.Context, w *aifv1.Workload) e
 	// P4-2 design spec §6.4 events
 	r.emitDeployEvents(w, priorPhase, result, deployErr)
 
-	// Map deployer error/result to Ready condition per P4-2 design spec §6.3
+	// Map deployer error/result to Ready condition per P4-2 design spec §6.3.
+	// Phase post-preservation drives the success-path Ready Reason.
 	ready := metav1.Condition{
 		Type:               conditions.TypeReady,
 		ObservedGeneration: w.Generation,
 	}
 	if deployErr == nil {
-		if result.Phase == workload.PhaseRunning {
+		if w.Status.Phase == aifv1.WorkloadPhaseRunning {
 			ready.Status = metav1.ConditionTrue
 			ready.Reason = conditions.ReasonInstalled
 			ready.Message = "All components deployed"
 		} else {
 			ready.Status = metav1.ConditionFalse
 			ready.Reason = conditions.ReasonInstalling
-			ready.Message = fmt.Sprintf("Workload phase %q", result.Phase)
+			ready.Message = fmt.Sprintf("Workload phase %q", w.Status.Phase)
 		}
 	} else {
 		reason, _, _ := mapDeployError(deployErr)

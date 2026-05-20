@@ -126,7 +126,13 @@ type ComponentRelease struct {
 }
 
 // DeployResult is what Deployer.Deploy returns. The reconciler translates
-// this into Workload.status via conversions.ApplyDeployResult.
+// this into Workload.status via conversions.ApplyDeployResult, and
+// independently computes Phase via RecomputePhase(PhaseInputFromCR(w)).
+//
+// Phase is intentionally NOT a field here: P5-1 moved phase ownership to
+// the controller so a single function (RecomputePhase) is the source of
+// truth, fed by both the deploy path and (in P5-2) the pod-readiness
+// informer + ProgressDeadlineExceeded watch.
 type DeployResult struct {
 	// Components is the per-component outcome list (in source order, with
 	// surviving orphans appended on cleanup failure).
@@ -135,9 +141,6 @@ type DeployResult struct {
 	// ObservedBundleGeneration is the Bundle.metadata.generation observed
 	// at deploy time when source.Kind == BundleTest. Zero otherwise.
 	ObservedBundleGeneration int64
-
-	// Phase is the aggregate phase computed from Components statuses.
-	Phase Phase
 }
 
 // PhaseInput is the domain projection consumed by RecomputePhase.
