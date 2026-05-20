@@ -47,11 +47,10 @@
     <div class="bp-card__actions">
       <button
         type="button"
-        class="btn btn-sm role-primary"
-        :disabled="true"
-        :title="t('aif.pages.blueprints.actions.deployComingSoon')"
+        class="btn btn-sm role-secondary"
+        @click="$event.currentTarget.blur(); $emit('view-versions', lineage)"
       >
-        {{ t('aif.pages.blueprints.actions.deploy') }}
+        {{ t('aif.pages.blueprints.card.viewVersions') }}
       </button>
       <button
         type="button"
@@ -63,10 +62,11 @@
       </button>
       <button
         type="button"
-        class="btn btn-sm role-secondary"
-        @click="$event.currentTarget.blur(); $emit('view-versions', lineage)"
+        class="btn btn-sm role-primary"
+        :disabled="true"
+        :title="t('aif.pages.blueprints.actions.deployComingSoon')"
       >
-        {{ t('aif.pages.blueprints.card.viewVersions') }}
+        {{ t('aif.pages.blueprints.actions.deploy') }}
       </button>
     </div>
 
@@ -220,10 +220,12 @@ export default defineComponent({
   }
   &__published { color: var(--muted); font-size: 0.85em; margin: 0; }
   &__actions {
-    display:    flex;
-    flex-wrap:  wrap;
-    gap:        6px;
-    margin-top: 6px;
+    display:         flex;
+    flex-wrap:       wrap;
+    align-items:     center;
+    justify-content: flex-end;
+    gap:             6px;
+    margin-top:      6px;
   }
   &__publisher-actions {
     display:        flex;
