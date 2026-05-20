@@ -36,7 +36,7 @@ const (
 	ReasonSourceNotResolved      = "SourceNotResolved"      // Ready=False, recoverable (source CR not yet present)
 	ReasonUnsupportedComposition = "UnsupportedComposition" // Ready=False, terminal until spec change
 
-	// P5-1: Workload phase-driven Ready condition reasons (one per phase).
+	// P5-1: Workload phase-driven Ready condition reasons (six reasons, one per phase).
 	ReasonWorkloadRunning            = "WorkloadRunning"
 	ReasonWorkloadPending            = "WorkloadPending"
 	ReasonWorkloadDeploying          = "WorkloadDeploying"
