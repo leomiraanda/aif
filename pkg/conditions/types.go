@@ -69,4 +69,7 @@ const (
 	ReasonInstallFailed      = "InstallFailed"      // Helm chart installation failed
 	ReasonUIPluginNotCreated = "UIPluginNotCreated" // UIPlugin resource creation failed
 	// ReasonInstalled is defined above (shared with Workload)
+
+	// Workload upgrade (P5-3)
+	ReasonUpgradeStarted = "UpgradeStarted" // Workload upgraded to a newer Blueprint version via REST API
 )
