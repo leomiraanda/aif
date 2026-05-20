@@ -11,7 +11,12 @@
           "type": "array",
           "default": [],
           "description": "Global image pull secrets",
-          "items": { "type": "object" }
+          "items": {
+            "oneOf": [
+              { "type": "string" },
+              { "type": "object", "required": ["name"], "properties": { "name": { "type": "string" } } }
+            ]
+          }
         }
       }
     },

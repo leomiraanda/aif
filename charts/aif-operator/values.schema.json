@@ -11,7 +11,12 @@
           "type": "array",
           "default": [],
           "description": "Global image pull secrets",
-          "items": { "type": "object" }
+          "items": {
+            "oneOf": [
+              { "type": "string" },
+              { "type": "object", "required": ["name"], "properties": { "name": { "type": "string" } } }
+            ]
+          }
         }
       }
     },
@@ -133,6 +138,7 @@
       "properties": {
         "runAsNonRoot": { "type": "boolean", "default": true, "description": "Run as non-root" },
         "runAsUser": { "type": "integer", "default": 1000, "description": "Container UID" },
+        "fsGroup": { "type": "integer", "default": 1000, "description": "Filesystem group for volume mounts" },
         "seccompProfile": {
           "type": "object",
           "description": "Seccomp profile configuration",
