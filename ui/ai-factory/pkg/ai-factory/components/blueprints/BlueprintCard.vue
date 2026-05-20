@@ -93,7 +93,7 @@
         {{ t('aif.pages.blueprints.actions.withdraw') }}
       </button>
       <button
-        v-if="selected.phase === 'Deprecated' || selected.phase === 'Withdrawn'"
+        v-if="selected.phase === 'Withdrawn'"
         type="button"
         class="btn btn-sm role-secondary"
         :disabled="true"
@@ -109,7 +109,8 @@
 import { defineComponent, ref, computed, watch } from 'vue';
 import BlueprintPhasePill from './BlueprintPhasePill.vue';
 import BlueprintVersionPicker from './BlueprintVersionPicker.vue';
-import { formatDate, selectDefaultVersion } from '../../utils/blueprint';
+import { selectDefaultVersion } from '../../utils/blueprint';
+import { formatDate } from '../../utils/date';
 
 export default defineComponent({
   name: 'BlueprintCard',
@@ -143,8 +144,14 @@ export default defineComponent({
       selectedId.value = selectDefaultVersion(next).id;
     });
 
+    // When hiding withdrawn versions, reset the selection if the currently
+    // selected version is Withdrawn. Re-derive from props directly rather
+    // than reading the `selected` computed to make the dependency obvious.
     watch(() => props.showWithdrawn, (next) => {
-      if (!next && selected.value.phase === 'Withdrawn') {
+      if (next) return;
+      const current = props.lineage.versions.find((v) => v.id === selectedId.value);
+
+      if (current?.phase === 'Withdrawn') {
         selectedId.value = selectDefaultVersion(props.lineage).id;
       }
     });

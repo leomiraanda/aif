@@ -1,6 +1,7 @@
 // Pure-domain helpers for the Blueprints page. No Vue / Steve / DOM imports.
 
-export type BlueprintPhase = 'Active' | 'Deprecated' | 'Withdrawn';
+export const BLUEPRINT_PHASES = ['Active', 'Deprecated', 'Withdrawn'] as const;
+export type BlueprintPhase = (typeof BLUEPRINT_PHASES)[number];
 export type BlueprintOrigin = 'Published' | 'WrapsVendorChart';
 
 export interface ComponentRef {
@@ -57,6 +58,9 @@ export function toBlueprintVersion(cr: any): BlueprintVersion {
     id:                cr?.metadata?.name ?? '',
     lineage:           spec.blueprintName ?? cr?.metadata?.labels?.[LINEAGE_LABEL] ?? '',
     version:           spec.version ?? '',
+    // Defensive default: the Blueprint reconciler (P1-2) stamps phase=Active
+    // on the first reconcile pass, but in the brief window between CR create
+    // and that pass status.phase may be unset. Treat it as Active for UI purposes.
     phase:             (status.phase as BlueprintPhase) || 'Active',
     useCase:           spec.useCase ?? '',
     description:       spec.description ?? '',
@@ -134,20 +138,10 @@ export function readUnreachable(settingsCR: any): boolean {
   );
 }
 
-// Locale-aware date formatting for publishedAt fields. Falls back to '—' for
-// missing input and the raw string when Date parsing throws.
-export function formatDate(iso: string | undefined | null): string {
-  if (!iso) return '—';
-  try {
-    return new Date(iso).toLocaleDateString();
-  } catch {
-    return iso;
-  }
-}
-
-// P5-6 will replace this with a call to /api/v1/auth/publishers. Until then
-// publisher status defaults to false; a localStorage override exists for QA.
-export function useIsPublisher(): { value: boolean } {
+// TODO P5-6: remove this localStorage hatch once /api/v1/auth/publishers is wired.
+// Returns the synchronous override flag (no reactivity; intentionally not named
+// `useIsPublisher` to avoid implying a Vue ref / composable contract).
+export function readPublisherOverride(): { value: boolean } {
   let override = false;
 
   try {

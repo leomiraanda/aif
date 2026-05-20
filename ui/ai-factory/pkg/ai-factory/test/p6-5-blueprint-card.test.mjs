@@ -65,8 +65,8 @@ test('BlueprintCard: phase-driven publisher button visibility', () => {
 
   // Deprecate/Withdraw shown when selected.phase === 'Active'
   assert.match(src, /selected\.phase\s*===\s*'Active'/);
-  // Reactivate shown when phase is Deprecated or Withdrawn
-  assert.match(src, /'Deprecated'|'Withdrawn'/);
+  // Reactivate shown only when selected.phase === 'Withdrawn' (spec §6 — reverses Withdraw)
+  assert.match(src, /selected\.phase\s*===\s*'Withdrawn'/);
 });
 
 test('BlueprintCard: vendor-chart origin shows chart name in tooltip', () => {

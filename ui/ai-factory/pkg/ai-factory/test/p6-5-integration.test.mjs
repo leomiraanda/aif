@@ -35,6 +35,10 @@ test('all aif.pages.blueprints.* keys used in templates exist in en-us.yaml', ()
     }
   }
 
+  // Lightweight smoke test: matches the leaf of each used key in the YAML
+  // text. Accepts false positives (e.g. a YAML comment containing the leaf
+  // word would satisfy the regex) in exchange for not pulling in js-yaml as
+  // a test dep. Matches the pattern used in p6-7-integration.test.mjs.
   for (const key of usedKeys) {
     if (!key.startsWith('aif.pages.blueprints.')) continue;
     const leaf = key.split('.').pop();

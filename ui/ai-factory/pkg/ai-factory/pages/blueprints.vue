@@ -78,7 +78,7 @@ import { Banner } from '@components/Banner';
 import { Checkbox } from '@components/Form/Checkbox';
 import BlueprintCard from '../components/blueprints/BlueprintCard.vue';
 import BlueprintVersionsPanel from '../components/blueprints/BlueprintVersionsPanel.vue';
-import { groupByLineage, readUnreachable, useIsPublisher } from '../utils/blueprint';
+import { groupByLineage, readUnreachable, readPublisherOverride } from '../utils/blueprint';
 import { CRD_TYPES } from '../config/types';
 
 export default defineComponent({
@@ -120,13 +120,16 @@ export default defineComponent({
     },
 
     unreachable() {
+      // Settings is a singleton CR; settings[0] may be undefined when the cluster
+      // has none yet. readUnreachable handles undefined safely (returns false) —
+      // see tests/unit/blueprint.spec.js covering the null/undefined input case.
       const settings = this.$store.getters['management/all'](CRD_TYPES.SETTINGS) || [];
 
       return readUnreachable(settings[0]);
     },
 
     isPublisher() {
-      return useIsPublisher().value;
+      return readPublisherOverride().value;
     },
 
     useCases() {

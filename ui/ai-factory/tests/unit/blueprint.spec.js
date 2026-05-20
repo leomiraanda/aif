@@ -5,7 +5,7 @@ import {
   sortVersionsDesc,
   selectDefaultVersion,
   readUnreachable,
-  useIsPublisher
+  readPublisherOverride
 } from '@pkg/ai-factory/utils/blueprint';
 
 function bp({ name, lineage, version, phase, source = 'Published' }) {
@@ -160,7 +160,7 @@ describe('readUnreachable', () => {
   });
 });
 
-describe('useIsPublisher', () => {
+describe('readPublisherOverride', () => {
   const originalLocalStorage = globalThis.localStorage;
 
   beforeEach(() => {
@@ -175,11 +175,11 @@ describe('useIsPublisher', () => {
   afterEach(() => { globalThis.localStorage = originalLocalStorage; });
 
   it('defaults to false when no override is set', () => {
-    expect(useIsPublisher().value).toBe(false);
+    expect(readPublisherOverride().value).toBe(false);
   });
 
   it('flips to true when aifPublisherOverride === "1"', () => {
     globalThis.localStorage.setItem('aifPublisherOverride', '1');
-    expect(useIsPublisher().value).toBe(true);
+    expect(readPublisherOverride().value).toBe(true);
   });
 });

@@ -22,7 +22,7 @@ test('blueprints.vue: imports the gallery components and helpers', () => {
 
   assert.match(src, /import BlueprintCard from '\.\.\/components\/blueprints\/BlueprintCard\.vue'/);
   assert.match(src, /import BlueprintVersionsPanel from '\.\.\/components\/blueprints\/BlueprintVersionsPanel\.vue'/);
-  assert.match(src, /import.*groupByLineage.*readUnreachable.*useIsPublisher[\s\S]*from '\.\.\/utils\/blueprint'/);
+  assert.match(src, /import.*groupByLineage.*readUnreachable.*readPublisherOverride[\s\S]*from '\.\.\/utils\/blueprint'/);
 });
 
 test('blueprints.vue: dispatches Steve findAll for blueprint AND settings', () => {

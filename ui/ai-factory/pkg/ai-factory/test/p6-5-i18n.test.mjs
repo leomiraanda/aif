@@ -10,6 +10,8 @@ test('P6-5 en-us.yaml exposes all aif.pages.blueprints keys', () => {
   const requiredLeaves = [
     // header
     'lineages:', 'versions:',
+    // phase
+    'active:', 'deprecated:', 'withdrawn:',
     // toolbar
     'search:', 'useCaseAll:', 'showWithdrawn:',
     // card
@@ -18,9 +20,9 @@ test('P6-5 en-us.yaml exposes all aif.pages.blueprints keys', () => {
     // actions
     'deploy:', 'deployComingSoon:', 'startBundle:', 'startBundleComingSoon:',
     'deprecate:', 'withdraw:', 'reactivate:',
-    'publisherEndpointComingSoon:', 'publisherRoleRequired:',
+    'publisherEndpointComingSoon:', 'publisherRoleRequired:', 'publisherLabel:',
     // panel
-    'changeDescription:',
+    'changeDescription:', 'close:',
     // empty states
     'none:', 'noResults:', 'unreachable:', 'loadError:'
   ];

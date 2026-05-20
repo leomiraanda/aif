@@ -1,13 +1,12 @@
 <template>
   <span :class="['phase-pill', `phase-pill--${ phaseClass }`]">
-    {{ phase }}
+    {{ t(`aif.pages.blueprints.phase.${ phaseClass }`) }}
   </span>
 </template>
 
 <script>
 import { defineComponent, computed } from 'vue';
-
-const PHASES = ['Active', 'Deprecated', 'Withdrawn'];
+import { BLUEPRINT_PHASES } from '../../utils/blueprint';
 
 export default defineComponent({
   name: 'BlueprintPhasePill',
@@ -16,7 +15,7 @@ export default defineComponent({
     phase: {
       type:      String,
       required:  true,
-      validator: (v) => PHASES.includes(v)
+      validator: (v) => BLUEPRINT_PHASES.includes(v)
     }
   },
 

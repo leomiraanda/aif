@@ -37,6 +37,13 @@ export default defineComponent({
   emits: ['update:modelValue'],
 
   setup(props) {
+    // Option labels are built as plain strings here because LabeledSelect renders
+    // options from a string `label` prop with no slot/render-function escape hatch
+    // — calling Rancher's `t()` from setup proved unreliable across component
+    // contexts. The phase suffix stays in raw CR enum form ('Active' / 'Deprecated'
+    // / 'Withdrawn'); the user-facing phase pill (BlueprintPhasePill.vue) handles
+    // the localized rendering. Follow-up: translate option labels when LabeledSelect
+    // exposes an option slot, or when we move to a custom dropdown component.
     const options = computed(() =>
       (props.versions ?? [])
         .filter((v) => props.showWithdrawn || v.phase !== 'Withdrawn')

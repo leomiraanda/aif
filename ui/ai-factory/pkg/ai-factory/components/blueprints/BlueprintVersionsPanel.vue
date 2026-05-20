@@ -1,13 +1,20 @@
 <template>
-  <aside class="versions-panel" role="dialog" aria-modal="true">
+  <aside
+    class="versions-panel"
+    role="dialog"
+    aria-modal="true"
+    tabindex="-1"
+    @keydown.esc="$emit('close')"
+  >
     <div class="versions-panel__backdrop" @click="$emit('close')" />
     <div class="versions-panel__body">
       <header class="versions-panel__header">
         <h2>{{ t('aif.pages.blueprints.versionsPanel.title', { lineage: lineage.lineage }) }}</h2>
         <button
+          ref="closeButton"
           type="button"
           class="btn btn-sm role-link"
-          :aria-label="t('aif.pages.blueprints.versionsPanel.title', { lineage: lineage.lineage })"
+          :aria-label="t('aif.pages.blueprints.versionsPanel.close')"
           @click="$emit('close')"
         >
           <i class="icon icon-close" />
@@ -21,7 +28,7 @@
             <BlueprintPhasePill :phase="v.phase" />
           </div>
           <p class="versions-panel__meta">
-            {{ t('aif.pages.blueprints.card.publishedBy', { user: v.publishedBy, date: formatDate(v.publishedAt) }) }}
+            {{ t('aif.pages.blueprints.card.publishedBy', { user: v.publishedBy || '—', date: formatDate(v.publishedAt) }) }}
           </p>
           <p v-if="v.changeDescription" class="versions-panel__change">
             <strong>{{ t('aif.pages.blueprints.versionsPanel.changeDescription') }}:</strong>
@@ -38,9 +45,9 @@
 </template>
 
 <script>
-import { defineComponent } from 'vue';
+import { defineComponent, ref, onMounted } from 'vue';
 import BlueprintPhasePill from './BlueprintPhasePill.vue';
-import { formatDate } from '../../utils/blueprint';
+import { formatDate } from '../../utils/date';
 
 export default defineComponent({
   name: 'BlueprintVersionsPanel',
@@ -57,7 +64,13 @@ export default defineComponent({
   emits: ['close'],
 
   setup() {
-    return { formatDate };
+    const closeButton = ref(null);
+
+    onMounted(() => {
+      closeButton.value?.focus?.();
+    });
+
+    return { closeButton, formatDate };
   }
 });
 </script>

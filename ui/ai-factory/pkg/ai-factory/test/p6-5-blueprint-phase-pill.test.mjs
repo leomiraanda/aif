@@ -25,9 +25,17 @@ test('BlueprintPhasePill: maps all three phases to a CSS modifier', () => {
   }
 });
 
-test('BlueprintPhasePill: text comes from props (not hard-coded)', () => {
+test('BlueprintPhasePill: label is translated via the phase i18n key', () => {
   const src = read('components/blueprints/BlueprintPhasePill.vue');
 
-  // The label is the raw phase value — no English string literal in the template.
-  assert.match(src, /\{\{\s*phase\s*\}\}/);
+  // Visible label resolves through t('aif.pages.blueprints.phase.${ phaseClass }') —
+  // no hardcoded English; no raw CR enum bleeds into the template.
+  assert.match(src, /t\(`aif\.pages\.blueprints\.phase\.\$\{\s*phaseClass\s*\}`\)/);
+  assert.doesNotMatch(src, /\{\{\s*phase\s*\}\}/);
+});
+
+test('BlueprintPhasePill: imports BLUEPRINT_PHASES from utils', () => {
+  const src = read('components/blueprints/BlueprintPhasePill.vue');
+
+  assert.match(src, /import\s*\{\s*BLUEPRINT_PHASES\s*\}\s*from\s*'\.\.\/\.\.\/utils\/blueprint'/);
 });
