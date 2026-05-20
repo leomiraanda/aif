@@ -2,6 +2,9 @@ global:
   imageRegistry: ""
   imagePullSecrets: []
 
+nameOverride: ""
+fullnameOverride: ""
+
 image:
   registry: "registry.suse.com"
   repository: ai/containers/nvidia/llava-v1.6-mistral-7b

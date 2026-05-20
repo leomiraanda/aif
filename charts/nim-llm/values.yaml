@@ -2,6 +2,9 @@ global:
   imageRegistry: ""
   imagePullSecrets: []
 
+nameOverride: ""
+fullnameOverride: ""
+
 image:
   registry: "registry.suse.com"
   repository: ai/containers/nvidia/llama-3-8b-instruct

@@ -10,6 +10,8 @@ Set `gpu.enabled=true` to request GPU resources. The chart injects `gpu.type` (d
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
+| `nameOverride` | string | `""` | Override the chart name |
+| `fullnameOverride` | string | `""` | Override the full release name |
 | `global.imageRegistry` | string | `""` | Global image registry override |
 | `global.imagePullSecrets` | list | `[]` | Global image pull secrets |
 | `image.registry` | string | `""` | Image registry (overridden by global.imageRegistry) |

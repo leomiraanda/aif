@@ -2,6 +2,9 @@ global:
   imageRegistry: ""
   imagePullSecrets: []
 
+nameOverride: ""
+fullnameOverride: ""
+
 image:
   registry: ghcr.io
   repository: suse/aif-operator

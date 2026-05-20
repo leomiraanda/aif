@@ -2,6 +2,8 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "type": "object",
   "properties": {
+    "nameOverride": { "type": "string", "default": "", "description": "Override the chart name" },
+    "fullnameOverride": { "type": "string", "default": "", "description": "Override the full release name" },
     "global": {
       "type": "object",
       "description": "Global values shared across subcharts",

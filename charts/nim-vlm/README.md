@@ -17,6 +17,8 @@ VLM containers require 120+ seconds to load model weights before becoming ready.
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
+| `nameOverride` | string | `""` | Override the chart name |
+| `fullnameOverride` | string | `""` | Override the full release name |
 | `global.imageRegistry` | string | `""` | Global image registry override |
 | `global.imagePullSecrets` | list | `[]` | Global image pull secrets |
 | `image.registry` | string | `registry.suse.com` | Image registry (overridden by global.imageRegistry) |

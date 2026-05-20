@@ -114,6 +114,6 @@ spec:
         {{- if .Values.webhook.enabled }}
         - name: webhook-certs
           secret:
-            secretName: aif-webhook-tls
+            secretName: {{ include "aif-operator.fullname" . }}-webhook-tls
             defaultMode: 0444
         {{- end }}

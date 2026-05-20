@@ -32,6 +32,8 @@ This produces a Deployment with:
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
+| `nameOverride` | string | `""` | Override the chart name |
+| `fullnameOverride` | string | `""` | Override the full release name |
 | `global.imageRegistry` | string | `""` | Global image registry override |
 | `global.imagePullSecrets` | list | `[]` | Global image pull secrets |
 | `image.registry` | string | `ghcr.io` | Image registry hostname (with optional project prefix) |
