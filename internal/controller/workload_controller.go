@@ -273,8 +273,21 @@ func (r *WorkloadReconciler) emitDeployEvents(
 // computePhaseWithTransitions runs RecomputePhase, performs the counter
 // mutations on Status.RecoveryFailureCount (increment-on-Degraded-entry,
 // reset-on-Running-entry, reset-on-spec-change-from-Failed), and re-runs
-// RecomputePhase if the counter changed so a threshold-crossing promotes
-// Degraded → Failed in the same reconcile pass.
+// RecomputePhase if the counter changed so a threshold-crossing produces
+// the correct terminal phase in the same reconcile pass.
+//
+// Terminal phase on threshold crossing depends on
+// Spec.Strategy.AutomaticRecovery.Enabled (ARCHITECTURE.md §4.4 rule 2):
+//
+//   - recovery enabled  → Degraded → RecoveryInProgress (P5-1 owns entry;
+//     P5-6 owns the rollback exit)
+//   - recovery disabled → Failed-immediate on first failed component, so
+//     the candidate is NEVER Degraded; the counter increment branch
+//     below does not fire and the counter stays at its prior value.
+//
+// The counter increments ONLY on transition into Degraded — never on
+// RecoveryInProgress entry, since the counter is already at threshold
+// when we cross over (ARCHITECTURE.md §4.4 line 737).
 //
 // All counter side effects are confined here; RecomputePhase itself is pure.
 func computePhaseWithTransitions(w *aifv1.Workload, _ workload.DeployResult, _ error) workload.Phase {
@@ -335,7 +348,11 @@ func applyErrorPhaseOverrides(w *aifv1.Workload, phase *workload.Phase, err erro
 }
 
 // requeueForPhase picks the per-phase requeue cadence from
-// pkg/workload/constants.go.
+// pkg/workload/constants.go. Failed and RecoveryInProgress both currently
+// resolve to a zero-value cadence (no automatic requeue — Failed waits
+// for a spec change; RecoveryInProgress will wait for P5-6's rollback
+// completion event) but are kept on distinct switch arms so P5-6 can
+// give RecoveryInProgress its own poll cadence without revisiting Failed.
 func requeueForPhase(p aifv1.WorkloadPhase) ctrl.Result {
 	switch p {
 	case aifv1.WorkloadPhasePending, aifv1.WorkloadPhaseDeploying:
@@ -344,8 +361,10 @@ func requeueForPhase(p aifv1.WorkloadPhase) ctrl.Result {
 		return ctrl.Result{RequeueAfter: workload.RequeueRunning}
 	case aifv1.WorkloadPhaseDegraded:
 		return ctrl.Result{RequeueAfter: workload.RequeueDegraded}
-	case aifv1.WorkloadPhaseFailed, aifv1.WorkloadPhaseRecoveryInProgress:
-		return ctrl.Result{}
+	case aifv1.WorkloadPhaseRecoveryInProgress:
+		return ctrl.Result{RequeueAfter: workload.RequeueRecoveryInProgress}
+	case aifv1.WorkloadPhaseFailed:
+		return ctrl.Result{RequeueAfter: workload.RequeueFailed}
 	default:
 		// Unknown phase (shouldn't happen — enum is validated at admission).
 		// Default to the Running cadence as a conservative fallback.

@@ -241,6 +241,65 @@ func TestPhaseInputFromCR_ReadsNestedFailureThreshold(t *testing.T) {
 	}
 }
 
+func TestPhaseInputFromCR_AutomaticRecoveryEnabled(t *testing.T) {
+	// Covers the full nil-chain guard around
+	// Spec.Strategy.AutomaticRecovery.Enabled. The Enabled flag keys the
+	// three branches of ARCHITECTURE.md §4.4 rule 2 — getting this default
+	// wrong silently flips a Failed Workload to Degraded (or vice versa),
+	// so we exercise every level of the nil chain.
+	enabledTrue := true
+	cases := []struct {
+		name string
+		spec aifv1.WorkloadSpec
+		want bool
+	}{
+		{
+			name: "Strategy nil → false",
+			spec: aifv1.WorkloadSpec{},
+			want: false,
+		},
+		{
+			name: "Strategy non-nil, AutomaticRecovery nil → false",
+			spec: aifv1.WorkloadSpec{
+				Strategy: &aifv1.DeploymentStrategy{},
+			},
+			want: false,
+		},
+		{
+			name: "AutomaticRecovery present, Enabled=false → false",
+			spec: aifv1.WorkloadSpec{
+				Strategy: &aifv1.DeploymentStrategy{
+					AutomaticRecovery: &aifv1.AutomaticRecoveryStrategy{
+						Enabled: false,
+					},
+				},
+			},
+			want: false,
+		},
+		{
+			name: "AutomaticRecovery present, Enabled=true → true",
+			spec: aifv1.WorkloadSpec{
+				Strategy: &aifv1.DeploymentStrategy{
+					AutomaticRecovery: &aifv1.AutomaticRecoveryStrategy{
+						Enabled: enabledTrue,
+					},
+				},
+			},
+			want: true,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			w := &aifv1.Workload{Spec: tc.spec}
+			in := PhaseInputFromCR(w)
+			if in.AutomaticRecoveryEnabled != tc.want {
+				t.Errorf("AutomaticRecoveryEnabled=%v, want %v", in.AutomaticRecoveryEnabled, tc.want)
+			}
+		})
+	}
+}
+
 func TestPhaseToCR_MapsAllPhases(t *testing.T) {
 	cases := []struct {
 		in   Phase

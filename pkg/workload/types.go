@@ -157,6 +157,18 @@ type PhaseInput struct {
 	// "ready >= desired" is effectively "0 >= 0 → Running" until P5-2 lands.
 	ReadyReplicas int32
 
+	// AutomaticRecoveryEnabled mirrors
+	// spec.strategy.automaticRecovery.enabled (false when the nested struct
+	// is nil — matches the kubebuilder default). It keys the three branches
+	// of ARCHITECTURE.md §4.4 rule 2:
+	//
+	//   - enabled + failureCount <  threshold → Degraded
+	//   - enabled + failureCount >= threshold → RecoveryInProgress
+	//   - disabled                            → Failed (immediate)
+	//
+	// Placed next to FailureThreshold so the recovery inputs cluster.
+	AutomaticRecoveryEnabled bool
+
 	// RecoveryFailureCount mirrors workload.status.recoveryFailureCount.
 	RecoveryFailureCount int32
 

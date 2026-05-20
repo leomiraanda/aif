@@ -108,11 +108,17 @@ func PhaseInputFromCR(w *aifv1.Workload) PhaseInput {
 	if in.ReadyReplicas == 0 {
 		in.ReadyReplicas = in.DesiredReplicas
 	}
-	if w.Spec.Strategy != nil &&
-		w.Spec.Strategy.AutomaticRecovery != nil &&
-		w.Spec.Strategy.AutomaticRecovery.FailureThreshold != nil &&
-		*w.Spec.Strategy.AutomaticRecovery.FailureThreshold > 0 {
-		in.FailureThreshold = *w.Spec.Strategy.AutomaticRecovery.FailureThreshold
+	if w.Spec.Strategy != nil && w.Spec.Strategy.AutomaticRecovery != nil {
+		// Enabled is a value type (no nil check beyond the parent pointers).
+		// Defaults to false (matches kubebuilder default) when the nested
+		// struct is absent. Keys the three branches of ARCHITECTURE.md §4.4
+		// rule 2 (recovery off → Failed immediate; recovery on →
+		// Degraded/RecoveryInProgress based on count vs threshold).
+		in.AutomaticRecoveryEnabled = w.Spec.Strategy.AutomaticRecovery.Enabled
+		if w.Spec.Strategy.AutomaticRecovery.FailureThreshold != nil &&
+			*w.Spec.Strategy.AutomaticRecovery.FailureThreshold > 0 {
+			in.FailureThreshold = *w.Spec.Strategy.AutomaticRecovery.FailureThreshold
+		}
 	}
 	return in
 }

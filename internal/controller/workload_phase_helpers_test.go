@@ -8,8 +8,29 @@ import (
 	"github.com/SUSE/aif/pkg/workload"
 )
 
+// recoveryEnabledSpec returns a Spec with AutomaticRecovery.Enabled=true
+// and FailureThreshold=3. Helpers that want to reach Degraded (rule 2
+// branch B) MUST set this — with recovery off, a failed component goes
+// straight to Failed and the counter never increments.
+func recoveryEnabledSpec() aifv1.WorkloadSpec {
+	threshold := int32(3)
+	return aifv1.WorkloadSpec{
+		Strategy: &aifv1.DeploymentStrategy{
+			AutomaticRecovery: &aifv1.AutomaticRecoveryStrategy{
+				Enabled:          true,
+				FailureThreshold: &threshold,
+			},
+		},
+	}
+}
+
 func TestComputePhaseWithTransitions_IncrementOnDegradedEntry(t *testing.T) {
+	// AutomaticRecovery.Enabled=true so a failed component routes to
+	// Degraded (rule 2 branch B), which is the phase whose entry the
+	// counter increments on. With recovery off the same input would
+	// produce Failed and no counter bump.
 	w := &aifv1.Workload{
+		Spec: recoveryEnabledSpec(),
 		Status: aifv1.WorkloadStatus{
 			Phase:                aifv1.WorkloadPhaseRunning,
 			RecoveryFailureCount: 0,
@@ -28,7 +49,11 @@ func TestComputePhaseWithTransitions_IncrementOnDegradedEntry(t *testing.T) {
 }
 
 func TestComputePhaseWithTransitions_NoIncrementOnDegradedStay(t *testing.T) {
+	// AutomaticRecovery.Enabled=true so the same failed-component input
+	// stays in Degraded across reconciles (rather than collapsing to
+	// Failed-immediate under the recovery-off branch).
 	w := &aifv1.Workload{
+		Spec: recoveryEnabledSpec(),
 		Status: aifv1.WorkloadStatus{
 			Phase:                aifv1.WorkloadPhaseDegraded,
 			RecoveryFailureCount: 1,
@@ -106,9 +131,12 @@ func TestComputePhaseWithTransitions_SpecChangeFromFailedResets(t *testing.T) {
 	}
 }
 
-func TestComputePhaseWithTransitions_ThresholdPromotesFailed(t *testing.T) {
-	// Counter at threshold-1; this reconcile's increment pushes it to threshold,
-	// and the second RecomputePhase call promotes Degraded→Failed.
+func TestComputePhaseWithTransitions_ThresholdPromotesRecoveryInProgress(t *testing.T) {
+	// AutomaticRecovery.Enabled=true: counter at threshold-1; this
+	// reconcile's increment pushes it to threshold, and the second
+	// RecomputePhase call promotes Degraded → RecoveryInProgress (rule 2
+	// branch B, not Failed — that's the recovery-OFF path covered by the
+	// next test).
 	threshold := int32(3)
 	w := &aifv1.Workload{
 		Spec: aifv1.WorkloadSpec{
@@ -129,11 +157,37 @@ func TestComputePhaseWithTransitions_ThresholdPromotesFailed(t *testing.T) {
 	}
 
 	got := computePhaseWithTransitions(w, workload.DeployResult{}, nil)
-	if got != workload.PhaseFailed {
-		t.Errorf("phase=%q, want Failed (counter hit threshold on this pass)", got)
+	if got != workload.PhaseRecoveryInProgress {
+		t.Errorf("phase=%q, want RecoveryInProgress (counter hit threshold + recovery on)", got)
 	}
 	if w.Status.RecoveryFailureCount != 3 {
 		t.Errorf("RecoveryFailureCount=%d, want 3", w.Status.RecoveryFailureCount)
+	}
+}
+
+func TestComputePhaseWithTransitions_RecoveryDisabledFailsImmediate(t *testing.T) {
+	// AutomaticRecovery.Enabled=false (zero-value / nil strategy): the
+	// failed component routes to PhaseFailed immediately (rule 2 branch C).
+	// Since the candidate is NEVER Degraded on this path, the counter
+	// increment branch in computePhaseWithTransitions does not fire — the
+	// counter stays at its prior value.
+	w := &aifv1.Workload{
+		// No Spec.Strategy → AutomaticRecoveryEnabled defaults to false.
+		Status: aifv1.WorkloadStatus{
+			Phase:                aifv1.WorkloadPhaseRunning,
+			RecoveryFailureCount: 0,
+			ComponentReleases: []aifv1.ComponentReleaseStatus{
+				{Name: "n", Status: "failed"},
+			},
+		},
+	}
+
+	got := computePhaseWithTransitions(w, workload.DeployResult{}, nil)
+	if got != workload.PhaseFailed {
+		t.Errorf("phase=%q, want Failed (recovery off → no Degraded intermediate)", got)
+	}
+	if w.Status.RecoveryFailureCount != 0 {
+		t.Errorf("RecoveryFailureCount=%d, want 0 (counter does not bump when candidate is not Degraded)", w.Status.RecoveryFailureCount)
 	}
 }
 

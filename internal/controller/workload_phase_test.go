@@ -15,19 +15,27 @@ import (
 
 // Lifecycle envtest for the controller-owned phase machine (P5-1).
 //
-// Walks the full state space: Pending → Deploying → Running → Degraded
-// (counter increments on entry) → Running (counter resets on entry) →
-// Degraded (counter increments again) → Failed (after counter reaches
-// threshold) → spec-change-from-Failed → Pending.
+// Walks the full state space (AutomaticRecovery.Enabled=true): Pending →
+// Deploying → Running → Degraded (counter increments on entry) → Running
+// (counter resets on entry) → Degraded (counter increments again) →
+// RecoveryInProgress (after counter reaches threshold; ARCHITECTURE.md
+// §4.4 rule 2 branch B). The terminal-spec-change reset is exercised by
+// pre-seeding phase=Failed via Status().Update, then verifying the
+// generation-bump clears the counter (P5-6 will own the actual
+// RecoveryInProgress → Failed transition).
 //
-// The threshold-crosses-to-Failed step uses a Status().Update to inject
+// A second spec covers the AutomaticRecovery.Enabled=false branch (rule 2
+// branch C): a failed component routes to PhaseFailed immediately,
+// bypassing the Degraded → RecoveryInProgress ladder.
+//
+// The threshold-cross step uses a Status().Update to inject
 // RecoveryFailureCount = threshold-1. In production, P5-2's
 // ProgressDeadlineExceeded Event watch will bump the counter outside
 // the deploy path; P5-1's controller alone resets the counter on every
 // Running entry, so the only way to reach the threshold from the
 // controller path is to pre-seed the count (the unit-test pattern in
-// TestComputePhaseWithTransitions_ThresholdPromotesFailed uses the same
-// "counter at threshold-1, then enter Degraded" setup).
+// TestComputePhaseWithTransitions_ThresholdPromotesRecoveryInProgress
+// uses the same "counter at threshold-1, then enter Degraded" setup).
 var _ = Describe("Workload phase lifecycle (P5-1)", func() {
 	const (
 		ns       = "default"
@@ -86,7 +94,7 @@ var _ = Describe("Workload phase lifecycle (P5-1)", func() {
 		}, timeout, interval).Should(Succeed())
 	}
 
-	It("walks Pending → Deploying → Running → Degraded → Running → Degraded → Failed → spec-change → Pending", func() {
+	It("walks Pending → Deploying → Running → Degraded → Running → Degraded → RecoveryInProgress → seed-Failed → spec-change → Pending", func() {
 		name := "wid-lifecycle-" + randomSuffix()
 		threshold := int32(3)
 
@@ -188,24 +196,40 @@ var _ = Describe("Workload phase lifecycle (P5-1)", func() {
 		setCounter(key, threshold-1)
 		Eventually(getCounter(key), timeout, interval).Should(Equal(threshold - 1))
 
-		// 8. Failed: failed components + counter==threshold-1 → on Running→Degraded
-		//    entry the increment lifts the counter to threshold, the
-		//    double-recompute in computePhaseWithTransitions promotes
-		//    Degraded → Failed in the same pass.
+		// 8. RecoveryInProgress: failed components + counter==threshold-1
+		//    + AutomaticRecovery.Enabled=true → on Running→Degraded entry the
+		//    increment lifts the counter to threshold, the double-recompute
+		//    in computePhaseWithTransitions promotes Degraded →
+		//    RecoveryInProgress in the same pass (rule 2 branch B).
+		//    RecoveryInProgress is terminal in P5-1 — P5-6 owns the rollback
+		//    exit; we just verify entry here.
 		fakeDeployer.SetDeployResult(workload.DeployResult{
 			Components: []workload.ComponentRelease{
 				{Name: "n", ReleaseName: name + "-n", Status: "failed"},
 			},
 		})
 		touchAnnotation(key)
-		Eventually(getPhase(key), timeout, interval).Should(Equal(aifv1.WorkloadPhaseFailed))
+		Eventually(getPhase(key), timeout, interval).Should(Equal(aifv1.WorkloadPhaseRecoveryInProgress))
 		Eventually(getCounter(key), timeout, interval).Should(Equal(threshold))
-		// Failed is terminal until spec change — phase + counter stay put.
-		Consistently(getPhase(key), 1*time.Second, interval).Should(Equal(aifv1.WorkloadPhaseFailed))
+		// RecoveryInProgress is stable until P5-6 lands or the spec changes.
+		Consistently(getPhase(key), 1*time.Second, interval).Should(Equal(aifv1.WorkloadPhaseRecoveryInProgress))
 		Consistently(getCounter(key), 1*time.Second, interval).Should(Equal(threshold))
 
-		// 9. Spec-change-from-Failed: bump app version → reset counter,
-		//    recompute from empty components → Pending.
+		// 9a. Pre-seed phase=Failed via Status().Update to exercise the
+		//     spec-change-from-Failed counter reset (P5-1 owns the reset
+		//     branch; P5-6 owns the RecoveryInProgress → Failed transition
+		//     after rollback history exhaustion). Counter stays at threshold
+		//     so the reset assertion in step 9b is meaningful.
+		Eventually(func(g Gomega) {
+			var got aifv1.Workload
+			g.Expect(k8sClient.Get(ctx, key, &got)).To(Succeed())
+			got.Status.Phase = aifv1.WorkloadPhaseFailed
+			g.Expect(k8sClient.Status().Update(ctx, &got)).To(Succeed())
+		}, timeout, interval).Should(Succeed())
+		Eventually(getPhase(key), timeout, interval).Should(Equal(aifv1.WorkloadPhaseFailed))
+
+		// 9b. Spec-change-from-Failed: bump app version → reset counter,
+		//     recompute from empty components → Pending.
 		fakeDeployer.SetDeployResult(workload.DeployResult{})
 		Eventually(func(g Gomega) {
 			var got aifv1.Workload
@@ -216,6 +240,60 @@ var _ = Describe("Workload phase lifecycle (P5-1)", func() {
 
 		Eventually(getPhase(key), timeout, interval).Should(Equal(aifv1.WorkloadPhasePending))
 		Eventually(getCounter(key), timeout, interval).Should(Equal(int32(0)))
+
+		// Cleanup.
+		Expect(k8sClient.Delete(ctx, w)).To(Succeed())
+	})
+
+	It("recovery=off: failed component routes to Failed immediately (no Degraded intermediate)", func() {
+		// ARCHITECTURE.md §4.4 rule 2 branch C: when
+		// AutomaticRecovery.Enabled=false (or the Strategy is absent), the
+		// first failed component MUST surface as PhaseFailed without
+		// passing through Degraded, and the counter MUST stay at 0 since
+		// the candidate is never Degraded.
+		name := "wid-fail-immediate-" + randomSuffix()
+
+		// Start with a healthy deploy so we land in Running first; this
+		// makes the Running → Failed transition observable (without going
+		// through Degraded) and asserts the counter stayed at 0.
+		fakeDeployer.SetDeployResult(workload.DeployResult{
+			Components: []workload.ComponentRelease{
+				{Name: "n", ReleaseName: name + "-n", Status: "deployed"},
+			},
+		})
+
+		w := &aifv1.Workload{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
+			Spec: aifv1.WorkloadSpec{
+				Name: "n",
+				Source: aifv1.WorkloadSource{
+					Kind: aifv1.WorkloadSourceKindApp,
+					App:  &aifv1.AppRef{Repo: "r", Chart: "c", Version: "1"},
+				},
+				// No Strategy → AutomaticRecovery.Enabled defaults to false.
+			},
+		}
+		Expect(k8sClient.Create(ctx, w)).To(Succeed())
+		key := client.ObjectKeyFromObject(w)
+
+		Eventually(getPhase(key), timeout, interval).Should(Equal(aifv1.WorkloadPhaseRunning))
+		Expect(getCounter(key)()).To(Equal(int32(0)))
+
+		// Flip to a failed component; with recovery off this MUST go
+		// straight to Failed (skipping Degraded entirely) and the counter
+		// MUST remain at 0.
+		fakeDeployer.SetDeployResult(workload.DeployResult{
+			Components: []workload.ComponentRelease{
+				{Name: "n", ReleaseName: name + "-n", Status: "failed"},
+			},
+		})
+		touchAnnotation(key)
+		Eventually(getPhase(key), timeout, interval).Should(Equal(aifv1.WorkloadPhaseFailed))
+		// Counter never bumped: branch C bypasses the Degraded-entry side
+		// effect entirely.
+		Consistently(getCounter(key), 1*time.Second, interval).Should(Equal(int32(0)))
+		// Failed is terminal until spec change.
+		Consistently(getPhase(key), 1*time.Second, interval).Should(Equal(aifv1.WorkloadPhaseFailed))
 
 		// Cleanup.
 		Expect(k8sClient.Delete(ctx, w)).To(Succeed())

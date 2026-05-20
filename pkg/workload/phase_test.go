@@ -33,28 +33,64 @@ func TestRecomputePhase(t *testing.T) {
 			want: PhaseDeploying,
 		},
 		{
-			name: "one failed, count < threshold → Degraded",
+			// ARCHITECTURE.md §4.4 rule 2 branch A: recovery enabled +
+			// failureCount < threshold → Degraded. AutomaticRecoveryEnabled
+			// MUST be true; with recovery off the same input would surface as
+			// Failed-immediate (branch C).
+			name: "one failed, recovery=on, count < threshold → Degraded",
 			in: PhaseInput{
-				Components:           []ComponentRelease{{Status: "deployed"}, {Status: "failed"}},
-				RecoveryFailureCount: 1,
-				FailureThreshold:     3,
+				Components:               []ComponentRelease{{Status: "deployed"}, {Status: "failed"}},
+				AutomaticRecoveryEnabled: true,
+				RecoveryFailureCount:     1,
+				FailureThreshold:         3,
 			},
 			want: PhaseDegraded,
 		},
 		{
-			name: "failed, count == threshold → Failed",
+			// ARCHITECTURE.md §4.4 rule 2 branch B: recovery enabled +
+			// failureCount >= threshold → RecoveryInProgress (NOT Failed).
+			// P5-1 owns entry; P5-6 owns the rollback exit.
+			name: "failed, recovery=on, count == threshold → RecoveryInProgress",
+			in: PhaseInput{
+				Components:               []ComponentRelease{{Status: "failed"}},
+				AutomaticRecoveryEnabled: true,
+				RecoveryFailureCount:     3,
+				FailureThreshold:         3,
+			},
+			want: PhaseRecoveryInProgress,
+		},
+		{
+			// Same branch B, clamp-safety: counter overshoots threshold.
+			name: "failed, recovery=on, count > threshold (clamp safety) → RecoveryInProgress",
+			in: PhaseInput{
+				Components:               []ComponentRelease{{Status: "failed"}},
+				AutomaticRecoveryEnabled: true,
+				RecoveryFailureCount:     99,
+				FailureThreshold:         3,
+			},
+			want: PhaseRecoveryInProgress,
+		},
+		{
+			// ARCHITECTURE.md §4.4 rule 2 branch C: recovery disabled →
+			// Failed immediately, independent of count or threshold. The
+			// Degraded → RecoveryInProgress ladder only exists when
+			// AutomaticRecovery.Enabled is true.
+			name: "failed, recovery=off, count < threshold → Failed (no Degraded intermediate)",
 			in: PhaseInput{
 				Components:           []ComponentRelease{{Status: "failed"}},
-				RecoveryFailureCount: 3,
+				RecoveryFailureCount: 0,
 				FailureThreshold:     3,
+				// AutomaticRecoveryEnabled is the zero value (false).
 			},
 			want: PhaseFailed,
 		},
 		{
-			name: "failed, count > threshold (clamp safety) → Failed",
+			// Same branch C with a non-trivial count to prove the count
+			// branch is bypassed entirely when recovery is off.
+			name: "failed, recovery=off, count >= threshold → Failed",
 			in: PhaseInput{
 				Components:           []ComponentRelease{{Status: "failed"}},
-				RecoveryFailureCount: 99,
+				RecoveryFailureCount: 5,
 				FailureThreshold:     3,
 			},
 			want: PhaseFailed,
@@ -121,30 +157,50 @@ func TestRecomputePhase(t *testing.T) {
 		},
 		{
 			// ARCHITECTURE.md §4.4 rule 2 (failed) wins over rule 3 (pending-*).
-			// A {failed, pending-install} mix MUST surface as Degraded (or Failed
-			// when count >= threshold), never Deploying. This case locks the
-			// spec ordering and would regress to Deploying if the rule order
-			// were re-inverted.
-			name: "failed + pending-install mixed, count < threshold → Degraded",
+			// A {failed, pending-install} mix MUST surface as Degraded (or
+			// RecoveryInProgress / Failed depending on rule-2 branch), never
+			// Deploying. This case locks the spec ordering and would regress
+			// to Deploying if the rule order were re-inverted.
+			name: "failed + pending-install mixed, recovery=on, count < threshold → Degraded",
 			in: PhaseInput{
 				Components: []ComponentRelease{
 					{Status: "failed"},
 					{Status: "pending-install"},
 				},
-				RecoveryFailureCount: 1,
-				FailureThreshold:     3,
+				AutomaticRecoveryEnabled: true,
+				RecoveryFailureCount:     1,
+				FailureThreshold:         3,
 			},
 			want: PhaseDegraded,
 		},
 		{
-			// Same ordering check at the Failed boundary.
-			name: "failed + pending-install mixed, count >= threshold → Failed",
+			// Same ordering check at the RecoveryInProgress boundary
+			// (recovery enabled + count >= threshold).
+			name: "failed + pending-upgrade mixed, recovery=on, count >= threshold → RecoveryInProgress",
 			in: PhaseInput{
 				Components: []ComponentRelease{
 					{Status: "failed"},
 					{Status: "pending-upgrade"},
 				},
-				RecoveryFailureCount: 3,
+				AutomaticRecoveryEnabled: true,
+				RecoveryFailureCount:     3,
+				FailureThreshold:         3,
+			},
+			want: PhaseRecoveryInProgress,
+		},
+		{
+			// Companion to the {failed, pending} ordering case for the
+			// recovery-off branch (rule 2 branch C). Locks BOTH the rule
+			// ordering (failed beats pending) AND the three-branch outcome
+			// (recovery off → Failed regardless of count or in-flight peer).
+			name: "failed + pending-install mixed, recovery=off → Failed",
+			in: PhaseInput{
+				Components: []ComponentRelease{
+					{Status: "failed"},
+					{Status: "pending-install"},
+				},
+				// AutomaticRecoveryEnabled zero-value (false).
+				RecoveryFailureCount: 1,
 				FailureThreshold:     3,
 			},
 			want: PhaseFailed,
