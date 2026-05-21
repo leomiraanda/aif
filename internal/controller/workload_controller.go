@@ -140,6 +140,10 @@ func mapDeployError(err error) (reason string, requeueAfter time.Duration, termi
 // reconcile performs the core reconciliation logic.
 func (r *WorkloadReconciler) reconcile(ctx context.Context, w *aifv1.Workload) error {
 	logger := log.FromContext(ctx)
+	// Captured BEFORE the Phase=Pending bootstrap below so applyErrorPhaseOverrides
+	// correctly sees "" on first reconcile (nothing to preserve). The inner
+	// capture in computePhaseWithTransitions reads the post-bootstrap value
+	// because its counter-mutation semantics need a stable prior phase.
 	priorPhase := workload.Phase(w.Status.Phase)
 
 	// Validate source.
@@ -157,8 +161,12 @@ func (r *WorkloadReconciler) reconcile(ctx context.Context, w *aifv1.Workload) e
 		return nil
 	}
 
-	// Bootstrap Phase=Pending on first reconcile so emitDeployEvents has a
-	// stable prior phase to compare against.
+	// Bootstrap Phase=Pending on first reconcile so computePhaseWithTransitions
+	// reads a stable prior phase (it inspects w.Status.Phase internally to
+	// decide counter mutations, e.g. "entering Degraded from Pending" vs
+	// "entering Degraded from empty"). The outer priorPhase captured above
+	// keeps the original "" so applyErrorPhaseOverrides preserves nothing on
+	// first reconcile.
 	if w.Status.Phase == "" {
 		w.Status.Phase = aifv1.WorkloadPhasePending
 	}
