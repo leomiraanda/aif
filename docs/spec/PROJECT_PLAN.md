@@ -1436,6 +1436,64 @@ curl -X POST http://localhost:8080/api/v1/bundles/default/my-rag/preflight | jq
 
 ---
 
+**ID:** P3-9
+**Epic:** Blueprint REST Handlers (Lifecycle)
+**Story:** As a Blueprint Publisher, I want REST endpoints to deprecate, withdraw, and reactivate Blueprint versions so that the UI and any other API client can manage Blueprint lifecycle through the operator instead of raw `kubectl patch`.
+**Owner Hint:** Backend Go
+**Effort:** M
+**Depends On:** P1-2 (Blueprint reconciler), P1-5 (immutability webhook), P3-5 (Bundle approve — establishes the `internal/api/publish.go` + `pkg/publish/workflow.go` pattern this story mirrors)
+**Parallelizable With:** P7-5 (SAR middleware — once available, replaces the inline SAR check this story carries)
+**Done When:** Three lifecycle endpoints exist under `internal/api/blueprints.go` and atomically transition `status.phase` per the state machine in `ARCHITECTURE.md §8.5`; happy paths, invalid-state rejections, and missing-resource cases are integration-tested.
+
+**Acceptance Criteria:**
+- [ ] **Create `internal/api/blueprints.go`** (file does not exist yet); register routes via `routes.Register` in `internal/manager/routes.go`
+- [ ] `POST /api/v1/blueprints/{name}/versions/{version}/deprecate` accepts `{reason?}`:
+  - Valid transition: `Active` → `Deprecated` (per `ARCHITECTURE.md §8.5` state diagram)
+  - Other source phases → 409 `BLUEPRINT_INVALID_TRANSITION`
+  - Sets `status.deprecation = {reason, actionedBy: callerUser, actionedAt: metav1.Now()}`
+- [ ] `POST /api/v1/blueprints/{name}/versions/{version}/withdraw` accepts `{reason?}`:
+  - Valid transition: `Active` → `Withdrawn`
+  - Other source phases → 409 `BLUEPRINT_INVALID_TRANSITION`
+  - Sets `status.deprecation = {reason, actionedBy: callerUser, actionedAt: metav1.Now()}`
+- [ ] `POST /api/v1/blueprints/{name}/versions/{version}/reactivate` (no body required):
+  - Valid transition: `Withdrawn` → `Active` (per `SOFTWARE_SPEC.md §6` — Withdrawing is reversible; Deprecation reversal is out of scope for this story)
+  - Other source phases → 409 `BLUEPRINT_INVALID_TRANSITION`
+  - Clears `status.deprecation`
+- [ ] **Business logic in `pkg/blueprint.Manager`** (`Deprecate(ctx, name, version, user, reason) (Blueprint, error)`, `Withdraw(...)`, `Reactivate(ctx, name, version, user) (Blueprint, error)`); HTTP handlers stay thin per the §6 hexagonal rule
+- [ ] **Authorization**: each handler performs `SubjectAccessReview` for verb `update`, resource `blueprints/status`, group `ai.suse.com`; on denial → 403 `PUBLISHER_REQUIRED`. Replace with the reusable `RequirePublisher` middleware once P7-5 lands (mark the inline SAR as `// REPLACE_WITH_P7-5_MIDDLEWARE`).
+- [ ] Caller identity extracted via `ExtractUser(r)` helper per `ARCHITECTURE.md §10.1` (single source of truth for header parsing)
+- [ ] **Status-only update**: use `client.Status().Patch(...)` with strategic-merge; do NOT touch `spec` (immutability webhook would reject)
+- [ ] **Per-Blueprint mutex** to serialize concurrent transitions on the same `(name, version)` per the pattern in `ARCHITECTURE.md §6.5.1` (Bundle approve)
+- [ ] Events emitted on the Blueprint via the K8s event recorder: `BlueprintDeprecated`, `BlueprintWithdrawn`, `BlueprintReactivated` (Type/Reason from `pkg/conditions/types.go`)
+- [ ] Handler in `internal/api/blueprints.go::deprecate` / `::withdraw` / `::reactivate`; workflow methods in `pkg/blueprint/manager.go`
+- [ ] HTTP integration tests cover:
+  - Happy path per endpoint
+  - Each invalid-state rejection (e.g., `withdraw` on a `Deprecated` Blueprint → 409)
+  - Unknown blueprint (404 `BLUEPRINT_NOT_FOUND`)
+  - Non-publisher caller → 403
+  - Concurrent transition race: spawn 5 goroutines, exactly one succeeds, four return 409
+- [ ] Mutex correctness test: `go test -race` clean
+
+**Validation:**
+```bash
+go test -race ./pkg/blueprint/ -run TestLifecycle -v
+go test -race ./internal/api/ -run TestBlueprints -v
+# end-to-end against the local k3d cluster:
+curl -X POST -H "Impersonate-User: alice" -H "Content-Type: application/json" \
+  -d '{"reason":"superseded by v2"}' \
+  http://localhost:8080/api/v1/blueprints/rag-with-llama/versions/1.5.0/deprecate | jq .status.phase
+# → "Deprecated"
+```
+
+**Agent Prompt:**
+> Implement the three lifecycle endpoints in a new `internal/api/blueprints.go`, mirroring the structure of `internal/api/publish.go` (P3-5). Business logic lives in `pkg/blueprint/manager.go` per the layering rule in CLAUDE.md. Authorization: inline `SubjectAccessReview` for `update` on `blueprints/status` (mark for replacement once P7-5 ships the reusable middleware). State transitions follow `ARCHITECTURE.md §8.5` strictly: Active→Deprecated, Active→Withdrawn, Withdrawn→Active. Use `client.Status().Patch` with strategic-merge; never touch `spec`. Each transition emits the corresponding K8s event using `pkg/conditions/types.go` constants. Add the per-Blueprint mutex pattern from `§6.5.1` (Bundle approve) to serialize concurrent transitions. Tests MUST be `-race` clean and cover happy path + invalid-state rejection + concurrent-transition race per endpoint. Done when all five validation commands pass.
+
+> **Out of scope for this story:** the manual escape-hatch endpoint `POST /api/v1/blueprints/wrap-vendor-chart` (line 1213 in P2-7) — file as its own story; sync vs async response shape and the publisher SAR check are independent design decisions.
+
+> **UI alignment:** P6-5 (Blueprint List + Version Picker, PR #45) ships these three actions as disabled stubs gated by `localStorage.aifPublisherOverride`. Once this story lands, the UI work to wire the buttons to the live endpoints is a small follow-up (3-line `operator-api.ts` additions + remove the `disabled` attribute + drop the tooltips).
+
+---
+
 ## Phase 4 — Deployment Engine
 
 *Goal: Helm and Fleet engines fully wired. NIM Helm values generation per the sizing formulas. Workload deployer dispatches per component.*
@@ -2568,6 +2626,16 @@ yarn serve-pkgs
 - [ ] Publisher-only actions: Deprecate, Withdraw, Reactivate (gated by role check)
 - [ ] **Registry-unreachable empty state**: when the catalog cannot refresh (registry unreachable per the test-connection check), render the documented empty-state copy from `SOFTWARE_SPEC.md §6` ("Cannot refresh wrapped Reference Blueprints; vendor-chart auto-wrapping is paused. Existing Blueprints remain visible and deployable from the cached state."). Existing wrapped Blueprints remain visible from cache.
 - [ ] Vitest covers grouping logic, version selection, and the unreachable empty state
+
+> **Follow-up (post-merge):** P6-5 ships under the custom-page layout
+> pattern established by P6-7 (Apps catalog) — `pages/blueprints.vue` +
+> `components/blueprints/*` + `utils/blueprint.ts` — rather than the
+> Rancher-canonical auto-discovery paths named in the acceptance
+> criteria above (`models/ai.suse.com.blueprint.js`,
+> `formatters/BlueprintPhaseState.vue`,
+> `list/ai.suse.com.blueprint.vue`). P6-9 (Settings page) shipped under
+> the same custom-page pattern. P6-0, P6-2, P6-4, P6-6 are still
+> scaffold placeholders. Tracked in PR #45.
 
 ---
 
