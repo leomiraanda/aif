@@ -103,7 +103,7 @@ Phases 2 and 3 can start as soon as Phase 1 begins. Phase 6 can start once Phase
 | 6     | P6-0 ‖ P6-1; then P6-2 ‖ P6-3; then P6-4 ‖ P6-5 ‖ P6-6; then P6-7 ‖ P6-8 ‖ P6-9 ‖ P6-10 | UI-internal chain only |
 | 7     | All five (P7-1..P7-5) parallel | Each only needs its Phase 0 prereq |
 | 8     | P8-1 ‖ P8-2 ‖ P8-3 ‖ P8-6; P8-4 ‖ P8-5 | P8-6 needs Phase 6 done |
-| 9     | P9-1 ‖ P9-2 ‖ P9-3 ‖ P9-4 ‖ P9-6 ‖ P9-7 | P9-5 last (final polish); P9-6 needs P9-1, P9-2, P0-6, P0-7; P9-7 needs P9-6, P5-7 |
+| 9     | P9-1 ‖ P9-2 ‖ P9-3 ‖ P9-3a ‖ P9-4 ‖ P9-6 ‖ P9-7 | P9-3a needs P9-3; P9-5 last (final polish); P9-6 needs P9-1, P9-2, P0-6, P0-7; P9-7 needs P9-6, P5-7 |
 
 A two-developer team can run the matrix at roughly: dev-A on Backend, dev-B on UI/DevOps, with Tests + Docs interleaved. A 4-agent fleet should saturate Phase 1 (multiple parallel controllers) and Phase 7 (all 5 parallel) easily.
 
@@ -115,7 +115,7 @@ A two-developer team can run the matrix at roughly: dev-A on Backend, dev-B on U
 |------|-----------|------------|
 | `cmd/operator/main.go` | P0-4 only after that | Keep main ≤250 lines. Route registration moves into `internal/manager/routes.go` after P0-4. Each handler story adds one `mux.HandleFunc` line via that file, not main. |
 | `internal/manager/routes.go` | P3-2..P3-6, P4-2, P4-3, P4-5, P5-2, P5-3, P5-4a, P5-5, P7-5, P8-1, P8-2 | Each handler story adds one `mux.HandleFunc` line — no rewrites of existing lines. |
-| `charts/aif-operator/templates/deployment.yaml` | P0-3, P7-2, P7-3, P9-3 | P0-3 lands a complete-but-minimal template. P7-* and P9-3 are surgical patches. |
+| `charts/aif-operator/templates/deployment.yaml` | P0-3, P7-2, P7-3, P9-3, P9-3a | P0-3 lands a complete-but-minimal template. P7-* and P9-3 are surgical patches. P9-3a wires leader-election args. |
 | `charts/aif-operator/templates/rbac.yaml` | P0-3, P7-1, P8-3 | Generate from `//+kubebuilder:rbac` markers via `make manifests`. Don't hand-edit after P0-3. |
 | `charts/aif-operator/templates/webhook.yaml` | P1-5, P7-4 | Created in P1-5; P7-4 may add CA bundle injection details. |
 | `pkg/bundle/manager.go` | P3-1 first, then P3-2..P3-5 add methods | Define `Manager` interface in P3-1. Subsequent stories add methods only — never change existing signatures. |
@@ -2912,6 +2912,7 @@ go test -race ./internal/controller/ -run TestPullSecretFailClosed -v
 - [ ] Egress allowlist: kube-apiserver, `registry.suse.com`, `dp.apps.rancher.io`, `api.apps.rancher.io`, configured Fleet Git host
 - [ ] NGC hosts intentionally NOT allowed
 - [ ] Ingress: only from `cattle-system` namespace and from kube-apiserver (for the webhook)
+- [ ] `values.yaml` adds `networkPolicy.enabled: false` and `values.schema.json` documents it (removed in P9-3 because no template existed yet)
 
 ---
 
@@ -3291,6 +3292,38 @@ cosign download sbom ghcr.io/suse/aif-operator:0.1.0 | jq -e '.SPDXID'
 **Done When:** All charts have a complete `README.md`, `values.schema.json`, and pinned `appVersion` matching the operator binary.
 
 > **NOTE:** All 5 charts are missing a `LICENSE` file. Each chart directory should include the project's license so it ships with the packaged `.tgz`.
+
+---
+
+**ID:** P9-3a
+**Epic:** Leader Election Support
+**Story:** As a platform engineer deploying the operator with `replicaCount > 1`, I want leader election wired end-to-end so that only one replica reconciles at a time.
+**Owner Hint:** DevOps
+**Effort:** S
+**Depends On:** P9-3
+**Parallelizable With:** P9-4
+**Done When:** `helm install --set operator.leaderElection.enabled=true` passes `--leader-elect=true` to the operator binary, renders the leader-election Role + RoleBinding for coordination.k8s.io/leases, and two-replica deployments converge on a single active leader.
+
+**Acceptance Criteria:**
+- [ ] `values.yaml` adds `operator.leaderElection.enabled` (default `false`)
+- [ ] `values.schema.json` documents the new field
+- [ ] `templates/deployment.yaml` appends `--leader-elect={{ .Values.operator.leaderElection.enabled }}` to container args
+- [ ] `templates/rbac.yaml` conditionally renders a namespaced Role + RoleBinding granting `coordination.k8s.io/leases` verbs `{get,list,watch,create,update,patch,delete}`, gated on `.Values.operator.leaderElection.enabled`
+- [ ] README documents the HA deployment pattern (`replicaCount: 2` + `operator.leaderElection.enabled: true`)
+- [ ] `helm template` with `operator.leaderElection.enabled=false` does NOT render the Role/RoleBinding
+- [ ] `helm lint --strict` passes with both `true` and `false`
+
+**Validation:**
+```bash
+# leader election disabled (default) — no Role rendered
+helm template aif-operator charts/aif-operator | grep -q 'leader-election' && echo FAIL || echo PASS
+
+# leader election enabled — Role + args rendered
+helm template aif-operator charts/aif-operator --set operator.leaderElection.enabled=true | grep -q 'leader-elect=true' && echo PASS || echo FAIL
+helm template aif-operator charts/aif-operator --set operator.leaderElection.enabled=true | grep -q 'leader-election' && echo PASS || echo FAIL
+```
+
+**Context:** The leader-election Role+RoleBinding were originally added in P9-3 but removed during code review because the deployment template didn't pass `--leader-elect` to the binary — the RBAC was aspirational. This story wires it end-to-end. No Go changes required — `cmd/operator/main.go` already defines the `--leader-elect` flag (default `false`) and passes it to the controller-runtime manager; the chart just needs to forward the value via container args.
 
 ---
 
