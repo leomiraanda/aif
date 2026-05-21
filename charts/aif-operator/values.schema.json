@@ -208,7 +208,7 @@
       "type": "object",
       "description": "Metrics endpoint configuration",
       "properties": {
-        "enabled": { "type": "boolean", "default": true, "description": "Enable metrics port" }
+        "enabled": { "type": "boolean", "default": true, "description": "Enable metrics endpoint (binds the metrics address and exposes the port via Service)" }
       }
     },
     "webhook": {
@@ -219,6 +219,7 @@
         "tlsMode": {
           "type": "string",
           "default": "cert-manager",
+          "enum": ["cert-manager"],
           "description": "TLS certificate mode (additional modes deferred to P7-4)"
         },
         "certManager": {

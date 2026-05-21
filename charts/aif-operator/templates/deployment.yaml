@@ -2,7 +2,6 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: {{ include "aif-operator.fullname" . }}
-  namespace: {{ .Release.Namespace }}
   labels:
     {{- include "aif-operator.labels" . | nindent 4 }}
 spec:
@@ -45,6 +44,10 @@ spec:
           command:
             - /opt/aif/bin/operator
           args:
+            - --addr=:{{ .Values.service.ports.api }}
+            - --health-probe-bind-address=:{{ .Values.service.ports.health }}
+            - --metrics-bind-address={{ if .Values.metrics.enabled }}:{{ .Values.service.ports.metrics }}{{ else }}0{{ end }}
+            - --webhook-bind-address=:{{ .Values.service.ports.webhook }}
             - --log-level={{ .Values.operator.logLevel }}
             - --log-format={{ .Values.operator.logFormat }}
             - --catalog-refresh={{ .Values.operator.catalogRefresh }}
