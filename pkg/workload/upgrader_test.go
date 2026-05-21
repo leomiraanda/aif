@@ -224,7 +224,16 @@ func TestUpgrader_EventRecordedBeforePatchOnConflict(t *testing.T) {
 	}
 }
 
-func TestUpgrader_PreservesOtherSpecFields(t *testing.T) {
+// TestUpgrader_BuildsRequestPreservingOtherFields verifies that the request
+// the Upgrader hands to the Workload store carries every spec field forward,
+// not just the version. The FakeRepository replaces its stored object with
+// whatever Patch is called with, so this test confirms the *caller* built a
+// complete object — it does NOT verify that the production merge-patch
+// payload is minimal (i.e. only the changed fields are on the wire). The
+// minimal-payload property is covered by TestK8sRepository_Patch_Includes­
+// ResourceVersion in k8s_repository_test.go and would also be exercised by
+// any future envtest that runs against a real apiserver.
+func TestUpgrader_BuildsRequestPreservingOtherFields(t *testing.T) {
 	w := workloadFixture("1.0.0")
 	replicas := int32(5)
 	w.Spec.Replicas = &replicas
