@@ -7,27 +7,37 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 )
 
-// Repository is the K8s-backed CRUD port for Workload CRs. It is a K8s
-// adapter port — aifv1 imports are allowed here per the layering rule.
-// ISP target is ≤4 methods; Repository carries 5 (Get/List/Update/Update­Status/Patch)
-// because the CRUD cluster naturally coheres at this adapter boundary. Splitting
-// to WorkloadReader / WorkloadWriter is deferred until a second consumer needs
-// Reader-only access. Counting queries live on DeploymentCounter.
+// Reader is the read-only K8s port for Workload CRs. It is a K8s adapter
+// port — aifv1 imports are allowed here per the layering rule.
+type Reader interface {
+	Get(ctx context.Context, namespace, name string) (*aifv1.Workload, error)
+	List(ctx context.Context, namespace string, selector labels.Selector) ([]aifv1.Workload, error)
+}
+
+// Writer is the mutation port for Workload CRs.
 //
 // Patch was added in P5-3 for the upgrade action: MergeFrom-based optimistic
 // concurrency surfaces field-level conflicts as apierrors.IsConflict, which
 // callers map to HTTP 409. Update remains for full-spec replacements.
-type Repository interface {
-	Get(ctx context.Context, namespace, name string) (*aifv1.Workload, error)
-	List(ctx context.Context, namespace string, selector labels.Selector) ([]aifv1.Workload, error)
+type Writer interface {
 	Update(ctx context.Context, w *aifv1.Workload) error
 	UpdateStatus(ctx context.Context, w *aifv1.Workload) error
 	Patch(ctx context.Context, w, orig *aifv1.Workload) error
 }
 
+// Repository is the union of Reader + Writer. Existing consumers (deployer,
+// reconciler) depend on the union because their CRUD usage is wide. New
+// consumers SHOULD depend on Reader or Writer directly, or define an even
+// narrower consumer-defined port (see Upgrader's local workloadStore in
+// upgrader.go for the pattern).
+type Repository interface {
+	Reader
+	Writer
+}
+
 // DeploymentCounter is the read-only port BlueprintReconciler uses to count
 // Workloads sourced from a given Blueprint version. Splitting this off
-// Repository (a) keeps Repository at ≤4 methods and (b) lets the
+// Repository (a) keeps it under the ISP method budget and (b) lets the
 // implementation push the count to a label-indexed query instead of the
 // cluster-wide List the reconciler does today.
 //

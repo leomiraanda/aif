@@ -11,6 +11,17 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 )
 
+// workloadStore is the consumer-defined narrow port the Upgrader needs.
+// Per CLAUDE.md, "ports live with their consumers — the consuming package
+// defines the interface narrowly tailored to what it needs." Upgrade only
+// reads one Workload and patches it; List/Update/UpdateStatus are out of
+// scope. Repository satisfies this implicitly, so the k8s adapter still
+// drops in without changes.
+type workloadStore interface {
+	Get(ctx context.Context, namespace, name string) (*aifv1.Workload, error)
+	Patch(ctx context.Context, w, orig *aifv1.Workload) error
+}
+
 // upgrader is the production Upgrader. It runs the 5 validation rules from
 // PROJECT_PLAN.md §P5-3 AC in the order the AC specifies, emits a
 // UpgradeStarted event BEFORE the spec patch (audit-before-patch), then
@@ -21,7 +32,7 @@ import (
 // The CR-mutation logic is inherently CR-coupled. CLAUDE.md only forbids
 // aifv1 in interface.go.
 type upgrader struct {
-	workloads  Repository
+	workloads  workloadStore
 	blueprints blueprint.Repository
 	events     UpgradeEventRecorder
 	logger     *slog.Logger
@@ -29,8 +40,9 @@ type upgrader struct {
 
 // NewUpgrader returns an Upgrader bound to the given ports. The logger is
 // used for structured server-side debugging; user-facing audit goes through
-// the UpgradeEventRecorder.
-func NewUpgrader(workloads Repository, blueprints blueprint.Repository, events UpgradeEventRecorder, logger *slog.Logger) Upgrader {
+// the UpgradeEventRecorder. workloads is accepted as the narrow workloadStore
+// port (Get + Patch only); Repository satisfies it implicitly.
+func NewUpgrader(workloads workloadStore, blueprints blueprint.Repository, events UpgradeEventRecorder, logger *slog.Logger) Upgrader {
 	return &upgrader{
 		workloads:  workloads,
 		blueprints: blueprints,
