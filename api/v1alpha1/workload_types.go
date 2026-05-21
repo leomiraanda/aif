@@ -287,8 +287,11 @@ type WorkloadStatus struct {
 	// RecoveryFailureCount is the number of consecutive times this
 	// Workload has entered Degraded since last reaching Running.
 	// Reset to zero on transition to Running or when a spec change exits Failed.
-	// When >= spec.strategy.automaticRecovery.failureThreshold,
-	// phase transitions to Failed.
+	// When >= spec.strategy.automaticRecovery.failureThreshold and
+	// automaticRecovery is enabled, phase transitions to RecoveryInProgress;
+	// when automaticRecovery is disabled, phase transitions directly to
+	// Failed on the first failed component (bypassing Degraded entirely,
+	// so the counter never increments and this field stays at zero).
 	// +optional
 	RecoveryFailureCount int32 `json:"recoveryFailureCount,omitempty"`
 }
