@@ -23,7 +23,7 @@ NIM containers typically require 60+ seconds to load model weights before becomi
 | `global.imagePullSecrets` | list | `[]` | Global image pull secrets |
 | `image.registry` | string | `registry.suse.com` | Image registry (overridden by global.imageRegistry) |
 | `image.repository` | string | `ai/containers/nvidia/llama-3-8b-instruct` | NIM container image repository |
-| `image.tag` | string | `latest` | Image tag |
+| `image.tag` | string | `""` | Image tag (defaults to Chart.AppVersion) |
 | `image.pullPolicy` | string | `IfNotPresent` | Image pull policy |
 | `replicaCount` | integer | `1` | Number of replicas |
 | `strategy.type` | string | `Recreate` | Deployment strategy (Recreate avoids double GPU allocation) |
@@ -38,7 +38,7 @@ NIM containers typically require 60+ seconds to load model weights before becomi
 | `nodeSelector` | object | `{nvidia.com/gpu.present: "true"}` | Node selector labels |
 | `imagePullSecrets` | list | `[{name: suse-registry-creds}]` | Image pull secrets |
 | `podSecurityContext.runAsNonRoot` | boolean | `true` | Run as non-root |
-| `podSecurityContext.runAsUser` | integer | — | Container UID (omitted by default; uses container image UID) |
+| `podSecurityContext.runAsUser` | integer | `1000` | Container UID; override if your mirrored NIM image sets a different non-root USER |
 | `podSecurityContext.seccompProfile.type` | string | `RuntimeDefault` | Seccomp profile type |
 | `containerSecurityContext.allowPrivilegeEscalation` | boolean | `false` | Disallow privilege escalation |
 | `containerSecurityContext.capabilities.drop` | list | `[ALL]` | Linux capabilities to drop |
