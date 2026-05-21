@@ -356,8 +356,10 @@ func applyErrorPhaseOverrides(priorPhase workload.Phase, phase *workload.Phase, 
 // give RecoveryInProgress its own poll cadence without revisiting Failed.
 func requeueForPhase(p aifv1.WorkloadPhase) ctrl.Result {
 	switch p {
-	case aifv1.WorkloadPhasePending, aifv1.WorkloadPhaseDeploying:
+	case aifv1.WorkloadPhasePending:
 		return ctrl.Result{RequeueAfter: workload.RequeuePending}
+	case aifv1.WorkloadPhaseDeploying:
+		return ctrl.Result{RequeueAfter: workload.RequeueDeploying}
 	case aifv1.WorkloadPhaseRunning:
 		return ctrl.Result{RequeueAfter: workload.RequeueRunning}
 	case aifv1.WorkloadPhaseDegraded:
