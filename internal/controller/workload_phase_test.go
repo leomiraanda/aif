@@ -19,10 +19,13 @@ import (
 // Deploying → Running → Degraded (counter increments on entry) → Running
 // (counter resets on entry) → Degraded (counter increments again) →
 // RecoveryInProgress (after counter reaches threshold; ARCHITECTURE.md
-// §4.4 rule 2 branch B). The terminal-spec-change reset is exercised by
-// pre-seeding phase=Failed via Status().Update, then verifying the
-// generation-bump clears the counter (P5-6 will own the actual
-// RecoveryInProgress → Failed transition).
+// §4.4 rule 2 branch B). P5-6 will own the RecoveryInProgress → Failed
+// transition; the spec-change-from-Failed counter reset is covered at the
+// unit level by
+// TestComputePhaseWithTransitions_SpecChangeFromFailedResets in
+// workload_phase_helpers_test.go (cannot be exercised here because the
+// controller will keep overwriting any seed back to RecoveryInProgress
+// while the failed component + at-threshold counter persist).
 //
 // A second spec covers the AutomaticRecovery.Enabled=false branch (rule 2
 // branch C): a failed component routes to PhaseFailed immediately,
@@ -94,7 +97,7 @@ var _ = Describe("Workload phase lifecycle (P5-1)", func() {
 		}, timeout, interval).Should(Succeed())
 	}
 
-	It("walks Pending → Deploying → Running → Degraded → Running → Degraded → RecoveryInProgress → seed-Failed → spec-change → Pending", func() {
+	It("walks Pending → Deploying → Running → Degraded → Running → Degraded → RecoveryInProgress", func() {
 		name := "wid-lifecycle-" + randomSuffix()
 		threshold := int32(3)
 
@@ -214,32 +217,6 @@ var _ = Describe("Workload phase lifecycle (P5-1)", func() {
 		// RecoveryInProgress is stable until P5-6 lands or the spec changes.
 		Consistently(getPhase(key), 1*time.Second, interval).Should(Equal(aifv1.WorkloadPhaseRecoveryInProgress))
 		Consistently(getCounter(key), 1*time.Second, interval).Should(Equal(threshold))
-
-		// 9a. Pre-seed phase=Failed via Status().Update to exercise the
-		//     spec-change-from-Failed counter reset (P5-1 owns the reset
-		//     branch; P5-6 owns the RecoveryInProgress → Failed transition
-		//     after rollback history exhaustion). Counter stays at threshold
-		//     so the reset assertion in step 9b is meaningful.
-		Eventually(func(g Gomega) {
-			var got aifv1.Workload
-			g.Expect(k8sClient.Get(ctx, key, &got)).To(Succeed())
-			got.Status.Phase = aifv1.WorkloadPhaseFailed
-			g.Expect(k8sClient.Status().Update(ctx, &got)).To(Succeed())
-		}, timeout, interval).Should(Succeed())
-		Eventually(getPhase(key), timeout, interval).Should(Equal(aifv1.WorkloadPhaseFailed))
-
-		// 9b. Spec-change-from-Failed: bump app version → reset counter,
-		//     recompute from empty components → Pending.
-		fakeDeployer.SetDeployResult(workload.DeployResult{})
-		Eventually(func(g Gomega) {
-			var got aifv1.Workload
-			g.Expect(k8sClient.Get(ctx, key, &got)).To(Succeed())
-			got.Spec.Source.App.Version = "2"
-			g.Expect(k8sClient.Update(ctx, &got)).To(Succeed())
-		}, timeout, interval).Should(Succeed())
-
-		Eventually(getPhase(key), timeout, interval).Should(Equal(aifv1.WorkloadPhasePending))
-		Eventually(getCounter(key), timeout, interval).Should(Equal(int32(0)))
 
 		// Cleanup.
 		Expect(k8sClient.Delete(ctx, w)).To(Succeed())
