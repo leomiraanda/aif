@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/SUSE/aif/pkg/fleet"
+	"github.com/SUSE/aif/pkg/workload"
 )
 
 func Example_buildBundleCR_singleComponent() {
@@ -39,4 +40,19 @@ func Example_buildBundleCR_singleComponent() {
 	// targets: 2
 	// chart: oci://registry.example.test/ai/charts/nim-llm:1.2.3
 	// resources: 1
+}
+
+// Note: the example suffix is lowercase ("mapFleetStateToPhase") because
+// go vet rejects Example_X where X starts uppercase ("malformed example
+// suffix"). The plan's verbatim name violated that rule.
+func Example_mapFleetStateToPhase() {
+	for _, s := range []string{"Ready", "Modified", "ErrApplied", "Pending", ""} {
+		fmt.Printf("%-10s -> %s\n", s, workload.MapFleetStateToPhase(s))
+	}
+	// Output:
+	// Ready      -> Running
+	// Modified   -> Running
+	// ErrApplied -> Failed
+	// Pending    -> Deploying
+	//            -> Deploying
 }
