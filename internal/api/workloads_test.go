@@ -3,7 +3,6 @@ package api
 import (
 	"bytes"
 	"encoding/json"
-	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -11,35 +10,32 @@ import (
 	"strings"
 	"testing"
 
-	aifv1 "github.com/SUSE/aif/api/v1alpha1"
-	"github.com/SUSE/aif/pkg/blueprint"
 	"github.com/SUSE/aif/pkg/workload"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
-// upgradeTestRig wires a real workload.Upgrader to fakes and registers the
-// handler on a fresh ServeMux. Each test gets its own rig — no shared state.
+// upgradeTestRig wires a real workload.Upgrader directly onto the domain
+// fakes (no aifv1 in this file). The handler talks to the Upgrader via its
+// port, so the test surface is the same shape as production — only the
+// internal/workload adapters are replaced.
 type upgradeTestRig struct {
-	mux         *http.ServeMux
-	workloadFR  *workload.FakeRepository
-	blueprintFR *blueprint.FakeRepository
-	eventFR     *workload.FakeUpgradeEventRecorder
+	mux        *http.ServeMux
+	workloads  *workload.FakeWorkloadStore
+	blueprints *workload.FakeBlueprintReader
+	events     *workload.FakeUpgradeEventRecorder
 }
 
 func newUpgradeTestRig(t *testing.T) *upgradeTestRig {
 	t.Helper()
-	wRepo := workload.NewFakeRepository()
-	bpRepo := blueprint.NewFakeRepository()
+	wStore := workload.NewFakeWorkloadStore()
+	bpReader := workload.NewFakeBlueprintReader()
 	rec := &workload.FakeUpgradeEventRecorder{}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	upgrader := workload.NewUpgrader(wRepo, bpRepo, rec, logger)
+	upgrader := workload.NewUpgrader(wStore, bpReader, rec, logger)
 
 	mux := http.NewServeMux()
 	h := NewWorkloadsHandler(upgrader, logger)
 	h.Register(mux)
-	return &upgradeTestRig{mux: mux, workloadFR: wRepo, blueprintFR: bpRepo, eventFR: rec}
+	return &upgradeTestRig{mux: mux, workloads: wStore, blueprints: bpReader, events: rec}
 }
 
 func (r *upgradeTestRig) post(t *testing.T, ns, name string, body any) *httptest.ResponseRecorder {
@@ -50,33 +46,27 @@ func (r *upgradeTestRig) post(t *testing.T, ns, name string, body any) *httptest
 	}
 	req := httptest.NewRequest("POST", "/api/v1/workloads/"+ns+"/"+name+"/upgrade", buf)
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Impersonate-User", "alice")
 	rr := httptest.NewRecorder()
 	r.mux.ServeHTTP(rr, req)
 	return rr
 }
 
 func seedBlueprintWorkload(rig *upgradeTestRig, version string) {
-	rig.workloadFR.Seed(&aifv1.Workload{
-		ObjectMeta: metav1.ObjectMeta{
-			Namespace:       "team-a",
-			Name:            "rag-prod",
-			ResourceVersion: "100",
-		},
-		Spec: aifv1.WorkloadSpec{
-			Name: "rag-prod",
-			Source: aifv1.WorkloadSource{
-				Kind:      aifv1.WorkloadSourceKindBlueprint,
-				Blueprint: &aifv1.BlueprintRef{Name: "rag", Version: version},
-			},
-		},
+	rig.workloads.Seed(&workload.UpgradeWorkloadView{
+		Namespace:       "team-a",
+		Name:            "rag-prod",
+		ResourceVersion: "100",
+		SourceKind:      workload.SourceKindBlueprint,
+		Blueprint:       &workload.BlueprintRef{Name: "rag", Version: version},
 	})
 }
 
-func seedBlueprint(rig *upgradeTestRig, lineage, version string, phase aifv1.BlueprintPhase) {
-	rig.blueprintFR.Seed(&aifv1.Blueprint{
-		ObjectMeta: metav1.ObjectMeta{Name: lineage + "." + version},
-		Spec:       aifv1.BlueprintSpec{BlueprintName: lineage, Version: version},
-		Status:     aifv1.BlueprintStatus{Phase: phase},
+func seedBlueprint(rig *upgradeTestRig, lineage, version string, withdrawn bool) {
+	rig.blueprints.Seed(&workload.UpgradeBlueprintView{
+		Name:      lineage + "." + version,
+		Lineage:   lineage,
+		Withdrawn: withdrawn,
 	})
 }
 
@@ -93,6 +83,7 @@ func TestWorkloadUpgrade_MalformedBody(t *testing.T) {
 	rig := newUpgradeTestRig(t)
 	req := httptest.NewRequest("POST", "/api/v1/workloads/ns/wl/upgrade", strings.NewReader("not-json"))
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Impersonate-User", "alice")
 	rr := httptest.NewRecorder()
 	rig.mux.ServeHTTP(rr, req)
 	if rr.Code != http.StatusBadRequest {
@@ -127,15 +118,11 @@ func TestWorkloadUpgrade_WorkloadNotFound(t *testing.T) {
 
 func TestWorkloadUpgrade_SourceNotBlueprint(t *testing.T) {
 	rig := newUpgradeTestRig(t)
-	rig.workloadFR.Seed(&aifv1.Workload{
-		ObjectMeta: metav1.ObjectMeta{Namespace: "team-a", Name: "app-wl", ResourceVersion: "1"},
-		Spec: aifv1.WorkloadSpec{
-			Name: "app-wl",
-			Source: aifv1.WorkloadSource{
-				Kind: aifv1.WorkloadSourceKindApp,
-				App:  &aifv1.AppRef{Repo: "https://x", Chart: "y", Version: "1.0.0"},
-			},
-		},
+	rig.workloads.Seed(&workload.UpgradeWorkloadView{
+		Namespace:       "team-a",
+		Name:            "app-wl",
+		ResourceVersion: "1",
+		SourceKind:      workload.SourceKindApp,
 	})
 	rr := rig.post(t, "team-a", "app-wl", map[string]string{"toBlueprintVersion": "1.1.0"})
 	if rr.Code != http.StatusBadRequest {
@@ -161,10 +148,9 @@ func TestWorkloadUpgrade_BlueprintVersionNotFound(t *testing.T) {
 func TestWorkloadUpgrade_CrossLineage(t *testing.T) {
 	rig := newUpgradeTestRig(t)
 	seedBlueprintWorkload(rig, "1.0.0")
-	rig.blueprintFR.Seed(&aifv1.Blueprint{
-		ObjectMeta: metav1.ObjectMeta{Name: "rag.1.1.0"},
-		Spec:       aifv1.BlueprintSpec{BlueprintName: "vision", Version: "1.1.0"},
-		Status:     aifv1.BlueprintStatus{Phase: aifv1.BlueprintPhaseActive},
+	rig.blueprints.Seed(&workload.UpgradeBlueprintView{
+		Name:    "rag.1.1.0",
+		Lineage: "vision", // mismatched lineage
 	})
 	rr := rig.post(t, "team-a", "rag-prod", map[string]string{"toBlueprintVersion": "1.1.0"})
 	if rr.Code != http.StatusBadRequest {
@@ -182,7 +168,7 @@ func TestWorkloadUpgrade_CrossLineage(t *testing.T) {
 func TestWorkloadUpgrade_TargetWithdrawn(t *testing.T) {
 	rig := newUpgradeTestRig(t)
 	seedBlueprintWorkload(rig, "1.0.0")
-	seedBlueprint(rig, "rag", "1.1.0", aifv1.BlueprintPhaseWithdrawn)
+	seedBlueprint(rig, "rag", "1.1.0", true)
 	rr := rig.post(t, "team-a", "rag-prod", map[string]string{"toBlueprintVersion": "1.1.0"})
 	if rr.Code != http.StatusConflict {
 		t.Errorf("expected 409, got %d", rr.Code)
@@ -199,7 +185,7 @@ func TestWorkloadUpgrade_TargetWithdrawn(t *testing.T) {
 func TestWorkloadUpgrade_Downgrade(t *testing.T) {
 	rig := newUpgradeTestRig(t)
 	seedBlueprintWorkload(rig, "1.5.0")
-	seedBlueprint(rig, "rag", "1.4.0", aifv1.BlueprintPhaseActive)
+	seedBlueprint(rig, "rag", "1.4.0", false)
 	rr := rig.post(t, "team-a", "rag-prod", map[string]string{"toBlueprintVersion": "1.4.0"})
 	if rr.Code != http.StatusConflict {
 		t.Errorf("expected 409, got %d", rr.Code)
@@ -224,7 +210,7 @@ type upgradeResponseBody struct {
 func TestWorkloadUpgrade_HappyPath(t *testing.T) {
 	rig := newUpgradeTestRig(t)
 	seedBlueprintWorkload(rig, "1.0.0")
-	seedBlueprint(rig, "rag", "1.1.0", aifv1.BlueprintPhaseActive)
+	seedBlueprint(rig, "rag", "1.1.0", false)
 
 	rr := rig.post(t, "team-a", "rag-prod", map[string]string{"toBlueprintVersion": "1.1.0"})
 	if rr.Code != http.StatusOK {
@@ -237,16 +223,16 @@ func TestWorkloadUpgrade_HappyPath(t *testing.T) {
 	if resp.OldVersion != "1.0.0" || resp.NewVersion != "1.1.0" || resp.BlueprintName != "rag" {
 		t.Errorf("unexpected response body: %+v", resp)
 	}
-	if len(rig.eventFR.Events) != 1 {
-		t.Errorf("expected 1 event, got %v", rig.eventFR.Events)
+	if len(rig.events.Events) != 1 {
+		t.Errorf("expected 1 event, got %v", rig.events.Events)
 	}
 }
 
 func TestWorkloadUpgrade_Conflict(t *testing.T) {
 	rig := newUpgradeTestRig(t)
 	seedBlueprintWorkload(rig, "1.0.0")
-	seedBlueprint(rig, "rag", "1.1.0", aifv1.BlueprintPhaseActive)
-	rig.workloadFR.PatchErr = apiConflictForTesting()
+	seedBlueprint(rig, "rag", "1.1.0", false)
+	rig.workloads.PatchErr = workload.ErrUpgradeConflict
 
 	rr := rig.post(t, "team-a", "rag-prod", map[string]string{"toBlueprintVersion": "1.1.0"})
 	if rr.Code != http.StatusConflict {
@@ -255,12 +241,4 @@ func TestWorkloadUpgrade_Conflict(t *testing.T) {
 	if got := decodeAPIError(t, rr).Code; got != ErrCodeConflict {
 		t.Errorf("expected %s, got %s", ErrCodeConflict, got)
 	}
-}
-
-func apiConflictForTesting() error {
-	return apierrors.NewConflict(
-		schema.GroupResource{Group: "ai.suse.com", Resource: "workloads"},
-		"rag-prod",
-		errors.New("simulated"),
-	)
 }

@@ -21,11 +21,11 @@ type FakeRepository struct {
 	mu    sync.RWMutex
 	items map[string]*aifv1.Workload
 
-	GetErr             error
-	ListErr            error
-	UpdateErr          error
-	UpdateStatusErr    error
-	PatchErr           error
+	GetErr              error
+	ListErr             error
+	UpdateErr           error
+	UpdateStatusErr     error
+	PatchErr            error
 	CountByBlueprintErr error
 }
 

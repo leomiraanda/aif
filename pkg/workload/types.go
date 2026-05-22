@@ -25,7 +25,7 @@ const (
 	PhasePending            Phase = "Pending"
 	PhaseDeploying          Phase = "Deploying"
 	PhaseRunning            Phase = "Running"
-	PhaseDegraded           Phase = "Degraded"           // P5-1
+	PhaseDegraded           Phase = "Degraded" // P5-1
 	PhaseFailed             Phase = "Failed"
 	PhaseRecoveryInProgress Phase = "RecoveryInProgress" // P5-1
 )
@@ -191,4 +191,30 @@ type UpgradeResult struct {
 	BlueprintName string
 	OldVersion    string
 	NewVersion    string
+}
+
+// UpgradeWorkloadView is the projection of a Workload CR that Upgrader
+// inspects: just enough to run the AC validations and to round-trip the
+// resourceVersion the adapter uses for the optimistic-lock patch.
+// Adapter-owned (internal/workload/upgrade_store.go) — the Upgrader treats
+// it as read-only.
+//
+// Blueprint is nil when SourceKind != Blueprint OR when the source pointer
+// is unset; the upgrader checks both invariants before reading it.
+type UpgradeWorkloadView struct {
+	Namespace       string
+	Name            string
+	ResourceVersion string
+	SourceKind      SourceKind
+	Blueprint       *BlueprintRef
+}
+
+// UpgradeBlueprintView is the projection of a target Blueprint CR that
+// Upgrader inspects. Lineage mirrors aifv1.Blueprint.Spec.BlueprintName;
+// Withdrawn is derived from Status.Phase so the upgrader doesn't need to
+// know the aifv1 phase enum.
+type UpgradeBlueprintView struct {
+	Name      string
+	Lineage   string
+	Withdrawn bool
 }

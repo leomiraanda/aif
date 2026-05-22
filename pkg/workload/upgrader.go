@@ -2,24 +2,37 @@ package workload
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 
-	aifv1 "github.com/SUSE/aif/api/v1alpha1"
-	"github.com/SUSE/aif/pkg/blueprint"
 	"golang.org/x/mod/semver"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 )
 
 // workloadStore is the consumer-defined narrow port the Upgrader needs.
 // Per CLAUDE.md, "ports live with their consumers — the consuming package
-// defines the interface narrowly tailored to what it needs." Upgrade only
-// reads one Workload and patches it; List/Update/UpdateStatus are out of
-// scope. Repository satisfies this implicitly, so the k8s adapter still
-// drops in without changes.
+// defines the interface narrowly tailored to what it needs."
+//
+// All methods speak in domain types and return pkg/workload sentinels; the
+// production adapter (internal/workload/UpgradeStore) translates aifv1 +
+// apierrors at the wiring layer. This is what keeps this file aifv1-free
+// per the package's layering rule.
 type workloadStore interface {
-	Get(ctx context.Context, namespace, name string) (*aifv1.Workload, error)
-	Patch(ctx context.Context, w, orig *aifv1.Workload) error
+	// GetUpgradeView returns the read-only projection Upgrader needs.
+	// Returns ErrWorkloadNotFound when the apiserver returns 404.
+	GetUpgradeView(ctx context.Context, namespace, name string) (*UpgradeWorkloadView, error)
+
+	// PatchBlueprintVersion bumps spec.source.blueprint.version to
+	// newVersion using the resourceVersion captured in view for optimistic
+	// concurrency. Returns ErrUpgradeConflict when the apiserver returns
+	// 409 (concurrent mutation between GetUpgradeView and patch apply).
+	PatchBlueprintVersion(ctx context.Context, view *UpgradeWorkloadView, newVersion string) error
+}
+
+// blueprintReader is the consumer-defined narrow port for the upgrade-target
+// Blueprint lookup. Returns ErrBlueprintVersionNotFound on 404.
+type blueprintReader interface {
+	GetForUpgrade(ctx context.Context, name string) (*UpgradeBlueprintView, error)
 }
 
 // upgrader is the production Upgrader. It runs the 5 validation rules from
@@ -27,22 +40,17 @@ type workloadStore interface {
 // UpgradeStarted event BEFORE the spec patch (audit-before-patch), then
 // patches Workload.spec.source.blueprint.version via the merge-patch path
 // (optimistic concurrency).
-//
-// This file imports aifv1 — same exception pkg/publish/workflow.go takes.
-// The CR-mutation logic is inherently CR-coupled. CLAUDE.md only forbids
-// aifv1 in interface.go.
 type upgrader struct {
 	workloads  workloadStore
-	blueprints blueprint.Repository
+	blueprints blueprintReader
 	events     UpgradeEventRecorder
 	logger     *slog.Logger
 }
 
-// NewUpgrader returns an Upgrader bound to the given ports. The logger is
-// used for structured server-side debugging; user-facing audit goes through
-// the UpgradeEventRecorder. workloads is accepted as the narrow workloadStore
-// port (Get + Patch only); Repository satisfies it implicitly.
-func NewUpgrader(workloads workloadStore, blueprints blueprint.Repository, events UpgradeEventRecorder, logger *slog.Logger) Upgrader {
+// NewUpgrader returns an Upgrader bound to the given ports. workloads and
+// blueprints are accepted as the narrowest possible ports; the K8s-typed
+// adapters live in internal/workload.
+func NewUpgrader(workloads workloadStore, blueprints blueprintReader, events UpgradeEventRecorder, logger *slog.Logger) Upgrader {
 	return &upgrader{
 		workloads:  workloads,
 		blueprints: blueprints,
@@ -52,75 +60,45 @@ func NewUpgrader(workloads workloadStore, blueprints blueprint.Repository, event
 }
 
 // Upgrade implements the P5-3 workflow. Validation order matches AC §P5-3.
-//
-//nolint:cyclop // Sequential validation gates; splitting hurts readability.
 func (u *upgrader) Upgrade(ctx context.Context, namespace, name, toVersion, user string) (UpgradeResult, error) {
-	// (1) Get the Workload.
-	w, err := u.workloads.Get(ctx, namespace, name)
+	view, err := u.workloads.GetUpgradeView(ctx, namespace, name)
 	if err != nil {
-		if apierrors.IsNotFound(err) {
-			return UpgradeResult{}, fmt.Errorf("%w: %s/%s", ErrWorkloadNotFound, namespace, name)
+		if errors.Is(err, ErrWorkloadNotFound) {
+			return UpgradeResult{}, err
 		}
 		return UpgradeResult{}, fmt.Errorf("get workload %s/%s: %w", namespace, name, err)
 	}
 
-	// (2) Validate source.kind == Blueprint.
-	if w.Spec.Source.Kind != aifv1.WorkloadSourceKindBlueprint || w.Spec.Source.Blueprint == nil {
-		return UpgradeResult{}, fmt.Errorf("%w (got kind=%s)", ErrSourceNotBlueprint, w.Spec.Source.Kind)
+	if err := u.validate(ctx, view, toVersion); err != nil {
+		return UpgradeResult{}, err
 	}
 
-	lineage := w.Spec.Source.Blueprint.Name
-	currentVersion := w.Spec.Source.Blueprint.Version
+	currentVersion := view.Blueprint.Version
+	lineage := view.Blueprint.Name
 
-	// (3) Lookup the target Blueprint CR by constructed name.
-	targetBlueprintName := fmt.Sprintf("%s.%s", lineage, toVersion)
-	bp, err := u.blueprints.Get(ctx, targetBlueprintName)
-	if err != nil {
-		if apierrors.IsNotFound(err) {
-			return UpgradeResult{}, fmt.Errorf("%w: %s", ErrBlueprintVersionNotFound, targetBlueprintName)
-		}
-		return UpgradeResult{}, fmt.Errorf("get blueprint %s: %w", targetBlueprintName, err)
-	}
-
-	// (4) Validate same lineage (spec.blueprintName).
-	if bp.Spec.BlueprintName != lineage {
-		return UpgradeResult{}, fmt.Errorf("%w: Cross-lineage upgrade not allowed (workload lineage=%s, target lineage=%s)",
-			ErrCrossLineageUpgrade, lineage, bp.Spec.BlueprintName)
-	}
-
-	// (5) Validate phase != Withdrawn.
-	if bp.Status.Phase == aifv1.BlueprintPhaseWithdrawn {
-		return UpgradeResult{}, fmt.Errorf("%w: Cannot upgrade to a Withdrawn Blueprint version (%s)",
-			ErrTargetWithdrawn, targetBlueprintName)
-	}
-
-	// (6) Validate new version is strictly greater per semver.
-	if !isStrictlyGreater(toVersion, currentVersion) {
-		return UpgradeResult{}, fmt.Errorf("%w: Upgrade must target a higher version (downgrade is not supported in v1) — current=%s target=%s",
-			ErrDowngradeNotSupported, currentVersion, toVersion)
-	}
-
-	// (7) Emit event BEFORE patch (audit-before-patch per AC line 2004).
+	// Audit-before-patch (AC line 2004): record the intent before the spec
+	// mutation so the audit trail survives a 409 conflict OR any other
+	// downstream failure (webhook rejection, apiserver blip, RBAC denial).
 	u.events.UpgradeStarted(ctx, namespace, name, currentVersion, toVersion)
 
-	// (8) Patch via merge-patch (optimistic concurrency).
-	orig := w.DeepCopy()
-	w.Spec.Source.Blueprint.Version = toVersion
-	if err := u.workloads.Patch(ctx, w, orig); err != nil {
-		if apierrors.IsConflict(err) {
-			return UpgradeResult{}, fmt.Errorf("%w: %s/%s", ErrUpgradeConflict, namespace, name)
+	if err := u.workloads.PatchBlueprintVersion(ctx, view, toVersion); err != nil {
+		if errors.Is(err, ErrUpgradeConflict) {
+			return UpgradeResult{}, err
 		}
+		// Event already recorded; surface the non-conflict failure to the
+		// server log so operators can correlate the orphaned audit entry
+		// with the underlying cause.
+		u.logger.Error("upgrade patch failed after UpgradeStarted event recorded",
+			"namespace", namespace,
+			"name", name,
+			"lineage", lineage,
+			"oldVersion", currentVersion,
+			"newVersion", toVersion,
+			"user", user,
+			"error", err,
+		)
 		return UpgradeResult{}, fmt.Errorf("patch workload %s/%s: %w", namespace, name, err)
 	}
-
-	u.logger.Info("workload upgraded",
-		"namespace", namespace,
-		"name", name,
-		"lineage", lineage,
-		"oldVersion", currentVersion,
-		"newVersion", toVersion,
-		"user", user,
-	)
 
 	return UpgradeResult{
 		Namespace:     namespace,
@@ -129,6 +107,45 @@ func (u *upgrader) Upgrade(ctx context.Context, namespace, name, toVersion, user
 		OldVersion:    currentVersion,
 		NewVersion:    toVersion,
 	}, nil
+}
+
+// validate runs AC validations 2–6 against the workload view and the target
+// blueprint. validation 1 (workload exists) is performed before validate is
+// called. On success the view's Blueprint pointer is guaranteed non-nil.
+func (u *upgrader) validate(ctx context.Context, view *UpgradeWorkloadView, toVersion string) error {
+	if view.SourceKind != SourceKindBlueprint {
+		return fmt.Errorf("%w: got kind=%s", ErrSourceNotBlueprint, view.SourceKind)
+	}
+	if view.Blueprint == nil {
+		return fmt.Errorf("%w: source.blueprint is missing despite kind=Blueprint", ErrSourceNotBlueprint)
+	}
+
+	lineage := view.Blueprint.Name
+	currentVersion := view.Blueprint.Version
+	targetCRName := lineage + "." + toVersion
+
+	bp, err := u.blueprints.GetForUpgrade(ctx, targetCRName)
+	if err != nil {
+		if errors.Is(err, ErrBlueprintVersionNotFound) {
+			return err
+		}
+		return fmt.Errorf("get blueprint %s: %w", targetCRName, err)
+	}
+
+	if bp.Lineage != lineage {
+		return fmt.Errorf("%w: Cross-lineage upgrade not allowed (workload lineage=%s, target lineage=%s)",
+			ErrCrossLineageUpgrade, lineage, bp.Lineage)
+	}
+	if bp.Withdrawn {
+		return fmt.Errorf("%w: Cannot upgrade to a Withdrawn Blueprint version (%s)",
+			ErrTargetWithdrawn, targetCRName)
+	}
+	if !isStrictlyGreater(toVersion, currentVersion) {
+		return fmt.Errorf("%w: Upgrade must target a higher version (downgrade is not supported in v1) -- current=%s target=%s",
+			ErrDowngradeNotSupported, currentVersion, toVersion)
+	}
+
+	return nil
 }
 
 // isStrictlyGreater returns true iff newV > oldV under semver ordering.

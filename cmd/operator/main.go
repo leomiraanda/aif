@@ -194,14 +194,19 @@ func main() {
 	publishHandler := api.NewPublishHandler(publishWorkflow, logger)
 	settingsHandler := api.NewSettingsHandler(mgr.GetClient(), nil) // nil applier: engine propagation is async via SettingsReconciler
 
-	// P5-3 Workload upgrade wiring. The upgrader depends on:
-	//   - workloadRepo:    pkg/workload.Repository (CRUD + Patch)
-	//   - blueprintRepo:   pkg/blueprint.Repository (reuses the publish one)
-	//   - upgradeRecorder: pkg/workload.UpgradeEventRecorder (k8s events adapter)
+	// P5-3 Workload upgrade wiring. The upgrader depends on three narrow
+	// consumer-defined ports — all aifv1-free. The internal/workload
+	// adapters wrap pkg/{workload,blueprint}.Repository and translate
+	// apierrors into pkg/workload sentinels at the K8s boundary.
+	//   - upgradeStore:    workloadStore  (Get + PatchBlueprintVersion)
+	//   - blueprintReader: blueprintReader (GetForUpgrade)
+	//   - upgradeRecorder: UpgradeEventRecorder (k8s events adapter)
 	// All reads go through mgr.GetClient() so they hit the informer cache.
 	workloadRepo := workload.NewK8sRepository(mgr.GetClient()).AsRepository()
+	upgradeStore := internalworkload.NewUpgradeStore(workloadRepo)
+	upgradeBlueprintReader := internalworkload.NewBlueprintReader(blueprintRepo)
 	upgradeRecorder := internalworkload.NewEventRecorder(mgr.GetEventRecorder("workload-upgrader"))
-	workloadUpgrader := workload.NewUpgrader(workloadRepo, blueprintRepo, upgradeRecorder, logger)
+	workloadUpgrader := workload.NewUpgrader(upgradeStore, upgradeBlueprintReader, upgradeRecorder, logger)
 	workloadsHandler := api.NewWorkloadsHandler(workloadUpgrader, logger)
 
 	// Setup API server

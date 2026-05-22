@@ -46,5 +46,5 @@ var (
 	ErrCrossLineageUpgrade      = errors.New("workload: cross-lineage upgrade not allowed")
 	ErrTargetWithdrawn          = errors.New("workload: cannot upgrade to a Withdrawn Blueprint version")
 	ErrDowngradeNotSupported    = errors.New("workload: upgrade must target a higher version (downgrade is not supported in v1)")
-	ErrUpgradeConflict          = errors.New("workload: upgrade conflict — workload was modified concurrently")
+	ErrUpgradeConflict          = errors.New("workload: upgrade conflict -- workload was modified concurrently")
 )
