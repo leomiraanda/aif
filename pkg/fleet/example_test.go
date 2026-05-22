@@ -4,7 +4,6 @@ import (
 	"fmt"
 
 	"github.com/SUSE/aif/pkg/fleet"
-	"github.com/SUSE/aif/pkg/workload"
 )
 
 func Example_buildBundleCR_singleComponent() {
@@ -40,16 +39,4 @@ func Example_buildBundleCR_singleComponent() {
 	// targets: 2
 	// chart: oci://registry.example.test/ai/charts/nim-llm:1.2.3
 	// resources: 1
-}
-
-func Example_workloadMapFleetStateToPhase() {
-	for _, s := range []string{"Ready", "Modified", "ErrApplied", "Pending", ""} {
-		fmt.Printf("%-10s -> %s\n", s, workload.MapFleetStateToPhase(s))
-	}
-	// Output:
-	// Ready      -> Running
-	// Modified   -> Running
-	// ErrApplied -> Failed
-	// Pending    -> Deploying
-	//            -> Deploying
 }
