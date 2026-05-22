@@ -146,7 +146,7 @@ func buildBundleCR(spec BundleDeploymentSpec) (*fleetv1.Bundle, error) {
 		})
 	}
 
-	return &fleetv1.Bundle{
+	bundle := &fleetv1.Bundle{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      fleetBundleName(spec.WorkloadNS, spec.WorkloadID),
 			Namespace: spec.WorkloadNS,
@@ -167,7 +167,9 @@ func buildBundleCR(spec BundleDeploymentSpec) (*fleetv1.Bundle, error) {
 			Resources: resources,
 			Targets:   targets,
 		},
-	}, nil
+	}
+	bundle.SetGroupVersionKind(fleetv1.SchemeGroupVersion.WithKind("Bundle"))
+	return bundle, nil
 }
 
 func toOwnerReference(o OwnerRef) metav1.OwnerReference {
