@@ -486,6 +486,40 @@ spec:
                   controller
                 format: int64
                 type: integer
+              perCluster:
+                description: |-
+                  PerCluster reports the per-target-cluster deployment state derived
+                  from Fleet BundleDeployment status. Empty until the first Fleet
+                  status observation lands.
+                items:
+                  description: |-
+                    ClusterDeploymentStatus reports the deployment state on one target
+                    cluster (mirrored from a Fleet BundleDeployment). Populated by the
+                    Workload reconciler via pkg/workload/fleet_phase.MapFleetStateToPhase.
+                  properties:
+                    clusterName:
+                      description: ClusterName is the Fleet Cluster.metadata.name
+                        of the target.
+                      type: string
+                    fleetState:
+                      description: FleetState is the raw Fleet display.state for diagnostics.
+                      type: string
+                    lastObservedAt:
+                      description: |-
+                        LastObservedAt is when the controller last read Fleet status for
+                        this cluster.
+                      format: date-time
+                      type: string
+                    phase:
+                      description: |-
+                        Phase is the workload-domain ClusterPhase string
+                        (Pending/Deploying/Running/Failed).
+                      type: string
+                  required:
+                  - clusterName
+                  - phase
+                  type: object
+                type: array
               phase:
                 description: Phase is the current lifecycle phase
                 enum:
