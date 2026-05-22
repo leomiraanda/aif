@@ -325,8 +325,9 @@ type ClusterDeploymentStatus struct {
 	// ClusterName is the Fleet Cluster.metadata.name of the target.
 	ClusterName string `json:"clusterName"`
 
-	// Phase is the workload-domain ClusterPhase string
-	// (Pending/Deploying/Running/Failed).
+	// Phase is the workload-domain ClusterPhase value — one of the
+	// enumerated constants Pending, Deploying, Running, Failed.
+	// The reconciler must never write a value outside this set.
 	Phase string `json:"phase"`
 
 	// FleetState is the raw Fleet display.state for diagnostics.
