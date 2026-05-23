@@ -9,6 +9,8 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -17,6 +19,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
+
+	fleetv1 "github.com/rancher/fleet/pkg/apis/fleet.cattle.io/v1alpha1"
 
 	aifv1 "github.com/SUSE/aif/api/v1alpha1"
 	"github.com/SUSE/aif/internal/controller"
@@ -46,7 +50,10 @@ var _ = BeforeSuite(func() {
 
 	testEnv = &envtest.Environment{
 		CRDInstallOptions: envtest.CRDInstallOptions{
-			Paths:              []string{filepath.Join("..", "..", "charts", "aif-operator", "crds")},
+			Paths: []string{
+				filepath.Join("..", "..", "charts", "aif-operator", "crds"),
+				filepath.Join("..", "..", "test", "crds", "fleet"),
+			},
 			ErrorIfPathMissing: true,
 			CleanUpAfterUse:    true,
 		},
@@ -61,6 +68,7 @@ var _ = BeforeSuite(func() {
 	Expect(cfg).NotTo(BeNil())
 
 	Expect(aifv1.AddToScheme(scheme.Scheme)).To(Succeed())
+	Expect(fleetv1.AddToScheme(scheme.Scheme)).To(Succeed())
 
 	mgr, err := ctrl.NewManager(cfg, ctrl.Options{
 		Scheme: scheme.Scheme,
@@ -95,11 +103,12 @@ var _ = BeforeSuite(func() {
 	// would diverge from the watch source. FakeRepository is exercised
 	// in pkg-level unit tests.
 	Expect((&controller.WorkloadReconciler{
-		Client:     mgr.GetClient(),
-		Scheme:     mgr.GetScheme(),
-		Recorder:   mgr.GetEventRecorder("workload-controller"),
-		Deployer:   fakeDeployer,
-		Repository: workload.NewK8sRepository(mgr.GetClient()).AsRepository(),
+		Client:            mgr.GetClient(),
+		Scheme:            mgr.GetScheme(),
+		Recorder:          mgr.GetEventRecorder("workload-controller"),
+		Deployer:          fakeDeployer,
+		Repository:        workload.NewK8sRepository(mgr.GetClient()).AsRepository(),
+		OperatorNamespace: "aif",
 	}).SetupWithManager(mgr)).To(Succeed())
 
 	settingsApplier = &controller.FakeSettingsApplier{}
@@ -123,6 +132,19 @@ var _ = BeforeSuite(func() {
 	Eventually(func() error {
 		return k8sClient.List(ctx, &aifv1.BundleList{})
 	}, 30*time.Second).Should(Succeed())
+
+	// P4-3b: Pre-create the operator namespace and the docker-config
+	// pull-secret so WorkloadReconciler (which now fetches
+	// suse-registry-creds from the operator namespace before deploying)
+	// doesn't trip the PullSecretNotReady branch in existing specs.
+	Expect(k8sClient.Create(ctx, &corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{Name: "aif"},
+	})).To(Succeed())
+	Expect(k8sClient.Create(ctx, &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "suse-registry-creds", Namespace: "aif"},
+		Type:       corev1.SecretTypeDockerConfigJson,
+		Data:       map[string][]byte{corev1.DockerConfigJsonKey: []byte(`{"auths":{}}`)},
+	})).To(Succeed())
 })
 
 var _ = AfterSuite(func() {
