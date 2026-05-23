@@ -124,8 +124,8 @@ func setupControllers(mgr ctrlmanager.Manager, opts Options) error {
 	bundleRepo := bundle.NewK8sRepository(mgr.GetClient())
 	workloadDeployer := workload.NewDeployer(
 		opts.Logger,
-		opts.HelmRenderer,      // P4-3b — value-only renderer for the Fleet path
-		opts.FleetBundleEngine, // P4-3b
+		opts.HelmRenderer, // P4-3b: value-only renderer for the Fleet path
+		opts.FleetBundleEngine,
 		blueprintRepo,
 		bundleRepo,
 		opts.NvidiaDiscovery,
@@ -138,7 +138,7 @@ func setupControllers(mgr ctrlmanager.Manager, opts Options) error {
 		Recorder:          mgr.GetEventRecorder("workload-controller"),
 		Deployer:          workloadDeployer,
 		Repository:        workload.NewK8sRepository(mgr.GetClient()).AsRepository(),
-		OperatorNamespace: opts.OperatorNamespace, // P4-3b
+		OperatorNamespace: opts.OperatorNamespace,
 	}
 	if err := workloadReconciler.SetupWithManager(mgr); err != nil {
 		return fmt.Errorf("setting up WorkloadReconciler: %w", err)
