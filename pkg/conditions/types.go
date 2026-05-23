@@ -53,6 +53,10 @@ const (
 	// Pull-secret reconciler (P7-2)
 	ReasonPullSecretReconcileBlocked = "PullSecretReconcileBlocked"
 	ReasonSourceSecretMissing        = "SourceSecretMissing"
+	// ReasonPullSecretNotReady is set on Workload Ready=False when the
+	// reconciler can't yet read suse-registry-creds from the operator
+	// namespace. Resolves once SettingsReconciler materializes the secret.
+	ReasonPullSecretNotReady = "PullSecretNotReady"
 
 	// Blueprint validation
 	ReasonBlueprintValidated = "BlueprintValidated"       // Blueprint spec validation passed
