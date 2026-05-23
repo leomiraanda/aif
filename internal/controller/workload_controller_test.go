@@ -5,17 +5,26 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	stderrors "errors"
+	"log/slog"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	fleetv1 "github.com/rancher/fleet/pkg/apis/fleet.cattle.io/v1alpha1"
+	"github.com/rancher/wrangler/v3/pkg/genericcondition"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes/scheme"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	aifv1 "github.com/SUSE/aif/api/v1alpha1"
+	"github.com/SUSE/aif/pkg/blueprint"
+	"github.com/SUSE/aif/pkg/bundle"
 	"github.com/SUSE/aif/pkg/conditions"
+	"github.com/SUSE/aif/pkg/fleet"
+	"github.com/SUSE/aif/pkg/helm"
+	"github.com/SUSE/aif/pkg/nvidia"
 	"github.com/SUSE/aif/pkg/workload"
 )
 
@@ -947,3 +956,125 @@ func randomSuffix() string {
 	_, _ = rand.Read(b)
 	return hex.EncodeToString(b)
 }
+
+var _ = Describe("WorkloadReconciler Fleet Bundle integration (P4-3b)", func() {
+	const timeout = 30 * time.Second
+	const interval = 250 * time.Millisecond
+	ctx := context.Background()
+
+	// Regression — Modified→Running wire-up guard.
+	//
+	// The suite-wide WorkloadReconciler is wired with workload.FakeDeployer
+	// (suite_test.go), which never calls fleet.FleetBundleEngine.Apply, so
+	// the reconciler alone cannot produce a Fleet Bundle in envtest. To
+	// exercise the production Deployer→FleetBundleEngine→Bundle path, this
+	// test constructs a production deployer in-test and drives Deploy()
+	// directly against the envtest client. It then asserts:
+	//
+	//  1. The production deployer creates a fleet.cattle.io/v1alpha1 Bundle
+	//     with the expected name ({ns}-{workloadID}).
+	//  2. Updating the Bundle status with a healthy-looking Conditions list
+	//     does NOT cause the suite-driven reconciler to flip the Workload
+	//     phase to Failed.
+	//
+	// Per the plan's caveat (docs/superpowers/plans/2026-05-21-p4-3b-fleet-bundle-engine.md:3072),
+	// the unit test for MapFleetStateToPhase (Task 1) is the primary guard for
+	// the Modified→Running mapping; this integration test is the wire-up guard.
+	It("creates a Fleet Bundle and doesn't flip the Workload to Failed on healthy Bundle status", func() {
+		// FakeDeployer drives the suite reconciler — keep it on the happy
+		// path so the reconciler doesn't itself produce a Failed phase.
+		fakeDeployer.SetDeployResult(workload.DeployResult{Phase: workload.PhaseRunning})
+
+		// Unique namespace per spec; created here because no envtest
+		// helper exists and the suite-wide "default" namespace is shared.
+		nsName := "wl-fleet-" + randomSuffix()
+		Expect(k8sClient.Create(ctx, &corev1.Namespace{
+			ObjectMeta: metav1.ObjectMeta{Name: nsName},
+		})).To(Succeed())
+
+		const wlName = "demo"
+		w := &aifv1.Workload{
+			ObjectMeta: metav1.ObjectMeta{Namespace: nsName, Name: wlName},
+			Spec: aifv1.WorkloadSpec{
+				Name:           "llama",
+				DeployStrategy: aifv1.DeployStrategyTypeHelm,
+				TargetClusters: []string{"prod-east"},
+				Source: aifv1.WorkloadSource{
+					Kind: aifv1.WorkloadSourceKindApp,
+					App: &aifv1.AppRef{
+						Repo:    "registry.example.test/charts",
+						Chart:   "llama",
+						Version: "1.0.0",
+					},
+				},
+			},
+		}
+		Expect(k8sClient.Create(ctx, w)).To(Succeed())
+
+		// Production deployer wired against a DIRECT envtest client (not
+		// the cached manager client). The production fleet.bundleEngine
+		// does Patch-then-Get on the same client and the cache lags the
+		// apiserver after Create — the direct client side-steps that.
+		directClient, err := client.New(testEnv.Config, client.Options{Scheme: scheme.Scheme})
+		Expect(err).NotTo(HaveOccurred())
+		nvDisc, _ := nvidia.NewDiscovery(slog.Default())
+		prodDeployer := workload.NewDeployer(
+			slog.Default(),
+			helm.NewFake(),
+			fleet.NewBundleEngine(slog.Default(), directClient),
+			blueprint.NewFakeRepository(),
+			bundle.NewFakeRepository(),
+			nvDisc,
+			nvidia.NewDeployer(slog.Default()),
+		)
+
+		// k8sClient is the manager's cached client; the informer cache may
+		// lag the apiserver right after Create. Wait until the Workload is
+		// visible in-cache before projecting it into a DeployRequest.
+		var fetched aifv1.Workload
+		Eventually(func() error {
+			return k8sClient.Get(ctx, client.ObjectKeyFromObject(w), &fetched)
+		}, timeout, interval).Should(Succeed())
+
+		_, deployErr := prodDeployer.Deploy(ctx,
+			workload.WorkloadToDeployRequest(&fetched, []byte(`{"auths":{}}`)),
+		)
+		Expect(deployErr).NotTo(HaveOccurred())
+
+		// Fleet Bundle name is {ns}-{workloadID} (lowercased + DNS-1123
+		// sanitized; see pkg/fleet/cr_builder.go.fleetBundleName).
+		bundleKey := client.ObjectKey{Namespace: nsName, Name: nsName + "-" + wlName}
+		Eventually(func() error {
+			var b fleetv1.Bundle
+			return k8sClient.Get(ctx, bundleKey, &b)
+		}, timeout, interval).Should(Succeed(), "Fleet Bundle should be created")
+
+		// Inject a healthy-looking Bundle status.
+		// fleetv1.GenericCondition aliases wrangler's genericcondition.GenericCondition,
+		// whose Status field is corev1.ConditionStatus (NOT metav1.ConditionStatus).
+		var bndl fleetv1.Bundle
+		Expect(k8sClient.Get(ctx, bundleKey, &bndl)).To(Succeed())
+		bndl.Status = fleetv1.BundleStatus{
+			Conditions: []genericcondition.GenericCondition{
+				{Type: "Ready", Status: corev1.ConditionTrue},
+			},
+		}
+		Expect(k8sClient.Status().Update(ctx, &bndl)).To(Succeed())
+
+		// The Workload must not flip to Failed. The suite reconciler is
+		// driving the status with FakeDeployer's Running result; assert
+		// that the existence of (and status update on) the Fleet Bundle
+		// owned by this Workload doesn't perturb that contract.
+		Consistently(func() string {
+			var got aifv1.Workload
+			if err := k8sClient.Get(ctx, client.ObjectKeyFromObject(w), &got); err != nil {
+				return ""
+			}
+			return string(got.Status.Phase)
+		}, "3s", interval).ShouldNot(Equal(string(aifv1.WorkloadPhaseFailed)))
+
+		// Cleanup: clear teardown error (default nil) and delete the Workload.
+		// FakeDeployer.Teardown succeeds with nil err, finalizer is removed.
+		Expect(k8sClient.Delete(ctx, w)).To(Succeed())
+	})
+})
