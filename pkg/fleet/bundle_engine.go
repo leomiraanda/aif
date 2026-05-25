@@ -43,7 +43,12 @@ func (e *bundleEngine) Apply(ctx context.Context, spec BundleDeploymentSpec) (Bu
 	// Server-side-apply: idempotent on identical spec, surfaces conflicts
 	// cleanly. ForceOwnership lets us reclaim fields if a previous run was
 	// interrupted with a different field manager.
-	if err := e.client.Patch(ctx, desired, client.Apply,
+	//
+	// TODO: migrate to client.Client.Apply() once an ApplyConfiguration is
+	// available for fleetv1.Bundle (controller-runtime v0.23.3 deprecates the
+	// client.Apply Patch constant in favour of the typed API). Mirrors the
+	// outstanding migration in internal/api/settings.go.
+	if err := e.client.Patch(ctx, desired, client.Apply, //nolint:staticcheck // SA1019: see TODO above
 		client.FieldOwner(fieldManager),
 		client.ForceOwnership,
 	); err != nil {
