@@ -63,7 +63,13 @@ type WorkloadSpec struct {
 	// Source indicates the provenance of this Workload
 	Source WorkloadSource `json:"source"`
 
-	// TargetClusters are the cluster IDs (informational)
+	// TargetClusters lists the downstream cluster IDs the workload should
+	// land on. For deployStrategy=helm (P4-3b), each entry drives one
+	// fleet.cattle.io/v1alpha1 Bundle.spec.targets[].clusterName fan-out
+	// entry, so the slice is load-bearing: an empty slice means "do not
+	// target any cluster" (Fleet creates the Bundle but reconciles zero
+	// BundleDeployments) and the Workload stays at phase=Pending until
+	// the field is populated.
 	// +optional
 	TargetClusters []string `json:"targetClusters,omitempty"`
 

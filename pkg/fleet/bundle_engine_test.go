@@ -98,8 +98,6 @@ func TestBundleEngine_Apply_Idempotent(t *testing.T) {
 		t.Fatalf("chart drifted across applies: %q vs %q",
 			afterFirst.Spec.Helm.Chart, afterSecond.Spec.Helm.Chart)
 	}
-	// Avoid unused metav1 import
-	_ = metav1.ObjectMeta{}
 }
 
 func TestBundleEngine_Apply_RejectsInvalidSpec(t *testing.T) {

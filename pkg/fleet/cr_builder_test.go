@@ -3,8 +3,6 @@ package fleet
 import (
 	"strings"
 	"testing"
-
-	fleetv1 "github.com/rancher/fleet/pkg/apis/fleet.cattle.io/v1alpha1"
 )
 
 func TestFleetBundleName_BasicShape(t *testing.T) {
@@ -90,8 +88,6 @@ func TestBuildBundleCR_SingleComponent(t *testing.T) {
 	if len(b.OwnerReferences) != 1 || b.OwnerReferences[0].UID != "u-1" {
 		t.Fatalf("OwnerReferences not propagated: %+v", b.OwnerReferences)
 	}
-	// Avoid unused import lint
-	_ = fleetv1.Bundle{}
 }
 
 func TestBuildBundleCR_MultiComponent(t *testing.T) {
