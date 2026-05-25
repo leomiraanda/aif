@@ -55,6 +55,14 @@ type WorkloadReconciler struct {
 // +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
 // +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch
 // +kubebuilder:rbac:groups=fleet.cattle.io,resources=bundles,verbs=get;list;watch;create;update;patch;delete
+//
+// NOTE on RBAC markers: `make manifests` currently invokes controller-gen
+// only with the `crd` generator (see Makefile target), so the markers
+// above do NOT regenerate any RBAC YAML. The authoritative source is
+// `charts/aif-operator/templates/rbac.yaml`; the markers serve as
+// in-source documentation that must be kept in sync. When a
+// `manifests-rbac` target lands and the chart starts deriving from
+// controller-gen output, this NOTE can be removed.
 
 // Reconcile implements the reconcile loop for Workload resources
 func (r *WorkloadReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
