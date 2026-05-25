@@ -1,0 +1,13 @@
+apiVersion: ai.suse.com/v1alpha1
+kind: InstallAIExtension
+metadata:
+  name: aif-ui
+spec:
+  source:
+    kind: Git
+    git:
+      repo: https://github.com/SUSE/suse-ai-lifecycle-manager
+      branch: gh-pages
+  extension:
+    name: suse-ai-lifecycle-manager
+    version: "1.1.0"

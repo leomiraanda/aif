@@ -3,6 +3,8 @@ package manager
 import (
 	"fmt"
 	"log/slog"
+	"net/http"
+	"time"
 
 	"github.com/SUSE/aif/internal/controller"
 	"github.com/SUSE/aif/pkg/blueprint"
@@ -175,10 +177,10 @@ func setupControllers(mgr ctrlmanager.Manager, opts Options) error {
 	installExtReconciler := &controller.InstallAIExtensionReconciler{
 		Client:     mgr.GetClient(),
 		Scheme:     mgr.GetScheme(),
-		Logger:     opts.Logger,
 		HelmEngine: opts.HelmEngine,
 		Discovery:  opts.Discovery,
 		Recorder:   mgr.GetEventRecorder("installaiextension-controller"),
+		HTTPClient: &http.Client{Timeout: 30 * time.Second},
 	}
 	if err := installExtReconciler.SetupWithManager(mgr); err != nil {
 		return fmt.Errorf("setting up InstallAIExtensionReconciler: %w", err)
