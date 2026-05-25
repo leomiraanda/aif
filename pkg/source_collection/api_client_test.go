@@ -748,6 +748,42 @@ func TestLatestBaseline_EmptyBranches_ReturnsEmpty(t *testing.T) {
 	}
 }
 
+func TestLatestBaseline_FallsBackToBranchName_WhenBaselineMissing(t *testing.T) {
+	// Mirrors upstream shape for apps like postgresql: branches only
+	// carry branch_name, no baseline. We want the highest non-LTS
+	// branch_name so the app still shows in the catalog.
+	branches := []apiBranch{
+		{BranchName: "12", IsLTS: false},
+		{BranchName: "18", IsLTS: false},
+		{BranchName: "15", IsLTS: false},
+	}
+	if got := latestBaseline(branches); got != "18" {
+		t.Errorf("latestBaseline = %q, want 18", got)
+	}
+}
+
+func TestLatestBaseline_PrefersBaselineOverBranchName(t *testing.T) {
+	// If any branch has a baseline, it wins even when other branches
+	// only carry branch_name.
+	branches := []apiBranch{
+		{BranchName: "18", IsLTS: false},
+		{BranchName: "0", Baseline: "0.27.0", IsLTS: false},
+	}
+	if got := latestBaseline(branches); got != "0.27.0" {
+		t.Errorf("latestBaseline = %q, want 0.27.0", got)
+	}
+}
+
+func TestLatestBaseline_FallsBackToLTSBranchName_WhenAllLTSAndNoBaseline(t *testing.T) {
+	branches := []apiBranch{
+		{BranchName: "1.10", IsLTS: true},
+		{BranchName: "1.11", IsLTS: true},
+	}
+	if got := latestBaseline(branches); got != "1.11" {
+		t.Errorf("latestBaseline = %q, want 1.11", got)
+	}
+}
+
 func TestAbsolutizeLogoURL(t *testing.T) {
 	cases := []struct {
 		name, apiURL, logoURL, want string

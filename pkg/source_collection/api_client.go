@@ -291,38 +291,48 @@ func (c *apiClient) buildCatalogApp(settings EngineSettings, item apiListItem, d
 	}
 }
 
-// latestBaseline picks the most-recent baseline from an app's branches.
-// Strategy: skip LTS branches (separately released long-term-support
-// streams), then pick the lexicographically-greatest baseline string —
-// the upstream branches are semver-shaped so component-by-component
-// numeric comparison matches semver well enough for our display purpose.
-// Returns empty string if no usable branch is found.
+// latestBaseline picks the most-recent version string from an app's
+// branches, tiered: non-LTS baseline > any baseline > non-LTS branch_name
+// > any branch_name. Some upstream apps (e.g. postgresql, suse-storage)
+// only ship branch_name without a populated baseline; falling back keeps
+// them in the catalog with their major series rather than dropping them.
+// Returns empty string only if no branch has either field.
 func latestBaseline(branches []apiBranch) string {
-	var best string
-	for _, b := range branches {
-		if b.IsLTS {
-			continue
-		}
-		if b.Baseline == "" {
-			continue
-		}
-		if best == "" || compareSemverLike(b.Baseline, best) > 0 {
-			best = b.Baseline
-		}
-	}
-	// Fallback: if every branch is LTS, take the highest LTS rather than
-	// returning empty (an LTS-only app should still show a version).
-	if best == "" {
+	pick := func(eligible func(apiBranch) bool, field func(apiBranch) string) string {
+		var best string
 		for _, b := range branches {
-			if b.Baseline == "" {
+			if !eligible(b) {
 				continue
 			}
-			if best == "" || compareSemverLike(b.Baseline, best) > 0 {
-				best = b.Baseline
+			v := field(b)
+			if v == "" {
+				continue
+			}
+			if best == "" || compareSemverLike(v, best) > 0 {
+				best = v
 			}
 		}
+		return best
 	}
-	return best
+	notLTS := func(b apiBranch) bool { return !b.IsLTS }
+	any := func(apiBranch) bool { return true }
+	baseline := func(b apiBranch) string { return b.Baseline }
+	branchName := func(b apiBranch) string { return b.BranchName }
+
+	for _, tier := range []struct {
+		eligible func(apiBranch) bool
+		field    func(apiBranch) string
+	}{
+		{notLTS, baseline},
+		{any, baseline},
+		{notLTS, branchName},
+		{any, branchName},
+	} {
+		if v := pick(tier.eligible, tier.field); v != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 // compareSemverLike compares two semver-shaped strings (e.g. "1.2.3").
