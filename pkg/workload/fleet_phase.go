@@ -37,6 +37,15 @@ func MapFleetStateToPhase(state string) ClusterPhase {
 		return ClusterRunning
 	case "ErrApplied":
 		return ClusterFailed
+	case "NotInstalled":
+		// Explicit arm (not just default fall-through): Fleet's
+		// NotInstalled is the transient pre-install state, not a
+		// terminal manifest-rejection. Treating it as Failed would
+		// flap any workload that hadn't been installed on its
+		// downstream cluster yet. If live-cluster experience later
+		// proves a particular NotInstalled subcase IS terminal, lift
+		// that case to ClusterFailed alongside ErrApplied here.
+		return ClusterDeploying
 	default:
 		return ClusterDeploying
 	}
@@ -47,35 +56,40 @@ func MapFleetStateToPhase(state string) ClusterPhase {
 //
 //   empty                                 → Pending  (no Bundle observed yet)
 //   any Failed                            → Failed   (terminal — surfaces fastest)
-//   all Running                           → Running
+//   all Running                           → Running  (strict — all targets must agree)
 //   all Pending                           → Pending
 //   otherwise (mixed states, no Failed)   → Deploying
+//
+// The "all Running" arm is strict: any cluster still Pending or
+// Deploying keeps the workload at Deploying. Reporting Running while
+// a target is mid-image-pull would let the workload flap (Running →
+// Deploying → Running) on every cluster's first reconcile and would
+// surface a partially-deployed workload as healthy.
 func AggregateClusterPhases(phases []ClusterPhase) Phase {
 	if len(phases) == 0 {
 		return PhasePending
 	}
-	var anyFailed, anyRunning, anyDeploying, allPending bool
-	allPending = true
+	var anyFailed bool
+	allRunning := true
+	allPending := true
 	for _, p := range phases {
 		if p != ClusterPending {
 			allPending = false
 		}
-		switch p {
-		case ClusterFailed:
+		if p != ClusterRunning {
+			allRunning = false
+		}
+		if p == ClusterFailed {
 			anyFailed = true
-		case ClusterRunning:
-			anyRunning = true
-		case ClusterDeploying:
-			anyDeploying = true
 		}
 	}
 	switch {
 	case anyFailed:
 		return PhaseFailed
+	case allRunning:
+		return PhaseRunning
 	case allPending:
 		return PhasePending
-	case anyRunning && !anyDeploying:
-		return PhaseRunning
 	default:
 		return PhaseDeploying
 	}

@@ -14,6 +14,11 @@ func TestMapFleetStateToPhase(t *testing.T) {
 		{"WaitApplied", ClusterDeploying},
 		{"OutOfSync", ClusterDeploying},
 		{"WaitCheckIn", ClusterDeploying},
+		// NotInstalled is an explicit arm (not default fall-through):
+		// Fleet emits it as the transient pre-install state, not
+		// terminal manifest-rejection. Locks the decision documented
+		// on MapFleetStateToPhase's case arm.
+		{"NotInstalled", ClusterDeploying},
 		{"", ClusterDeploying},
 		{"SomeUnknownFutureState", ClusterDeploying},
 	}
@@ -41,6 +46,15 @@ func TestAggregateClusterPhases(t *testing.T) {
 		{"pending mixed with deploying yields deploying", []ClusterPhase{ClusterPending, ClusterDeploying}, PhaseDeploying},
 		{"single running", []ClusterPhase{ClusterRunning}, PhaseRunning},
 		{"single pending", []ClusterPhase{ClusterPending}, PhasePending},
+		// Strict-all-Running cases per AggregateClusterPhases docstring.
+		// Reviewer #2 flagged these as missing: the old code returned
+		// Running for [Running, Pending] (anyRunning && !anyDeploying
+		// branch), which would flap a partially-deployed workload to
+		// Running on first cluster Ready while others still image-pull.
+		{"running plus pending → deploying (no premature Running)", []ClusterPhase{ClusterRunning, ClusterPending}, PhaseDeploying},
+		{"running plus deploying plus pending → deploying", []ClusterPhase{ClusterRunning, ClusterDeploying, ClusterPending}, PhaseDeploying},
+		// any-Failed precedence over allPending.
+		{"failed plus pending → failed (failed beats all-pending)", []ClusterPhase{ClusterFailed, ClusterPending}, PhaseFailed},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

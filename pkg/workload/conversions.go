@@ -90,14 +90,35 @@ func ApplyDeployResult(w *aifv1.Workload, r DeployResult) {
 		})
 	}
 
+	// Wipe-and-rebuild is safe here: the deployer's PerCluster is
+	// projected from Bundle.Spec.Targets via pkg/fleet/status.mirrorStatus
+	// and ALWAYS contains one entry per target by construction. A partial
+	// view would be a bug in mirrorStatus, not a state we should preserve
+	// across reconciles.
+	//
+	// LastObservedAt is preserved when (Phase, FleetState) are unchanged
+	// for a given ClusterName. Without this guard, every Bundle status
+	// patch (Owns(&fleetv1.Bundle{}) in WorkloadReconciler retriggers on
+	// each one) would bump status.resourceVersion on the Workload and
+	// produce N×workloads of pointless API-server load.
 	now := metav1.Now()
+	existing := make(map[string]aifv1.ClusterDeploymentStatus, len(w.Status.PerCluster))
+	for _, e := range w.Status.PerCluster {
+		existing[e.ClusterName] = e
+	}
 	w.Status.PerCluster = nil
 	for _, p := range r.PerCluster {
+		observed := now
+		if prev, ok := existing[p.ClusterName]; ok &&
+			prev.Phase == string(p.Phase) &&
+			prev.FleetState == p.FleetState {
+			observed = prev.LastObservedAt
+		}
 		w.Status.PerCluster = append(w.Status.PerCluster, aifv1.ClusterDeploymentStatus{
 			ClusterName:    p.ClusterName,
 			Phase:          string(p.Phase),
 			FleetState:     p.FleetState,
-			LastObservedAt: now,
+			LastObservedAt: observed,
 		})
 	}
 }
