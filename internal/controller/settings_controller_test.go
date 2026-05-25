@@ -408,9 +408,16 @@ var _ = Describe("Settings air-gap propagation (P5-7)", func() {
 	})
 
 	AfterEach(func() {
-		// Delete the Settings CR so subsequent tests start clean.
+		// Delete the Settings CR so subsequent tests start clean. Wait for
+		// the finalizer-driven deletion to complete; without this poll the
+		// next spec's Create races against the still-finalizing tombstone
+		// and fails with 409 AlreadyExists (~1-in-3 reruns).
 		s := &aifv1.Settings{ObjectMeta: metav1.ObjectMeta{Name: "settings", Namespace: "aif"}}
-		_ = k8sClient.Delete(ctx, s)
+		Expect(client.IgnoreNotFound(k8sClient.Delete(ctx, s))).To(Succeed())
+		Eventually(func() bool {
+			err := k8sClient.Get(ctx, client.ObjectKeyFromObject(s), &aifv1.Settings{})
+			return errors.IsNotFound(err)
+		}, 10*time.Second, 200*time.Millisecond).Should(BeTrue())
 	})
 
 	Context("(a) Registry endpoint override propagates", func() {

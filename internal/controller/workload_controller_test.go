@@ -5,17 +5,26 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	stderrors "errors"
+	"log/slog"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	fleetv1 "github.com/rancher/fleet/pkg/apis/fleet.cattle.io/v1alpha1"
+	"github.com/rancher/wrangler/v3/pkg/genericcondition"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes/scheme"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	aifv1 "github.com/SUSE/aif/api/v1alpha1"
+	"github.com/SUSE/aif/pkg/blueprint"
+	"github.com/SUSE/aif/pkg/bundle"
 	"github.com/SUSE/aif/pkg/conditions"
+	"github.com/SUSE/aif/pkg/fleet"
+	"github.com/SUSE/aif/pkg/helm"
+	"github.com/SUSE/aif/pkg/nvidia"
 	"github.com/SUSE/aif/pkg/workload"
 )
 
@@ -947,3 +956,186 @@ func randomSuffix() string {
 	_, _ = rand.Read(b)
 	return hex.EncodeToString(b)
 }
+
+var _ = Describe("WorkloadReconciler Fleet Bundle integration (P4-3b)", Serial, func() {
+	const timeout = 30 * time.Second
+	const interval = 250 * time.Millisecond
+	ctx := context.Background()
+
+	// Regression — wire-up guard for the controller→Deployer→FleetBundleEngine
+	// chain end-to-end in envtest.
+	//
+	// The suite-wide WorkloadReconciler is wired with workload.FakeDeployer
+	// (suite_test.go), which never calls fleet.FleetBundleEngine.Apply, so the
+	// reconciler alone cannot produce a Fleet Bundle. For this block we
+	// hot-swap the suite reconciler's Deployer field to a production
+	// workload.NewDeployer wired against fleet.NewBundleEngine + a direct
+	// envtest client. Serial (above) prevents any other Describe block from
+	// running concurrently while the swap is in effect; the AfterEach
+	// restores the original FakeDeployer so downstream specs see the
+	// suite-wide default.
+	//
+	// Asserts:
+	//
+	//   1. After creating a Workload CR, the suite-driven reconciler runs the
+	//      production deployer and a fleet.cattle.io/v1alpha1 Bundle named
+	//      {ns}-{workloadID} appears in the apiserver. This is the
+	//      "reconciler creates Fleet Bundle" pillar.
+	//
+	//   2. After we patch Bundle.Status with a healthy "Ready=True"
+	//      condition, the Workload.status.Phase does NOT flip to Failed.
+	//      This is the "healthy status doesn't flip Failed" pillar. We cannot
+	//      assert Eventually==Running here because pkg/fleet/status.go's
+	//      mirrorStatus does not (yet) parse per-cluster FleetState from
+	//      Bundle.Status — every per-cluster FleetState is "", which
+	//      MapFleetStateToPhase translates to ClusterDeploying / PhaseDeploying.
+	//      The plan's caveat (docs/superpowers/plans/2026-05-21-p4-3b-fleet-bundle-engine.md:3072)
+	//      acknowledges this — the Modified→Running unit guard lives in
+	//      pkg/workload/fleet_phase_test.go (Task 1).
+	var savedDeployer workload.Deployer
+
+	BeforeEach(func() {
+		// Drain any Workloads left by prior Describe blocks before swapping
+		// workloadReconciler.Deployer. Prior blocks delete their Workloads
+		// fire-and-forget without waiting for completion (or skip Delete
+		// entirely on negative-path specs), so the controller may still be
+		// processing finalizer-removal Reconciles (which read r.Deployer
+		// via handleDeletion) at the moment this BeforeEach runs. Mutating
+		// r.Deployer concurrently with that read trips `go test -race` even
+		// though the swap is logically harmless. Draining + waiting for zero
+		// Workloads guarantees the controller's queue is idle for live
+		// objects by the time the swap happens.
+		var leftover aifv1.WorkloadList
+		Expect(k8sClient.List(ctx, &leftover)).To(Succeed())
+		for i := range leftover.Items {
+			_ = k8sClient.Delete(ctx, &leftover.Items[i])
+		}
+		Eventually(func() int {
+			var list aifv1.WorkloadList
+			if err := k8sClient.List(ctx, &list); err != nil {
+				return -1
+			}
+			return len(list.Items)
+		}, 30*time.Second, 250*time.Millisecond).Should(Equal(0))
+
+		savedDeployer = workloadReconciler.Deployer
+
+		// Direct envtest client (not the manager's cached client). The
+		// production fleet.bundleEngine does Patch-then-Get; the cache lags
+		// the apiserver after Create on first reconcile, and a direct
+		// client side-steps that.
+		directClient, err := client.New(testEnv.Config, client.Options{Scheme: scheme.Scheme})
+		Expect(err).NotTo(HaveOccurred())
+		nvDisc, _ := nvidia.NewDiscovery(slog.Default())
+		workloadReconciler.Deployer = workload.NewDeployer(
+			slog.Default(),
+			helm.NewFake(),
+			fleet.NewBundleEngine(slog.Default(), directClient),
+			blueprint.NewFakeRepository(),
+			bundle.NewFakeRepository(),
+			nvDisc,
+			nvidia.NewDeployer(slog.Default()),
+		)
+	})
+
+	AfterEach(func() {
+		// Same drain as BeforeEach — Serial guarantees no other spec runs
+		// concurrently, but reconciler goroutines from this spec's own
+		// Workloads may still be in flight after the spec body returns.
+		// Restoring the Deployer field while a Reconcile is reading it
+		// trips `go test -race`. Delete anything left behind and wait for
+		// zero Workloads cluster-wide before restoring the field.
+		var leftover aifv1.WorkloadList
+		Expect(k8sClient.List(ctx, &leftover)).To(Succeed())
+		for i := range leftover.Items {
+			_ = k8sClient.Delete(ctx, &leftover.Items[i])
+		}
+		Eventually(func() int {
+			var list aifv1.WorkloadList
+			if err := k8sClient.List(ctx, &list); err != nil {
+				return -1
+			}
+			return len(list.Items)
+		}, 30*time.Second, 250*time.Millisecond).Should(Equal(0))
+		workloadReconciler.Deployer = savedDeployer
+	})
+
+	It("creates a Fleet Bundle and doesn't flip the Workload to Failed on healthy Bundle status", func() {
+		// Unique namespace per spec; created here because no envtest helper
+		// exists and the suite-wide "default" namespace is shared.
+		nsName := "wl-fleet-" + randomSuffix()
+		Expect(k8sClient.Create(ctx, &corev1.Namespace{
+			ObjectMeta: metav1.ObjectMeta{Name: nsName},
+		})).To(Succeed())
+
+		const wlName = "demo"
+		w := &aifv1.Workload{
+			ObjectMeta: metav1.ObjectMeta{Namespace: nsName, Name: wlName},
+			Spec: aifv1.WorkloadSpec{
+				Name:           "llama",
+				DeployStrategy: aifv1.DeployStrategyTypeHelm,
+				TargetClusters: []string{"prod-east"},
+				Source: aifv1.WorkloadSource{
+					Kind: aifv1.WorkloadSourceKindApp,
+					App: &aifv1.AppRef{
+						Repo:    "registry.example.test/charts",
+						Chart:   "llama",
+						Version: "1.0.0",
+					},
+				},
+			},
+		}
+		Expect(k8sClient.Create(ctx, w)).To(Succeed())
+
+		// Pillar 1: the suite reconciler (now driving the production
+		// deployer chain) creates a Fleet Bundle for the Workload.
+		// Bundle name is {ns}-{workloadID} (lowercased + DNS-1123
+		// sanitized; see pkg/fleet/cr_builder.go.fleetBundleName).
+		bundleKey := client.ObjectKey{Namespace: nsName, Name: nsName + "-" + wlName}
+		Eventually(func() error {
+			var b fleetv1.Bundle
+			return k8sClient.Get(ctx, bundleKey, &b)
+		}, timeout, interval).Should(Succeed(),
+			"reconciler should drive production deployer to create Fleet Bundle")
+
+		// Inject a healthy-looking Bundle status.
+		// fleetv1.GenericCondition aliases wrangler's genericcondition.GenericCondition,
+		// whose Status field is corev1.ConditionStatus (NOT metav1.ConditionStatus).
+		// The Owns(&fleetv1.Bundle{}) watch on the reconciler should fire a
+		// re-reconcile when this Update lands.
+		Eventually(func() error {
+			var bndl fleetv1.Bundle
+			if err := k8sClient.Get(ctx, bundleKey, &bndl); err != nil {
+				return err
+			}
+			bndl.Status = fleetv1.BundleStatus{
+				Conditions: []genericcondition.GenericCondition{
+					{Type: "Ready", Status: corev1.ConditionTrue},
+				},
+			}
+			return k8sClient.Status().Update(ctx, &bndl)
+		}, timeout, interval).Should(Succeed())
+
+		// Pillar 2: the Owns(Bundle) re-reconcile triggered by the status
+		// patch must NOT flip the Workload to Failed. mirrorStatus reports
+		// per-cluster FleetState="" today (richer parsing is deferred per
+		// the plan caveat), which MapFleetStateToPhase maps to
+		// ClusterDeploying → PhaseDeploying — non-Failed and non-empty.
+		Consistently(func() string {
+			var got aifv1.Workload
+			if err := k8sClient.Get(ctx, client.ObjectKeyFromObject(w), &got); err != nil {
+				return ""
+			}
+			return string(got.Status.Phase)
+		}, "3s", interval).ShouldNot(Equal(string(aifv1.WorkloadPhaseFailed)))
+
+		// Cleanup: remove the Workload. The production deployer's Teardown
+		// calls FleetBundleEngine.Teardown, which deletes the Bundle.
+		Expect(k8sClient.Delete(ctx, w)).To(Succeed())
+		Eventually(func() bool {
+			var got aifv1.Workload
+			err := k8sClient.Get(ctx, client.ObjectKeyFromObject(w), &got)
+			return errors.IsNotFound(err)
+		}, timeout, interval).Should(BeTrue(), "Workload should be fully deleted")
+	})
+})

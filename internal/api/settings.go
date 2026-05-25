@@ -105,7 +105,7 @@ func (h *SettingsHandler) putSettings(w http.ResponseWriter, r *http.Request) {
 	// ApplyConfiguration types for aifv1.Settings (controller-runtime v0.23.3
 	// deprecates the client.Apply Patch constant in favour of the typed API).
 	if err := h.client.Patch(
-		r.Context(), settings, client.Apply,
+		r.Context(), settings, client.Apply, //nolint:staticcheck // SA1019: see TODO above
 		client.ForceOwnership,
 		client.FieldOwner(settingsFieldOwner),
 	); err != nil {

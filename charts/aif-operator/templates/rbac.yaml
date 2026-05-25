@@ -129,6 +129,26 @@ rules:
       - get
       - list
       - watch
+  # P4-3b: WorkloadReconciler SSA-patches fleet.cattle.io/v1alpha1
+  # Bundle CRs (one per Workload, deployStrategy=helm) and watches
+  # them via Owns(&fleetv1.Bundle{}) for status mirroring. The
+  # +kubebuilder:rbac marker on internal/controller/workload_controller.go
+  # is currently inert — `make manifests` runs controller-gen only with
+  # the `crd` generator, not `rbac`, so this ClusterRole is the
+  # authoritative source. Keep this block in sync with the marker until
+  # the Makefile gains a `manifests-rbac` target.
+  - apiGroups:
+      - fleet.cattle.io
+    resources:
+      - bundles
+    verbs:
+      - get
+      - list
+      - watch
+      - create
+      - update
+      - patch
+      - delete
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole

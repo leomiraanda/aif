@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"time"
 
+	fleetv1 "github.com/rancher/fleet/pkg/apis/fleet.cattle.io/v1alpha1"
+
 	aifv1 "github.com/SUSE/aif/api/v1alpha1"
 	"github.com/SUSE/aif/pkg/conditions"
 	"github.com/SUSE/aif/pkg/workload"
@@ -24,6 +26,13 @@ const (
 	workloadFinalizerName = "ai.suse.com/cleanup"
 )
 
+var (
+	// errPullSecretNotReady is returned from reconcile when suse-registry-creds
+	// Secret is not yet present in the operator namespace. Mapped to
+	// ReasonPullSecretNotReady + 30s requeue.
+	errPullSecretNotReady = stderrors.New("pull-secret not ready")
+)
+
 // WorkloadReconciler reconciles a Workload object.
 //
 // Repository is the K8s-backed CRUD port for Workload CRs. The reconciler
@@ -33,16 +42,27 @@ const (
 // setup; production and the envtest suite both wire the same K8sRepository.
 type WorkloadReconciler struct {
 	client.Client
-	Scheme     *runtime.Scheme
-	Recorder   events.EventRecorder
-	Deployer   workload.Deployer   // P4-2: Helm deployment engine
-	Repository workload.Repository // P5-1: CR CRUD via the port
+	Scheme            *runtime.Scheme
+	Recorder          events.EventRecorder
+	Deployer          workload.Deployer   // P4-2: Helm deployment engine
+	Repository        workload.Repository // P5-1: CR CRUD via the port
+	OperatorNamespace string              // P4-3b: namespace the operator runs in; pull-secret (suse-registry-creds) is fetched from here
 }
 
 // +kubebuilder:rbac:groups=ai.suse.com,resources=workloads,verbs=get;list;watch;update;patch
 // +kubebuilder:rbac:groups=ai.suse.com,resources=workloads/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=ai.suse.com,resources=workloads/finalizers,verbs=update
 // +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
+// +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch
+// +kubebuilder:rbac:groups=fleet.cattle.io,resources=bundles,verbs=get;list;watch;create;update;patch;delete
+//
+// NOTE on RBAC markers: `make manifests` currently invokes controller-gen
+// only with the `crd` generator (see Makefile target), so the markers
+// above do NOT regenerate any RBAC YAML. The authoritative source is
+// `charts/aif-operator/templates/rbac.yaml`; the markers serve as
+// in-source documentation that must be kept in sync. When a
+// `manifests-rbac` target lands and the chart starts deriving from
+// controller-gen output, this NOTE can be removed.
 
 // Reconcile implements the reconcile loop for Workload resources
 func (r *WorkloadReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -124,6 +144,8 @@ func mapDeployError(err error) (reason string, requeueAfter time.Duration, termi
 	switch {
 	case err == nil:
 		return "", 0, false
+	case stderrors.Is(err, errPullSecretNotReady):
+		return conditions.ReasonPullSecretNotReady, 30 * time.Second, false
 	case stderrors.Is(err, workload.ErrNestedBlueprintNotSupported):
 		return conditions.ReasonUnsupportedComposition, 0, true
 	case stderrors.Is(err, workload.ErrSourceNotResolved):
@@ -171,9 +193,37 @@ func (r *WorkloadReconciler) reconcile(ctx context.Context, w *aifv1.Workload) e
 		w.Status.Phase = aifv1.WorkloadPhasePending
 	}
 
+	// P4-3b: Fetch the pull-secret from the operator namespace. Missing →
+	// surface Ready=False/reason=PullSecretNotReady (the pull-secret
+	// reconciler from P5-5 materializes suse-registry-creds from
+	// Settings.spec.suseRegistry once configured).
+	var pullSecret corev1.Secret
+	if err := r.Get(ctx,
+		client.ObjectKey{Namespace: r.OperatorNamespace, Name: "suse-registry-creds"},
+		&pullSecret,
+	); err != nil {
+		if errors.IsNotFound(err) {
+			r.setCondition(w, metav1.Condition{
+				Type:               conditions.TypeReady,
+				Status:             metav1.ConditionFalse,
+				Reason:             conditions.ReasonPullSecretNotReady,
+				Message:            "suse-registry-creds Secret not present in operator namespace yet",
+				ObservedGeneration: w.Generation,
+			})
+			w.Status.ObservedGeneration = w.Generation
+			// Return the sentinel; the outer Reconcile path calls
+			// mapDeployError, which classifies errPullSecretNotReady and
+			// extracts a 30s RequeueAfter while preserving the status
+			// fields we just set.
+			return errPullSecretNotReady
+		}
+		return fmt.Errorf("fetch pull-secret: %w", err)
+	}
+	pullSecretData := pullSecret.Data[".dockerconfigjson"]
+
 	// Translate to DeployRequest, call Deployer, project per-component
 	// outcome back into status (NOT Phase — controller owns that below).
-	req := workload.WorkloadToDeployRequest(w)
+	req := workload.WorkloadToDeployRequest(w, pullSecretData)
 	result, deployErr := r.Deployer.Deploy(ctx, req)
 	workload.ApplyDeployResult(w, result)
 
@@ -202,7 +252,7 @@ func (r *WorkloadReconciler) handleDeletion(ctx context.Context, w *aifv1.Worklo
 	// Project status.componentReleases into the domain type the Deployer
 	// understands. On failure, keep the finalizer and requeue.
 	previous := workload.ComponentReleasesFromCR(w.Status.ComponentReleases)
-	if err := r.Deployer.Teardown(ctx, w.Namespace, previous); err != nil {
+	if err := r.Deployer.Teardown(ctx, w.Namespace, w.Name, previous); err != nil {
 		r.Recorder.Eventf(w, nil, corev1.EventTypeWarning, "TeardownFailed",
 			conditions.ActionDeleting, "Failed to teardown releases: %v", err)
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
@@ -443,5 +493,6 @@ func (r *WorkloadReconciler) setReadyCondition(w *aifv1.Workload, deployErr erro
 func (r *WorkloadReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&aifv1.Workload{}).
+		Owns(&fleetv1.Bundle{}).
 		Complete(r)
 }

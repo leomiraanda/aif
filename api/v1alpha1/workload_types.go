@@ -63,7 +63,13 @@ type WorkloadSpec struct {
 	// Source indicates the provenance of this Workload
 	Source WorkloadSource `json:"source"`
 
-	// TargetClusters are the cluster IDs (informational)
+	// TargetClusters lists the downstream cluster IDs the workload should
+	// land on. For deployStrategy=helm (P4-3b), each entry drives one
+	// fleet.cattle.io/v1alpha1 Bundle.spec.targets[].clusterName fan-out
+	// entry, so the slice is load-bearing: an empty slice means "do not
+	// target any cluster" (Fleet creates the Bundle but reconciles zero
+	// BundleDeployments) and the Workload stays at phase=Pending until
+	// the field is populated.
 	// +optional
 	TargetClusters []string `json:"targetClusters,omitempty"`
 
@@ -261,6 +267,14 @@ type WorkloadStatus struct {
 	// +optional
 	ComponentReleases []ComponentReleaseStatus `json:"componentReleases,omitempty"`
 
+	// PerCluster reports the per-target-cluster deployment state derived
+	// from Fleet BundleDeployment status. Empty until the first Fleet
+	// status observation lands.
+	// +listType=map
+	// +listMapKey=clusterName
+	// +optional
+	PerCluster []ClusterDeploymentStatus `json:"perCluster,omitempty"`
+
 	// Conditions represent the latest available observations of the Workload's state
 	// +listType=map
 	// +listMapKey=type
@@ -310,6 +324,28 @@ type ComponentReleaseStatus struct {
 	// Revision is the Helm release revision
 	// +optional
 	Revision int32 `json:"revision,omitempty"`
+}
+
+// ClusterDeploymentStatus reports the deployment state on one target
+// cluster (mirrored from a Fleet BundleDeployment). Populated by the
+// Workload reconciler via pkg/workload/fleet_phase.MapFleetStateToPhase.
+type ClusterDeploymentStatus struct {
+	// ClusterName is the Fleet Cluster.metadata.name of the target.
+	ClusterName string `json:"clusterName"`
+
+	// Phase is the workload-domain ClusterPhase value — one of the
+	// enumerated constants Pending, Deploying, Running, Failed.
+	// The reconciler must never write a value outside this set.
+	Phase string `json:"phase"`
+
+	// FleetState is the raw Fleet display.state for diagnostics.
+	// +optional
+	FleetState string `json:"fleetState,omitempty"`
+
+	// LastObservedAt is when the controller last read Fleet status for
+	// this cluster.
+	// +optional
+	LastObservedAt metav1.Time `json:"lastObservedAt,omitempty"`
 }
 
 // DeploymentRecord tracks a single deployment revision

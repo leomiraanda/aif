@@ -10,30 +10,48 @@ import (
 	"fmt"
 
 	aifv1 "github.com/SUSE/aif/api/v1alpha1"
+	"github.com/SUSE/aif/pkg/fleet"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-// WorkloadToDeployRequest projects an aifv1.Workload into the
-// framework-agnostic DeployRequest the Deployer port consumes.
-//
-// Defaults applied:
-//   - Replicas: nil → 1 (matches the +kubebuilder default)
-//
-// status.componentReleases is read into Previous so the deployer can
-// detect drift orphans on subsequent reconciles.
-func WorkloadToDeployRequest(w *aifv1.Workload) DeployRequest {
+// WorkloadToDeployRequest projects the CR + the pre-fetched pull-secret
+// payload into the framework-agnostic DeployRequest. The reconciler
+// fetches the pull-secret bytes from suse-registry-creds in the operator
+// namespace and passes them through; the deployer embeds them into the
+// Fleet Bundle's spec.resources[].
+func WorkloadToDeployRequest(w *aifv1.Workload, pullSecretData []byte) DeployRequest {
 	req := DeployRequest{
-		Namespace: w.Namespace,
-		ID:        w.Name,
-		SpecName:  w.Spec.Name,
-		Replicas:  1,
-		Overrides: w.Spec.ValueOverrides,
-		Source:    sourceRefFromCR(w.Spec.Source),
-		Previous:  ComponentReleasesFromCR(w.Status.ComponentReleases),
+		Namespace:      w.Namespace,
+		ID:             w.Name,
+		SpecName:       w.Spec.Name,
+		Replicas:       1,
+		Overrides:      w.Spec.ValueOverrides,
+		Source:         sourceRefFromCR(w.Spec.Source),
+		Previous:       ComponentReleasesFromCR(w.Status.ComponentReleases),
+		DeployStrategy: string(w.Spec.DeployStrategy),
+		TargetClusters: append([]string(nil), w.Spec.TargetClusters...),
+		PullSecretData: pullSecretData,
+		Owner:          OwnerRefFromCR(w),
 	}
 	if w.Spec.Replicas != nil {
 		req.Replicas = *w.Spec.Replicas
 	}
+	if req.DeployStrategy == "" {
+		req.DeployStrategy = string(aifv1.DeployStrategyTypeHelm)
+	}
 	return req
+}
+
+// OwnerRefFromCR builds the Fleet-domain OwnerRef from a Workload CR.
+// Keeps pkg/fleet free of aifv1 imports.
+func OwnerRefFromCR(w *aifv1.Workload) fleet.OwnerRef {
+	return fleet.OwnerRef{
+		APIVersion: w.APIVersion,
+		Kind:       w.Kind,
+		Name:       w.Name,
+		UID:        string(w.UID),
+		Controller: true,
+	}
 }
 
 func sourceRefFromCR(s aifv1.WorkloadSource) SourceRef {
@@ -71,6 +89,38 @@ func ApplyDeployResult(w *aifv1.Workload, r DeployResult) {
 			Revision:    c.Revision,
 		})
 	}
+
+	// Wipe-and-rebuild is safe here: the deployer's PerCluster is
+	// projected from Bundle.Spec.Targets via pkg/fleet/status.mirrorStatus
+	// and ALWAYS contains one entry per target by construction. A partial
+	// view would be a bug in mirrorStatus, not a state we should preserve
+	// across reconciles.
+	//
+	// LastObservedAt is preserved when (Phase, FleetState) are unchanged
+	// for a given ClusterName. Without this guard, every Bundle status
+	// patch (Owns(&fleetv1.Bundle{}) in WorkloadReconciler retriggers on
+	// each one) would bump status.resourceVersion on the Workload and
+	// produce N×workloads of pointless API-server load.
+	now := metav1.Now()
+	existing := make(map[string]aifv1.ClusterDeploymentStatus, len(w.Status.PerCluster))
+	for _, e := range w.Status.PerCluster {
+		existing[e.ClusterName] = e
+	}
+	w.Status.PerCluster = nil
+	for _, p := range r.PerCluster {
+		observed := now
+		if prev, ok := existing[p.ClusterName]; ok &&
+			prev.Phase == string(p.Phase) &&
+			prev.FleetState == p.FleetState {
+			observed = prev.LastObservedAt
+		}
+		w.Status.PerCluster = append(w.Status.PerCluster, aifv1.ClusterDeploymentStatus{
+			ClusterName:    p.ClusterName,
+			Phase:          string(p.Phase),
+			FleetState:     p.FleetState,
+			LastObservedAt: observed,
+		})
+	}
 }
 
 // PhaseInputFromCR projects an *aifv1.Workload into the domain PhaseInput
@@ -97,6 +147,7 @@ func PhaseInputFromCR(w *aifv1.Workload) PhaseInput {
 		RecoveryFailureCount: w.Status.RecoveryFailureCount,
 		FailureThreshold:     DefaultFailureThreshold,
 		PriorPhase:           Phase(w.Status.Phase),
+		PerClusterPhases:     perClusterPhasesFromCR(w.Status.PerCluster),
 	}
 	if w.Spec.Replicas != nil {
 		in.DesiredReplicas = *w.Spec.Replicas
@@ -135,6 +186,22 @@ func PhaseToCR(p Phase) aifv1.WorkloadPhase {
 // lineage and version with a hyphen.
 func blueprintCRName(name, version string) string {
 	return name + "-" + version
+}
+
+// perClusterPhasesFromCR projects the per-cluster phase strings stored in
+// status.perCluster into the domain ClusterPhase slice that
+// PhaseInput.PerClusterPhases consumes (Rule 0 of RecomputePhase).
+// Status entries written by ApplyDeployResult use the same string form as
+// the ClusterPhase constants; the cast is symbolic.
+func perClusterPhasesFromCR(in []aifv1.ClusterDeploymentStatus) []ClusterPhase {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]ClusterPhase, 0, len(in))
+	for _, p := range in {
+		out = append(out, ClusterPhase(p.Phase))
+	}
+	return out
 }
 
 // ComponentReleasesFromCR projects a slice of aifv1.ComponentReleaseStatus
