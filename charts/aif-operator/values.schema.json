@@ -305,7 +305,7 @@
               "properties": {
                 "registry": { "type": "string", "default": "registry.suse.com", "description": "Cleanup Job image registry" },
                 "repository": { "type": "string", "default": "suse/kubectl", "description": "Cleanup Job image repository" },
-                "tag": { "type": "string", "default": "latest", "description": "Cleanup Job image tag" },
+                "tag": { "type": "string", "default": "1.35", "description": "Cleanup Job image tag" },
                 "pullPolicy": { "type": "string", "default": "IfNotPresent", "enum": ["Always", "IfNotPresent", "Never"], "description": "Image pull policy" }
               }
             },

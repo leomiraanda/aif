@@ -48,6 +48,7 @@ type InstallAIExtensionReconciler struct {
 // +kubebuilder:rbac:groups=catalog.cattle.io,resources=clusterrepos,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=apiextensions.k8s.io,resources=customresourcedefinitions,verbs=get;list;watch
 // +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch
+// +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
 
@@ -562,6 +563,7 @@ func (r *InstallAIExtensionReconciler) cleanupStaleResources(ctx context.Context
 
 func (r *InstallAIExtensionReconciler) cleanup(ctx context.Context, ext *aifv1.InstallAIExtension) error {
 	logger := log.FromContext(ctx)
+	var errs []error
 
 	names := []string{ext.Spec.Extension.Name}
 	if ext.Status.ActiveExtensionName != "" && ext.Status.ActiveExtensionName != ext.Spec.Extension.Name {
@@ -571,9 +573,11 @@ func (r *InstallAIExtensionReconciler) cleanup(ctx context.Context, ext *aifv1.I
 	for _, name := range names {
 		if err := r.Catalog.DeleteClusterRepo(ctx, name); err != nil {
 			logger.Error(err, "failed to delete ClusterRepo", "name", name)
+			errs = append(errs, err)
 		}
 		if err := r.Catalog.DeleteUIPlugin(ctx, name); err != nil {
 			logger.Error(err, "failed to delete UIPlugin", "name", name)
+			errs = append(errs, err)
 		}
 	}
 
@@ -581,6 +585,7 @@ func (r *InstallAIExtensionReconciler) cleanup(ctx context.Context, ext *aifv1.I
 		logger.Info("uninstalling Helm release", "release", ext.Status.HelmReleaseName)
 		if err := r.HelmEngine.Uninstall(ctx, uiPluginNamespace, ext.Status.HelmReleaseName); err != nil {
 			logger.Error(err, "failed to uninstall Helm release", "release", ext.Status.HelmReleaseName)
+			errs = append(errs, err)
 		}
 	}
 
@@ -588,10 +593,11 @@ func (r *InstallAIExtensionReconciler) cleanup(ctx context.Context, ext *aifv1.I
 		logger.Info("uninstalling UIPlugin Helm release", "release", name)
 		if err := r.HelmEngine.Uninstall(ctx, uiPluginNamespace, name); err != nil {
 			logger.Error(err, "failed to uninstall UIPlugin Helm release", "release", name)
+			errs = append(errs, err)
 		}
 	}
 
-	return nil
+	return stderrors.Join(errs...)
 }
 
 // ensureUIPluginGit installs the UIPlugin chart from a git-based Helm repository.
