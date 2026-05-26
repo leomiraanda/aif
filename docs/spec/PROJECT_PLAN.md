@@ -2178,6 +2178,12 @@ go test -race ./internal/manager/ -run TestEngineBusFleet -v
 **Agent Prompt:**
 > Extend `controller.SettingsSnapshot` with four Fleet fields (`FleetRepoURL`, `FleetBranch`, `FleetAuthType`, `FleetCredSecretName`). Update `translateSettings` to populate them from `spec.fleet` (nil guard on `spec.fleet` AND on `spec.fleet.credSecretRef` before accessing `.Name` — both are pointers). The existing fail-closed guard in the reconciler fleet-cred block is unchanged; only add one line to set `FleetCredSecretName = spec.fleet.credSecretRef.Name` after the nil checks pass. Add TWO Fleet engine fields to `engineBus`: `fleetGitRepo` (port `fleet.GitRepoEngine` from P4-3, gitops workloads) and `fleetBundle` (port `fleet.BundleEngine` from P4-3b, helm workloads); `Apply` calls `UpdateSettings` on both. Update `NewEngineBus` in `cmd/operator/main.go` to accept both engine instances. Add or reuse whatever `FakeFleetEngine` P4-3/P4-3b ships. Done when both `-race` test suites pass.
 
+> **Follow-up (post-merge P5-4b):**
+>
+> 1. **Snapshot carries resolved `FleetGitAuth`, not `FleetCredSecretName`.** The original AC at line 2165 specified `FleetCredSecretName string` on `SettingsSnapshot`. The implementation that shipped carries the resolved credential bytes as a `FleetGitAuth` value object (mirror of `git.GitAuth`), parallel to `SUSERegistryToken` / `AppCollectionToken`. The shift was driven by CLAUDE.md's "pkg/{git,fleet,...} receives credentials via UpdateSettings, never reads Secrets" — handing the engine a secret name would force `pkg/git` to import `client.Client` and read Secrets at Push time. The adapter layer (`SettingsReconciler.reconcile` calling `resolveSecretKeyRef`) does the resolution; the snapshot is a fully-formed value object. Update the AC text to match the shipped shape when this story is next revised.
+>
+> 2. **Basic-auth username gap.** `aifv1.FleetConfig.CredSecretRef` is a single `*corev1.SecretKeySelector` (one key value). Token auth fits (the value IS the token); SSH auth fits (the value is the PEM); basic auth doesn't — it needs `Username` separately. The shipped projector emits `BasicAuth{Username: "", Password: <bytes>}`; `pkg/git` surfaces the failure as `ErrAuth` at Push time, so the misconfiguration is loud rather than silent. CRD follow-up: add `FleetConfig.Username string` (or migrate to a tagged-union per-auth-type secret reference) in whichever later story owns Fleet auth completeness.
+
 ---
 
 **ID:** P5-5
