@@ -19,6 +19,7 @@
 catalog.cattle.io/ui-extensions-catalog-image: {{ .Chart.Name }}
 app.kubernetes.io/name: {{ include "aif-ui.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
+app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
 app.kubernetes.io/managed-by: {{ .Release.Service }}
 helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" }}
 {{- end }}

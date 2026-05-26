@@ -51,6 +51,7 @@ spec:
             - --log-level={{ .Values.operator.logLevel }}
             - --log-format={{ .Values.operator.logFormat }}
             - --charts-dir=/data/charts
+            - --git-dir=/data/git
             - --catalog-refresh={{ .Values.operator.catalogRefresh }}
           env:
             - name: HELM_CACHE_HOME

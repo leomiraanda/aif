@@ -9,9 +9,9 @@ metadata:
   annotations:
     "helm.sh/hook": pre-delete
     "helm.sh/hook-weight": "-10"
-    "helm.sh/hook-delete-policy": hook-succeeded,hook-failed
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded,hook-failed
 spec:
-  backoffLimit: 1
+  backoffLimit: 0
   activeDeadlineSeconds: 360
   ttlSecondsAfterFinished: 60
   template:
