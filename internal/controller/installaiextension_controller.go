@@ -26,7 +26,7 @@ import (
 
 const (
 	extensionFinalizerName = "ai.suse.com/cleanup"
-	uiPluginNamespace      = "cattle-ui-plugin-system"
+	uiPluginNamespace      = rancher.UIPluginNamespace
 	helmInstallTimeout     = 5 * time.Minute
 	readinessRequeue       = 10 * time.Second
 	healthCheckInterval    = 60 * time.Second

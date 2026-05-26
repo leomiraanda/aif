@@ -20,22 +20,22 @@ import (
 	"github.com/SUSE/aif/pkg/helm"
 )
 
-const uiPluginNamespace = "cattle-ui-plugin-system"
+const UIPluginNamespace = "cattle-ui-plugin-system"
 
-// Manager implements CatalogManager using the K8s client and discovery APIs.
-type Manager struct {
+// Catalog implements CatalogManager using the K8s client and discovery APIs.
+type Catalog struct {
 	client     client.Client
 	discovery  discovery.DiscoveryInterface
 	httpClient *http.Client
 }
 
-var _ CatalogManager = (*Manager)(nil)
+var _ CatalogManager = (*Catalog)(nil)
 
-func New(c client.Client, disc discovery.DiscoveryInterface, httpClient *http.Client) *Manager {
-	return &Manager{client: c, discovery: disc, httpClient: httpClient}
+func New(c client.Client, disc discovery.DiscoveryInterface, httpClient *http.Client) *Catalog {
+	return &Catalog{client: c, discovery: disc, httpClient: httpClient}
 }
 
-func (m *Manager) CheckCRDs(ctx context.Context) error {
+func (m *Catalog) CheckCRDs(ctx context.Context) error {
 	_, err := m.discovery.ServerResourcesForGroupVersion("catalog.cattle.io/v1")
 	if err != nil {
 		return fmt.Errorf("catalog.cattle.io/v1 CRDs not found: %w", err)
@@ -43,7 +43,7 @@ func (m *Manager) CheckCRDs(ctx context.Context) error {
 	return nil
 }
 
-func (m *Manager) EnsureClusterRepo(ctx context.Context, opts ClusterRepoOpts) error {
+func (m *Catalog) EnsureClusterRepo(ctx context.Context, opts ClusterRepoOpts) error {
 	repo := &unstructured.Unstructured{}
 	repo.SetGroupVersionKind(clusterRepoGVK())
 	repo.SetName(clusterRepoName(opts.ExtensionName))
@@ -63,7 +63,7 @@ func (m *Manager) EnsureClusterRepo(ctx context.Context, opts ClusterRepoOpts) e
 	return err
 }
 
-func (m *Manager) EnsureClusterRepoGit(ctx context.Context, opts ClusterRepoGitOpts) error {
+func (m *Catalog) EnsureClusterRepoGit(ctx context.Context, opts ClusterRepoGitOpts) error {
 	repo := &unstructured.Unstructured{}
 	repo.SetGroupVersionKind(clusterRepoGVK())
 	repo.SetName(clusterRepoName(opts.ExtensionName))
@@ -85,7 +85,7 @@ func (m *Manager) EnsureClusterRepoGit(ctx context.Context, opts ClusterRepoGitO
 	return err
 }
 
-func (m *Manager) DeleteClusterRepo(ctx context.Context, extensionName string) error {
+func (m *Catalog) DeleteClusterRepo(ctx context.Context, extensionName string) error {
 	repo := &unstructured.Unstructured{}
 	repo.SetGroupVersionKind(clusterRepoGVK())
 	repo.SetName(clusterRepoName(extensionName))
@@ -95,11 +95,11 @@ func (m *Manager) DeleteClusterRepo(ctx context.Context, extensionName string) e
 	return nil
 }
 
-func (m *Manager) EnsureUIPlugin(ctx context.Context, opts UIPluginOpts) error {
+func (m *Catalog) EnsureUIPlugin(ctx context.Context, opts UIPluginOpts) error {
 	plugin := &unstructured.Unstructured{}
 	plugin.SetGroupVersionKind(uiPluginGVK())
 	plugin.SetName(opts.ExtensionName)
-	plugin.SetNamespace(uiPluginNamespace)
+	plugin.SetNamespace(UIPluginNamespace)
 
 	_, err := controllerutil.CreateOrUpdate(ctx, m.client, plugin, func() error {
 		plugin.SetLabels(map[string]string{
@@ -133,18 +133,18 @@ func (m *Manager) EnsureUIPlugin(ctx context.Context, opts UIPluginOpts) error {
 	return err
 }
 
-func (m *Manager) DeleteUIPlugin(ctx context.Context, name string) error {
+func (m *Catalog) DeleteUIPlugin(ctx context.Context, name string) error {
 	plugin := &unstructured.Unstructured{}
 	plugin.SetGroupVersionKind(uiPluginGVK())
 	plugin.SetName(name)
-	plugin.SetNamespace(uiPluginNamespace)
+	plugin.SetNamespace(UIPluginNamespace)
 	if err := m.client.Delete(ctx, plugin); err != nil && !errors.IsNotFound(err) {
 		return fmt.Errorf("delete UIPlugin %s: %w", name, err)
 	}
 	return nil
 }
 
-func (m *Manager) FetchIndexMetadata(ctx context.Context, indexURL, chartName, chartVersion string) (PluginMetadata, error) {
+func (m *Catalog) FetchIndexMetadata(ctx context.Context, indexURL, chartName, chartVersion string) (PluginMetadata, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, indexURL, nil)
 	if err != nil {
 		return PluginMetadata{}, fmt.Errorf("build request: %w", err)
@@ -165,7 +165,7 @@ func (m *Manager) FetchIndexMetadata(ctx context.Context, indexURL, chartName, c
 		return PluginMetadata{}, fmt.Errorf("index.yaml returned status %d", resp.StatusCode)
 	}
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 10<<20))
 	if err != nil {
 		return PluginMetadata{}, fmt.Errorf("read index.yaml: %w", err)
 	}

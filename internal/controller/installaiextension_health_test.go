@@ -2,6 +2,7 @@ package controller
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	aifv1 "github.com/SUSE/aif/api/v1alpha1"
@@ -18,7 +19,7 @@ import (
 // TestInstallAIExtensionReconciler_DeploymentNotReady tests requeue when Deployment not yet ready.
 func TestInstallAIExtensionReconciler_DeploymentNotReady(t *testing.T) {
 	scheme := newTestScheme(t)
-	ext := createInstallAIExtension("test-ext", "")
+	ext := createInstallAIExtension("test-ext")
 
 	deploy := helmDeployment("aif-ui")
 	deploy.Status.ReadyReplicas = 0
@@ -74,7 +75,7 @@ func TestInstallAIExtensionReconciler_DeploymentNotReady(t *testing.T) {
 // (ImagePullBackOff, CrashLoopBackOff) are surfaced in the DeploymentReady condition message.
 func TestInstallAIExtensionReconciler_DeploymentPodFailure(t *testing.T) {
 	scheme := newTestScheme(t)
-	ext := createInstallAIExtension("test-ext", "")
+	ext := createInstallAIExtension("test-ext")
 
 	deploy := helmDeployment("aif-ui")
 	deploy.Status.ReadyReplicas = 0
@@ -150,7 +151,7 @@ func TestInstallAIExtensionReconciler_DeploymentPodFailure(t *testing.T) {
 	if deployCond.Message == "Deployment not yet ready" {
 		t.Error("expected enriched message with pod failure detail, got generic message")
 	}
-	if !containsSubstring(deployCond.Message, "ImagePullBackOff") {
+	if !strings.Contains(deployCond.Message, "ImagePullBackOff") {
 		t.Errorf("expected message to contain ImagePullBackOff, got: %s", deployCond.Message)
 	}
 }

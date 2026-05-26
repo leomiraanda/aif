@@ -109,7 +109,7 @@ func TestEnsureUIPlugin(t *testing.T) {
 	plugin.SetGroupVersionKind(uiPluginGVK())
 	if err := fakeClient.Get(context.Background(), types.NamespacedName{
 		Name:      "ai-factory",
-		Namespace: uiPluginNamespace,
+		Namespace: UIPluginNamespace,
 	}, &plugin); err != nil {
 		t.Fatalf("UIPlugin not found: %v", err)
 	}
@@ -168,7 +168,7 @@ func TestEnsureUIPlugin_Update(t *testing.T) {
 	plugin.SetGroupVersionKind(uiPluginGVK())
 	if err := fakeClient.Get(context.Background(), types.NamespacedName{
 		Name:      "ai-factory",
-		Namespace: uiPluginNamespace,
+		Namespace: UIPluginNamespace,
 	}, &plugin); err != nil {
 		t.Fatalf("UIPlugin not found: %v", err)
 	}
@@ -184,6 +184,159 @@ func TestEnsureUIPlugin_Update(t *testing.T) {
 	rancherVer, _, _ := unstructured.NestedString(plugin.Object, "spec", "plugin", "metadata", "catalog.cattle.io/rancher-version")
 	if rancherVer != ">= 2.10.0" {
 		t.Errorf("expected updated rancher-version, got %q", rancherVer)
+	}
+}
+
+func TestEnsureClusterRepo(t *testing.T) {
+	scheme := runtime.NewScheme()
+	fakeClient := fake.NewClientBuilder().WithScheme(scheme).Build()
+	m := New(fakeClient, nil, nil)
+
+	err := m.EnsureClusterRepo(context.Background(), ClusterRepoOpts{
+		ExtensionName: "ai-factory",
+		CRName:        "test-ext",
+		ServiceURL:    "http://ai-factory.cattle-ui-plugin-system.svc.cluster.local:8080",
+	})
+	if err != nil {
+		t.Fatalf("EnsureClusterRepo failed: %v", err)
+	}
+
+	var repo unstructured.Unstructured
+	repo.SetGroupVersionKind(clusterRepoGVK())
+	if err := fakeClient.Get(context.Background(), types.NamespacedName{
+		Name: "ai-factory-charts",
+	}, &repo); err != nil {
+		t.Fatalf("ClusterRepo not found: %v", err)
+	}
+
+	repoLabels := repo.GetLabels()
+	if repoLabels["ai.suse.com/installaiextension"] != "test-ext" {
+		t.Errorf("expected back-reference label, got %q", repoLabels["ai.suse.com/installaiextension"])
+	}
+
+	url, _, _ := unstructured.NestedString(repo.Object, "spec", "url")
+	if url != "http://ai-factory.cattle-ui-plugin-system.svc.cluster.local:8080" {
+		t.Errorf("expected service URL, got %q", url)
+	}
+
+	gitRepo, found, _ := unstructured.NestedString(repo.Object, "spec", "gitRepo")
+	if found {
+		t.Errorf("expected no gitRepo field, got %q", gitRepo)
+	}
+}
+
+func TestEnsureClusterRepoGit(t *testing.T) {
+	scheme := runtime.NewScheme()
+	fakeClient := fake.NewClientBuilder().WithScheme(scheme).Build()
+	m := New(fakeClient, nil, nil)
+
+	err := m.EnsureClusterRepoGit(context.Background(), ClusterRepoGitOpts{
+		ExtensionName: "ai-factory",
+		CRName:        "test-ext",
+		RepoURL:       "https://github.com/suse/aif-ui-extension",
+		Branch:        "gh-pages",
+	})
+	if err != nil {
+		t.Fatalf("EnsureClusterRepoGit failed: %v", err)
+	}
+
+	var repo unstructured.Unstructured
+	repo.SetGroupVersionKind(clusterRepoGVK())
+	if err := fakeClient.Get(context.Background(), types.NamespacedName{
+		Name: "ai-factory-charts",
+	}, &repo); err != nil {
+		t.Fatalf("ClusterRepo not found: %v", err)
+	}
+
+	gitRepoURL, _, _ := unstructured.NestedString(repo.Object, "spec", "gitRepo")
+	if gitRepoURL != "https://github.com/suse/aif-ui-extension" {
+		t.Errorf("expected git repo URL, got %q", gitRepoURL)
+	}
+
+	branch, _, _ := unstructured.NestedString(repo.Object, "spec", "gitBranch")
+	if branch != "gh-pages" {
+		t.Errorf("expected branch gh-pages, got %q", branch)
+	}
+
+	urlField, found, _ := unstructured.NestedString(repo.Object, "spec", "url")
+	if found {
+		t.Errorf("expected no url field for git mode, got %q", urlField)
+	}
+}
+
+func TestDeleteClusterRepo(t *testing.T) {
+	scheme := runtime.NewScheme()
+	fakeClient := fake.NewClientBuilder().WithScheme(scheme).Build()
+	m := New(fakeClient, nil, nil)
+
+	if err := m.EnsureClusterRepo(context.Background(), ClusterRepoOpts{
+		ExtensionName: "ai-factory",
+		CRName:        "test-ext",
+		ServiceURL:    "http://svc:8080",
+	}); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+
+	if err := m.DeleteClusterRepo(context.Background(), "ai-factory"); err != nil {
+		t.Fatalf("DeleteClusterRepo failed: %v", err)
+	}
+
+	var repo unstructured.Unstructured
+	repo.SetGroupVersionKind(clusterRepoGVK())
+	err := fakeClient.Get(context.Background(), types.NamespacedName{Name: "ai-factory-charts"}, &repo)
+	if err == nil {
+		t.Error("expected ClusterRepo to be deleted, but it still exists")
+	}
+}
+
+func TestDeleteClusterRepo_NotFound(t *testing.T) {
+	scheme := runtime.NewScheme()
+	fakeClient := fake.NewClientBuilder().WithScheme(scheme).Build()
+	m := New(fakeClient, nil, nil)
+
+	err := m.DeleteClusterRepo(context.Background(), "nonexistent")
+	if err != nil {
+		t.Errorf("expected no error for not-found delete, got %v", err)
+	}
+}
+
+func TestDeleteUIPlugin(t *testing.T) {
+	scheme := runtime.NewScheme()
+	fakeClient := fake.NewClientBuilder().WithScheme(scheme).Build()
+	m := New(fakeClient, nil, nil)
+
+	if err := m.EnsureUIPlugin(context.Background(), UIPluginOpts{
+		ExtensionName:    "ai-factory",
+		ExtensionVersion: "1.0.0",
+		CRName:           "test-ext",
+		Endpoint:         "http://svc:8080",
+	}); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+
+	if err := m.DeleteUIPlugin(context.Background(), "ai-factory"); err != nil {
+		t.Fatalf("DeleteUIPlugin failed: %v", err)
+	}
+
+	var plugin unstructured.Unstructured
+	plugin.SetGroupVersionKind(uiPluginGVK())
+	err := fakeClient.Get(context.Background(), types.NamespacedName{
+		Name:      "ai-factory",
+		Namespace: UIPluginNamespace,
+	}, &plugin)
+	if err == nil {
+		t.Error("expected UIPlugin to be deleted, but it still exists")
+	}
+}
+
+func TestDeleteUIPlugin_NotFound(t *testing.T) {
+	scheme := runtime.NewScheme()
+	fakeClient := fake.NewClientBuilder().WithScheme(scheme).Build()
+	m := New(fakeClient, nil, nil)
+
+	err := m.DeleteUIPlugin(context.Background(), "nonexistent")
+	if err != nil {
+		t.Errorf("expected no error for not-found delete, got %v", err)
 	}
 }
 

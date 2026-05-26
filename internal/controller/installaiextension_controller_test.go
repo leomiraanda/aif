@@ -34,7 +34,7 @@ func newTestScheme(t *testing.T) *runtime.Scheme {
 	return scheme
 }
 
-func createInstallAIExtension(name, _ string) *aifv1.InstallAIExtension {
+func createInstallAIExtension(name string) *aifv1.InstallAIExtension {
 	return &aifv1.InstallAIExtension{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:       name,
@@ -132,23 +132,11 @@ func helmService(releaseName string) *corev1.Service {
 	}
 }
 
-func containsSubstring(s, substr string) bool {
-	return len(s) >= len(substr) && searchSubstring(s, substr)
-}
-
-func searchSubstring(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
-	}
-	return false
-}
 
 // TestInstallAIExtensionReconciler_HappyPath tests successful Helm source installation.
 func TestInstallAIExtensionReconciler_HappyPath(t *testing.T) {
 	scheme := newTestScheme(t)
-	ext := createInstallAIExtension("test-ext", "")
+	ext := createInstallAIExtension("test-ext")
 
 	deploy := helmDeployment("aif-ui")
 	svc := helmService("aif-ui")
@@ -409,7 +397,7 @@ func TestInstallAIExtensionReconciler_GitSource(t *testing.T) {
 // TestInstallAIExtensionReconciler_UIPluginCRDMissing tests permanent failure when Rancher CRDs missing.
 func TestInstallAIExtensionReconciler_UIPluginCRDMissing(t *testing.T) {
 	scheme := newTestScheme(t)
-	ext := createInstallAIExtension("test-ext", "")
+	ext := createInstallAIExtension("test-ext")
 
 	fakeClient := fake.NewClientBuilder().
 		WithScheme(scheme).
@@ -485,7 +473,7 @@ func TestInstallAIExtensionReconciler_UIPluginCRDMissing(t *testing.T) {
 // TestInstallAIExtensionReconciler_HelmInstallFailed tests failure during Helm install.
 func TestInstallAIExtensionReconciler_HelmInstallFailed(t *testing.T) {
 	scheme := newTestScheme(t)
-	ext := createInstallAIExtension("test-ext", "")
+	ext := createInstallAIExtension("test-ext")
 
 	fakeClient := fake.NewClientBuilder().
 		WithScheme(scheme).
@@ -536,7 +524,7 @@ func TestInstallAIExtensionReconciler_HelmInstallFailed(t *testing.T) {
 // even when index metadata fetch fails.
 func TestInstallAIExtensionReconciler_UIPluginCreatedWithoutMetadata(t *testing.T) {
 	scheme := newTestScheme(t)
-	ext := createInstallAIExtension("test-ext", "")
+	ext := createInstallAIExtension("test-ext")
 
 	deploy := helmDeployment("aif-ui")
 	svc := helmService("aif-ui")
@@ -605,7 +593,7 @@ func TestInstallAIExtensionReconciler_UIPluginCreatedWithoutMetadata(t *testing.
 // TestInstallAIExtensionReconciler_Deletion tests finalizer cleanup.
 func TestInstallAIExtensionReconciler_Deletion(t *testing.T) {
 	scheme := newTestScheme(t)
-	ext := createInstallAIExtension("test-ext", "")
+	ext := createInstallAIExtension("test-ext")
 
 	fakeClient := fake.NewClientBuilder().
 		WithScheme(scheme).
@@ -707,7 +695,7 @@ func TestInstallAIExtensionReconciler_ResourceNotFound(t *testing.T) {
 // TestReconcile_ObservedGeneration tests that ObservedGeneration is set correctly.
 func TestReconcile_ObservedGeneration(t *testing.T) {
 	scheme := newTestScheme(t)
-	ext := createInstallAIExtension("test-ext", "")
+	ext := createInstallAIExtension("test-ext")
 	ext.Generation = 5
 
 	deploy := helmDeployment("aif-ui")
@@ -805,7 +793,7 @@ func TestConvertValues(t *testing.T) {
 func TestReconcileHelmSource_WithValues(t *testing.T) {
 	scheme := newTestScheme(t)
 
-	ext := createInstallAIExtension("test-ext", "")
+	ext := createInstallAIExtension("test-ext")
 	ext.Spec.Source.Helm.Values = map[string]apiextensionsv1.JSON{
 		"replicaCount": {Raw: []byte(`2`)},
 		"image":        {Raw: []byte(`{"tag":"v3.0"}`)},
@@ -874,7 +862,7 @@ func TestReconcileHelmSource_WithValues(t *testing.T) {
 // TestCleanup tests the cleanup helper method.
 func TestCleanup(t *testing.T) {
 	scheme := newTestScheme(t)
-	ext := createInstallAIExtension("test-ext", "")
+	ext := createInstallAIExtension("test-ext")
 	ext.Status.HelmReleaseName = "aif-ui"
 
 	fakeClient := fake.NewClientBuilder().
@@ -954,7 +942,7 @@ func TestCleanup_GitMode(t *testing.T) {
 // TestCleanupStaleResources_NameChange verifies that changing extension.name cleans up old resources.
 func TestCleanupStaleResources_NameChange(t *testing.T) {
 	scheme := newTestScheme(t)
-	ext := createInstallAIExtension("test-ext", "")
+	ext := createInstallAIExtension("test-ext")
 	ext.Status.ActiveExtensionName = "old-extension"
 	ext.Status.ActiveSourceKind = aifv1.ExtensionSourceKindHelm
 	ext.Status.HelmReleaseName = "old-chart"
@@ -1070,7 +1058,7 @@ func TestCleanupStaleResources_HelmToGit(t *testing.T) {
 // TestCleanupStaleResources_GitToHelm verifies Git-to-Helm switch cleanup.
 func TestCleanupStaleResources_GitToHelm(t *testing.T) {
 	scheme := newTestScheme(t)
-	ext := createInstallAIExtension("test-ext", "")
+	ext := createInstallAIExtension("test-ext")
 	ext.Status.ActiveExtensionName = "ai-factory"
 	ext.Status.ActiveSourceKind = aifv1.ExtensionSourceKindGit
 
@@ -1102,7 +1090,7 @@ func TestCleanupStaleResources_GitToHelm(t *testing.T) {
 // TestCleanup_BothNames verifies that deletion cleans up both current and previously-active names.
 func TestCleanup_BothNames(t *testing.T) {
 	scheme := newTestScheme(t)
-	ext := createInstallAIExtension("test-ext", "")
+	ext := createInstallAIExtension("test-ext")
 	ext.Status.ActiveExtensionName = "old-extension"
 	ext.Status.HelmReleaseName = "aif-ui"
 
