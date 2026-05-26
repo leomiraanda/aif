@@ -21,14 +21,11 @@ import (
 // own pattern (sync.RWMutex sole-writer, mirroring helm.engine).
 type engineBus struct {
 	helm helm.Engine
-	// fleetBundle is the FleetBundleEngine; receives FleetSettings via
-	// projectFleet. Field is empty-settings today but wired through the
-	// bus so P5-7 (downstream-cluster auth) can extend without touching
-	// the bus contract.
-	fleetBundle fleet.FleetBundleEngine
-	// fleetGitRepo is the FleetGitRepoEngine; receives the same empty
-	// FleetSettings as fleetBundle via projectFleet. P5-4b extends
-	// FleetSettings with git.Credentials and auth fields.
+	// Both Fleet engines receive the same projected FleetSettings.
+	// They are distinct fields because FleetBundleEngine (helm
+	// strategy) and FleetGitRepoEngine (gitops strategy) are
+	// separate ports with separate consumers downstream.
+	fleetBundle  fleet.FleetBundleEngine
 	fleetGitRepo fleet.FleetGitRepoEngine
 	nvidiaDisc   nvidia.Discovery
 	nvidiaDepl   nvidia.Deployer
