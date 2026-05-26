@@ -102,7 +102,16 @@ func (e *gitRepoEngine) Apply(ctx context.Context, spec GitRepoDeploymentSpec) (
 		if err != nil {
 			return out, fmt.Errorf("build GitRepo CR for %q: %w", cluster, err)
 		}
-		if err := e.client.Patch(ctx, gr, client.Apply,
+		// Server-side-apply: idempotent on identical spec, surfaces conflicts
+		// cleanly. ForceOwnership lets us reclaim fields if a previous run was
+		// interrupted with a different field manager.
+		//
+		// TODO: migrate to client.Client.Apply() once an ApplyConfiguration is
+		// available for fleetv1.GitRepo (controller-runtime v0.23.3 deprecates
+		// the client.Apply Patch constant in favour of the typed API). Mirrors
+		// the outstanding migration in pkg/fleet/bundle_engine.go and
+		// internal/api/settings.go.
+		if err := e.client.Patch(ctx, gr, client.Apply, //nolint:staticcheck // SA1019: see TODO above
 			client.FieldOwner(fieldManager),
 			client.ForceOwnership); err != nil {
 			if apierrors.IsConflict(err) {

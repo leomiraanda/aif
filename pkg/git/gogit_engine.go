@@ -222,7 +222,9 @@ func writeFile(fs billy.Filesystem, full string, content []byte) error {
 	if err != nil {
 		return err
 	}
-	defer f.Close()
-	_, err = io.Copy(f, bytes.NewReader(content))
-	return err
+	if _, err := io.Copy(f, bytes.NewReader(content)); err != nil {
+		_ = f.Close()
+		return err
+	}
+	return f.Close()
 }
