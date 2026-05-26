@@ -55,6 +55,7 @@ type WorkloadReconciler struct {
 // +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
 // +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch
 // +kubebuilder:rbac:groups=fleet.cattle.io,resources=bundles,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=fleet.cattle.io,resources=gitrepos,verbs=get;list;watch;create;update;patch;delete
 //
 // NOTE on RBAC markers: `make manifests` currently invokes controller-gen
 // only with the `crd` generator (see Makefile target), so the markers
