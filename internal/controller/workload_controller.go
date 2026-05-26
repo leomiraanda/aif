@@ -55,6 +55,7 @@ type WorkloadReconciler struct {
 // +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
 // +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch
 // +kubebuilder:rbac:groups=fleet.cattle.io,resources=bundles,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=fleet.cattle.io,resources=gitrepos,verbs=get;list;watch;create;update;patch;delete
 //
 // NOTE on RBAC markers: `make manifests` currently invokes controller-gen
 // only with the `crd` generator (see Makefile target), so the markers
@@ -123,12 +124,6 @@ func (r *WorkloadReconciler) validateSource(w *aifv1.Workload) error {
 	case aifv1.WorkloadSourceKindBlueprint:
 		if w.Spec.Source.Blueprint == nil {
 			return fmt.Errorf("source.kind=Blueprint requires source.blueprint field")
-		}
-		return nil
-
-	case aifv1.WorkloadSourceKindBundleTest:
-		if w.Spec.Source.BundleTest == nil {
-			return fmt.Errorf("source.kind=BundleTest requires source.bundleTest field")
 		}
 		return nil
 
@@ -307,17 +302,6 @@ func (r *WorkloadReconciler) emitDeployEvents(
 		}
 	}
 
-	// BundleTest generation drift
-	if w.Spec.Source.Kind == aifv1.WorkloadSourceKindBundleTest &&
-		w.Spec.Source.BundleTest != nil &&
-		result.ObservedBundleGeneration != 0 &&
-		result.ObservedBundleGeneration != w.Spec.Source.BundleTest.Generation {
-		r.Recorder.Eventf(w, nil, corev1.EventTypeNormal, "BundleTestGenerationDrift",
-			conditions.ActionReconciling,
-			"Bundle generation drifted: recorded=%d observed=%d",
-			w.Spec.Source.BundleTest.Generation, result.ObservedBundleGeneration)
-	}
-
 	// Source-not-resolved + nested-Blueprint reject events
 	if stderrors.Is(deployErr, workload.ErrSourceNotResolved) {
 		r.Recorder.Eventf(w, nil, corev1.EventTypeWarning, "SourceNotResolved",
@@ -494,5 +478,6 @@ func (r *WorkloadReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&aifv1.Workload{}).
 		Owns(&fleetv1.Bundle{}).
+		Owns(&fleetv1.GitRepo{}).
 		Complete(r)
 }

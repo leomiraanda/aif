@@ -149,6 +149,23 @@ rules:
       - update
       - patch
       - delete
+  # P4-3: WorkloadReconciler SSA-patches fleet.cattle.io/v1alpha1
+  # GitRepo CRs (one per Workload, deployStrategy=gitops) and watches
+  # them via Owns(&fleetv1.GitRepo{}) for status mirroring. Same
+  # marker-is-inert caveat applies — keep in sync with the
+  # +kubebuilder:rbac marker on internal/controller/workload_controller.go.
+  - apiGroups:
+      - fleet.cattle.io
+    resources:
+      - gitrepos
+    verbs:
+      - get
+      - list
+      - watch
+      - create
+      - update
+      - patch
+      - delete
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole

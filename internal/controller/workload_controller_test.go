@@ -20,7 +20,6 @@ import (
 
 	aifv1 "github.com/SUSE/aif/api/v1alpha1"
 	"github.com/SUSE/aif/pkg/blueprint"
-	"github.com/SUSE/aif/pkg/bundle"
 	"github.com/SUSE/aif/pkg/conditions"
 	"github.com/SUSE/aif/pkg/fleet"
 	"github.com/SUSE/aif/pkg/helm"
@@ -122,43 +121,6 @@ var _ = Describe("WorkloadReconciler", func() {
 		}, timeout, interval).Should(Succeed())
 	})
 
-	It("should reconcile a valid BundleTest Workload to Pending/Installed", func() {
-		w := &aifv1.Workload{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      "valid-bundletest-workload",
-				Namespace: "default",
-			},
-			Spec: aifv1.WorkloadSpec{
-				Name: "Test BundleTest Workload",
-				Source: aifv1.WorkloadSource{
-					Kind: aifv1.WorkloadSourceKindBundleTest,
-					BundleTest: &aifv1.BundleTestRef{
-						Namespace:  "default",
-						Name:       "test-bundle",
-						Generation: 1,
-					},
-				},
-			},
-		}
-
-		fakeDeployer.SetDeployResult(workload.DeployResult{
-			Components: []workload.ComponentRelease{
-				{Name: "n", ReleaseName: "n-1", Status: "deployed"},
-			},
-		})
-		Expect(k8sClient.Create(ctx, w)).To(Succeed())
-
-		Eventually(func(g Gomega) {
-			var fetched aifv1.Workload
-			g.Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(w), &fetched)).To(Succeed())
-			g.Expect(fetched.Status.Phase).To(Equal(aifv1.WorkloadPhaseRunning))
-			rc := findReady(fetched.Status.Conditions)
-			g.Expect(rc).NotTo(BeNil())
-			g.Expect(rc.Status).To(Equal(metav1.ConditionTrue))
-			g.Expect(rc.Reason).To(Equal(conditions.ReasonWorkloadRunning))
-		}, timeout, interval).Should(Succeed())
-	})
-
 	It("should set InvalidSpec when Kind=App but App field is nil", func() {
 		w := &aifv1.Workload{
 			ObjectMeta: metav1.ObjectMeta{
@@ -213,34 +175,6 @@ var _ = Describe("WorkloadReconciler", func() {
 			g.Expect(rc.Status).To(Equal(metav1.ConditionFalse))
 			g.Expect(rc.Reason).To(Equal(conditions.ReasonInvalidSpec))
 			g.Expect(rc.Message).To(ContainSubstring("source.blueprint"))
-		}, timeout, interval).Should(Succeed())
-	})
-
-	It("should set InvalidSpec when Kind=BundleTest but BundleTest field is nil", func() {
-		w := &aifv1.Workload{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      "invalid-bt-workload",
-				Namespace: "default",
-			},
-			Spec: aifv1.WorkloadSpec{
-				Name: "Invalid BundleTest Workload",
-				Source: aifv1.WorkloadSource{
-					Kind:       aifv1.WorkloadSourceKindBundleTest,
-					BundleTest: nil,
-				},
-			},
-		}
-
-		Expect(k8sClient.Create(ctx, w)).To(Succeed())
-
-		Eventually(func(g Gomega) {
-			var fetched aifv1.Workload
-			g.Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(w), &fetched)).To(Succeed())
-			rc := findReady(fetched.Status.Conditions)
-			g.Expect(rc).NotTo(BeNil())
-			g.Expect(rc.Status).To(Equal(metav1.ConditionFalse))
-			g.Expect(rc.Reason).To(Equal(conditions.ReasonInvalidSpec))
-			g.Expect(rc.Message).To(ContainSubstring("source.bundleTest"))
 		}, timeout, interval).Should(Succeed())
 	})
 
@@ -569,35 +503,6 @@ var _ = Describe("Workload deployer events (P4-2)", func() {
 		Expect(k8sClient.Delete(ctx, w)).To(Succeed())
 	})
 
-	It("emits BundleTestGenerationDrift when observed != recorded", func() {
-		fakeDeployer.SetDeployResult(workload.DeployResult{
-			ObservedBundleGeneration: 9, // recorded was 5
-			Components:               []workload.ComponentRelease{{Name: "c", Status: "deployed"}},
-		})
-
-		name := "wid-drift-" + randomSuffix()
-		w := &aifv1.Workload{
-			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default"},
-			Spec: aifv1.WorkloadSpec{
-				Name: "c",
-				Source: aifv1.WorkloadSource{
-					Kind:       aifv1.WorkloadSourceKindBundleTest,
-					BundleTest: &aifv1.BundleTestRef{Namespace: "default", Name: "b1", Generation: 5},
-				},
-			},
-		}
-		Expect(k8sClient.Create(ctx, w)).To(Succeed())
-		key := client.ObjectKeyFromObject(w)
-
-		Eventually(func() []string {
-			var got aifv1.Workload
-			_ = k8sClient.Get(ctx, key, &got)
-			return eventReasons(&got)
-		}, timeout, interval).Should(ContainElement("BundleTestGenerationDrift"))
-
-		// Cleanup
-		Expect(k8sClient.Delete(ctx, w)).To(Succeed())
-	})
 })
 
 var _ = Describe("Workload deployer envtest scenarios (P4-2)", func() {
@@ -993,6 +898,7 @@ var _ = Describe("WorkloadReconciler Fleet Bundle integration (P4-3b)", Serial, 
 	//      acknowledges this — the Modified→Running unit guard lives in
 	//      pkg/workload/fleet_phase_test.go (Task 1).
 	var savedDeployer workload.Deployer
+	var fakeGitRepoEngine *fleet.FakeGitRepoEngine
 
 	BeforeEach(func() {
 		// Drain any Workloads left by prior Describe blocks before swapping
@@ -1027,12 +933,13 @@ var _ = Describe("WorkloadReconciler Fleet Bundle integration (P4-3b)", Serial, 
 		directClient, err := client.New(testEnv.Config, client.Options{Scheme: scheme.Scheme})
 		Expect(err).NotTo(HaveOccurred())
 		nvDisc, _ := nvidia.NewDiscovery(slog.Default())
+		fakeGitRepoEngine = &fleet.FakeGitRepoEngine{}
 		workloadReconciler.Deployer = workload.NewDeployer(
 			slog.Default(),
 			helm.NewFake(),
 			fleet.NewBundleEngine(slog.Default(), directClient),
+			fakeGitRepoEngine,
 			blueprint.NewFakeRepository(),
-			bundle.NewFakeRepository(),
 			nvDisc,
 			nvidia.NewDeployer(slog.Default()),
 		)
@@ -1132,6 +1039,72 @@ var _ = Describe("WorkloadReconciler Fleet Bundle integration (P4-3b)", Serial, 
 		// Cleanup: remove the Workload. The production deployer's Teardown
 		// calls FleetBundleEngine.Teardown, which deletes the Bundle.
 		Expect(k8sClient.Delete(ctx, w)).To(Succeed())
+		Eventually(func() bool {
+			var got aifv1.Workload
+			err := k8sClient.Get(ctx, client.ObjectKeyFromObject(w), &got)
+			return errors.IsNotFound(err)
+		}, timeout, interval).Should(BeTrue(), "Workload should be fully deleted")
+	})
+
+	It("dispatches to FleetGitRepoEngine when deployStrategy=gitops", func() {
+		nsName := "wl-gitops-" + randomSuffix()
+		Expect(k8sClient.Create(ctx, &corev1.Namespace{
+			ObjectMeta: metav1.ObjectMeta{Name: nsName},
+		})).To(Succeed())
+
+		const wlName = "demo-gitops"
+		w := &aifv1.Workload{
+			ObjectMeta: metav1.ObjectMeta{Namespace: nsName, Name: wlName},
+			Spec: aifv1.WorkloadSpec{
+				Name:           "llama",
+				DeployStrategy: aifv1.DeployStrategyTypeGitOps,
+				TargetClusters: []string{"prod-east"},
+				Source: aifv1.WorkloadSource{
+					Kind: aifv1.WorkloadSourceKindApp,
+					App: &aifv1.AppRef{
+						Repo:    "registry.example.test/charts",
+						Chart:   "llama",
+						Version: "1.0.0",
+					},
+				},
+			},
+		}
+		Expect(k8sClient.Create(ctx, w)).To(Succeed())
+
+		// The deployer must dispatch to FleetGitRepoEngine.Apply, not
+		// FleetBundleEngine.Apply, when deployStrategy=gitops.
+		// AppliedSnapshot takes the fake's mutex; raw .Applied access from
+		// the test goroutine races the reconciler worker goroutine.
+		Eventually(func() int {
+			return len(fakeGitRepoEngine.AppliedSnapshot())
+		}, timeout, interval).Should(BeNumerically(">=", 1),
+			"reconciler should drive deployer to call FleetGitRepoEngine.Apply")
+
+		applied := fakeGitRepoEngine.AppliedSnapshot()[0]
+		Expect(applied.WorkloadID).To(Equal(wlName))
+		Expect(applied.WorkloadNS).To(Equal(nsName))
+		Expect(applied.TargetClusters).To(ConsistOf("prod-east"))
+
+		// And no Fleet Bundle should have been created for this Workload.
+		var b fleetv1.Bundle
+		bundleKey := client.ObjectKey{Namespace: nsName, Name: nsName + "-" + wlName}
+		Consistently(func() bool {
+			err := k8sClient.Get(ctx, bundleKey, &b)
+			return errors.IsNotFound(err)
+		}, "2s", interval).Should(BeTrue(),
+			"gitops dispatch must NOT create a Fleet Bundle")
+
+		Expect(k8sClient.Delete(ctx, w)).To(Succeed())
+
+		// The finalizer must drive FleetGitRepoEngine.Teardown before the
+		// Workload disappears — guards against a regression where the
+		// gitops dispatch wires Apply but skips Teardown (deployer.go
+		// calls both engines unconditionally; this test catches drift).
+		Eventually(func() int {
+			return len(fakeGitRepoEngine.TearDownSnapshot())
+		}, timeout, interval).Should(BeNumerically(">=", 1),
+			"reconciler should drive deployer to call FleetGitRepoEngine.Teardown on delete")
+
 		Eventually(func() bool {
 			var got aifv1.Workload
 			err := k8sClient.Get(ctx, client.ObjectKeyFromObject(w), &got)

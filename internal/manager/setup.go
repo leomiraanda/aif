@@ -6,7 +6,6 @@ import (
 
 	"github.com/SUSE/aif/internal/controller"
 	"github.com/SUSE/aif/pkg/blueprint"
-	"github.com/SUSE/aif/pkg/bundle"
 	"github.com/SUSE/aif/pkg/fleet"
 	"github.com/SUSE/aif/pkg/helm"
 	"github.com/SUSE/aif/pkg/nvidia"
@@ -46,9 +45,10 @@ type Options struct {
 
 	// Engine ports needed to construct the production WorkloadDeployer
 	// inside setupControllers (post-manager so repos use mgr.GetClient()).
-	NvidiaDiscovery   nvidia.Discovery
-	NvidiaDeployer    nvidia.Deployer
-	FleetBundleEngine fleet.FleetBundleEngine
+	NvidiaDiscovery    nvidia.Discovery
+	NvidiaDeployer     nvidia.Deployer
+	FleetBundleEngine  fleet.FleetBundleEngine
+	FleetGitRepoEngine fleet.FleetGitRepoEngine
 
 	// OperatorNamespace is the namespace the operator runs in. The
 	// WorkloadReconciler uses it to fetch the suse-registry-creds Secret
@@ -121,13 +121,12 @@ func setupControllers(mgr ctrlmanager.Manager, opts Options) error {
 	// Repos are stateless adapter structs; constructing them here (for the
 	// Deployer) and again in main.go (for publishWorkflow) is safe.
 	blueprintRepo := blueprint.NewK8sRepository(mgr.GetClient())
-	bundleRepo := bundle.NewK8sRepository(mgr.GetClient())
 	workloadDeployer := workload.NewDeployer(
 		opts.Logger,
 		opts.HelmRenderer, // P4-3b: value-only renderer for the Fleet path
 		opts.FleetBundleEngine,
+		opts.FleetGitRepoEngine,
 		blueprintRepo,
-		bundleRepo,
 		opts.NvidiaDiscovery,
 		opts.NvidiaDeployer,
 	)

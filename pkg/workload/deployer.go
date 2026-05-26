@@ -8,7 +8,6 @@ import (
 	"strings"
 
 	"github.com/SUSE/aif/pkg/blueprint"
-	"github.com/SUSE/aif/pkg/bundle"
 	"github.com/SUSE/aif/pkg/fleet"
 	"github.com/SUSE/aif/pkg/helm"
 	"github.com/SUSE/aif/pkg/nvidia"
@@ -19,13 +18,13 @@ import (
 // deployer is the production Deployer. Pure orchestrator: holds
 // constant refs to its dependency ports; no mutable state.
 type deployer struct {
-	log         *slog.Logger
-	render      helm.ValueRenderer
-	fleetBundle fleet.FleetBundleEngine
-	bpRepo      blueprint.Repository
-	bundleRepo  bundle.Repository
-	nvDisc      nvidia.Discovery
-	nvDepl      nvidia.Deployer
+	log          *slog.Logger
+	render       helm.ValueRenderer
+	fleetBundle  fleet.FleetBundleEngine
+	fleetGitRepo fleet.FleetGitRepoEngine
+	bpRepo       blueprint.Repository
+	nvDisc       nvidia.Discovery
+	nvDepl       nvidia.Deployer
 }
 
 // NewDeployer constructs the production Deployer.
@@ -38,19 +37,19 @@ func NewDeployer(
 	log *slog.Logger,
 	render helm.ValueRenderer,
 	fleetBundle fleet.FleetBundleEngine,
+	fleetGitRepo fleet.FleetGitRepoEngine,
 	bpRepo blueprint.Repository,
-	bundleRepo bundle.Repository,
 	nvDisc nvidia.Discovery,
 	nvDepl nvidia.Deployer,
 ) Deployer {
 	return &deployer{
-		log:         log,
-		render:      render,
-		fleetBundle: fleetBundle,
-		bpRepo:      bpRepo,
-		bundleRepo:  bundleRepo,
-		nvDisc:      nvDisc,
-		nvDepl:      nvDepl,
+		log:          log,
+		render:       render,
+		fleetBundle:  fleetBundle,
+		fleetGitRepo: fleetGitRepo,
+		bpRepo:       bpRepo,
+		nvDisc:       nvDisc,
+		nvDepl:       nvDepl,
 	}
 }
 
@@ -60,9 +59,9 @@ func NewDeployer(
 // to status. Idempotent: re-invocation with the same DeployRequest converges
 // to the same cluster state.
 func (d *deployer) Deploy(ctx context.Context, req DeployRequest) (DeployResult, error) {
-	desired, observedGen, err := d.resolveSource(ctx, req)
+	desired, err := d.resolveSource(ctx, req)
 	if err != nil {
-		return DeployResult{ObservedBundleGeneration: observedGen}, err
+		return DeployResult{}, err
 	}
 
 	componentsForFleet := make([]fleet.ComponentBundle, 0, len(desired))
@@ -92,31 +91,49 @@ func (d *deployer) Deploy(ctx context.Context, req DeployRequest) (DeployResult,
 		})
 	}
 
-	spec := fleet.BundleDeploymentSpec{
-		WorkloadID:     req.ID,
-		WorkloadNS:     req.Namespace,
-		TargetClusters: req.TargetClusters,
-		Components:     componentsForFleet,
-		PullSecretData: req.PullSecretData,
-		Owner:          req.Owner,
-	}
-	obs, err := d.fleetBundle.Apply(ctx, spec)
-	if err != nil {
+	switch req.DeployStrategy {
+	case "", "helm":
+		spec := fleet.BundleDeploymentSpec{
+			WorkloadID:     req.ID,
+			WorkloadNS:     req.Namespace,
+			TargetClusters: req.TargetClusters,
+			Components:     componentsForFleet,
+			PullSecretData: req.PullSecretData,
+			Owner:          req.Owner,
+		}
+		obs, err := d.fleetBundle.Apply(ctx, spec)
+		if err != nil {
+			return DeployResult{Components: releaseRecords}, err
+		}
+		// Phase ownership lives in the controller (RecomputePhase Rule 0
+		// reads PerCluster). See pkg/workload/phase.go.
 		return DeployResult{
-			Components:               releaseRecords,
-			ObservedBundleGeneration: observedGen,
-		}, err
-	}
+			Components: releaseRecords,
+			PerCluster: translateObserved(obs),
+		}, nil
 
-	// Phase is NOT set on DeployResult: post-P5-1 the controller owns
-	// phase via RecomputePhase(PhaseInputFromCR(w)). The per-cluster
-	// projection below feeds PhaseInput.PerClusterPhases so Rule 0 of
-	// RecomputePhase aggregates per-cluster phases for the Fleet path.
-	return DeployResult{
-		Components:               releaseRecords,
-		PerCluster:               translateObserved(obs),
-		ObservedBundleGeneration: observedGen,
-	}, nil
+	case "gitops":
+		spec := fleet.GitRepoDeploymentSpec{
+			WorkloadID:     req.ID,
+			WorkloadNS:     req.Namespace,
+			TargetClusters: req.TargetClusters,
+			Components:     componentsForFleet,
+			PullSecretData: req.PullSecretData,
+			Owner:          req.Owner,
+		}
+		obs, err := d.fleetGitRepo.Apply(ctx, spec)
+		if err != nil {
+			return DeployResult{Components: releaseRecords}, err
+		}
+		return DeployResult{
+			Components: releaseRecords,
+			PerCluster: translateObservedGit(obs),
+		}, nil
+
+	default:
+		return DeployResult{Components: releaseRecords},
+			fmt.Errorf("unknown deployStrategy %q", req.DeployStrategy)
+	}
 }
 
 // translateObserved maps fleet.BundleObservedStatus → workload-domain
@@ -124,6 +141,31 @@ func (d *deployer) Deploy(ctx context.Context, req DeployRequest) (DeployResult,
 // RecomputePhase (which calls AggregateClusterPhases on
 // PhaseInput.PerClusterPhases — Rule 0 in phase.go).
 func translateObserved(obs fleet.BundleObservedStatus) []ClusterDeploymentStatusDomain {
+	if len(obs.PerCluster) == 0 {
+		return nil
+	}
+	out := make([]ClusterDeploymentStatusDomain, 0, len(obs.PerCluster))
+	for _, e := range obs.PerCluster {
+		var p ClusterPhase
+		if e.ConnectionError {
+			p = ClusterFailed
+		} else {
+			p = MapFleetStateToPhase(e.FleetState)
+		}
+		out = append(out, ClusterDeploymentStatusDomain{
+			ClusterName: e.ClusterName,
+			Phase:       p,
+			FleetState:  e.FleetState,
+		})
+	}
+	return out
+}
+
+// translateObservedGit maps fleet.GitRepoObservedStatus → workload-domain
+// per-cluster status. Identical to translateObserved except for input type
+// (Go has no generics-friendly way to share without churn, and the
+// duplication keeps each engine's translation easy to evolve independently).
+func translateObservedGit(obs fleet.GitRepoObservedStatus) []ClusterDeploymentStatusDomain {
 	if len(obs.PerCluster) == 0 {
 		return nil
 	}
@@ -210,7 +252,13 @@ func composeChartRef(repo, chart, version string) string {
 // WorkloadReconciler's finalizer block on Workload deletion.
 // Fleet handles per-cluster uninstall and orphan cleanup declaratively.
 func (d *deployer) Teardown(ctx context.Context, namespace, workloadID string, _ []ComponentRelease) error {
-	return d.fleetBundle.Teardown(ctx, namespace, workloadID)
+	if err := d.fleetBundle.Teardown(ctx, namespace, workloadID); err != nil {
+		return err
+	}
+	if err := d.fleetGitRepo.Teardown(ctx, namespace, workloadID); err != nil {
+		return err
+	}
+	return nil
 }
 
 // extractGPUCount looks for an int-typed "gpuCount" key in the parsed
@@ -254,46 +302,37 @@ type desiredComponent struct {
 	repo              string // OCI host + path (e.g. "oci://registry.suse.com/ai/charts")
 	chart             string // chart name (e.g. "nim-llm")
 	version           string // chart version
-	blueprintOverride string // YAML string from Blueprint.spec.valueOverrides[name]; "" for App/BundleTest
+	blueprintOverride string // YAML string from Blueprint.spec.valueOverrides[name]; "" for App
 }
 
 // resolveSource translates req.Source into the ordered list of components
-// to install plus the observed bundle generation (BundleTest only).
+// to install.
 //
 // Returns ErrSourceNotResolved if the source CR is not found.
 // Returns ErrNestedBlueprintNotSupported if any child component has Kind=Blueprint.
-func (d *deployer) resolveSource(ctx context.Context, req DeployRequest) ([]desiredComponent, int64, error) {
+func (d *deployer) resolveSource(ctx context.Context, req DeployRequest) ([]desiredComponent, error) {
 	switch req.Source.Kind {
 	case SourceKindApp:
 		if req.Source.App == nil {
-			return nil, 0, ErrSourceNotResolved
+			return nil, ErrSourceNotResolved
 		}
 		return []desiredComponent{{
 			name:    req.SpecName,
 			repo:    req.Source.App.Repo,
 			chart:   req.Source.App.Chart,
 			version: req.Source.App.Version,
-		}}, 0, nil
+		}}, nil
 
 	case SourceKindBlueprint:
 		if req.Source.Blueprint == nil {
-			return nil, 0, ErrSourceNotResolved
+			return nil, ErrSourceNotResolved
 		}
 		bp, err := d.bpRepo.Get(ctx, blueprintCRName(req.Source.Blueprint.Name, req.Source.Blueprint.Version))
 		if err != nil {
-			return nil, 0, fmt.Errorf("%w: %v", ErrSourceNotResolved, err)
+			return nil, fmt.Errorf("%w: %v", ErrSourceNotResolved, err)
 		}
-		return ComponentsFromBlueprintCR(bp)
-
-	case SourceKindBundleTest:
-		if req.Source.BundleTest == nil {
-			return nil, 0, ErrSourceNotResolved
-		}
-		b, err := d.bundleRepo.Get(ctx, req.Source.BundleTest.Namespace, req.Source.BundleTest.Name)
-		if err != nil {
-			return nil, 0, fmt.Errorf("%w: %v", ErrSourceNotResolved, err)
-		}
-		return ComponentsFromBundleCR(b)
+		comps, _, err := ComponentsFromBlueprintCR(bp)
+		return comps, err
 	}
-	return nil, 0, ErrSourceNotResolved
+	return nil, ErrSourceNotResolved
 }
