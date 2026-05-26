@@ -25,8 +25,16 @@ type GitAuth struct {
 	SSH   *SSHAuth
 }
 
-// TokenAuth carries a bearer / PAT token. go-git uses BasicAuth with
-// username "token" (or "x-access-token" for GitHub-style providers).
+// TokenAuth carries a bearer / PAT token. The engine wraps it as
+// HTTP BasicAuth with the literal username "token", which works for
+// Gitea / Gerrit / generic OAuth-style endpoints.
+//
+// GitHub Personal Access Tokens are NOT supported in P4-3: GitHub
+// requires the username "x-access-token" for PAT-as-password auth,
+// and TokenAuth has no field to override that. Workaround for P4-3
+// users: configure BasicAuth{Username: "x-access-token", Password:
+// <pat>} instead. Promoting username to a TokenAuth field is tracked
+// for a later phase.
 type TokenAuth struct {
 	Token string
 }
@@ -39,10 +47,18 @@ type BasicAuth struct {
 type SSHAuth struct {
 	PrivateKeyPEM []byte
 	User          string // defaults to "git" when empty
-	// KnownHostsPEM is optional. When empty, ssh.InsecureIgnoreHostKey is
-	// used; otherwise the parsed callback enforces the supplied set.
-	// (Insecure default is documented; production deployments should
-	// populate this.)
+	// KnownHostsPEM holds OpenSSH-format `known_hosts` data — one entry
+	// per line (`hostname[,hostname...] keytype base64key [comment]`),
+	// the same shape `ssh-keyscan` emits and `~/.ssh/known_hosts`
+	// stores. The "PEM" suffix is a misnomer kept for backwards
+	// compatibility with the initial draft of this struct; the data is
+	// NOT PEM-encoded.
+	//
+	// When empty, ssh.InsecureIgnoreHostKey is used. When populated,
+	// the engine parses it via golang.org/x/crypto/ssh/knownhosts and
+	// the resulting callback enforces the supplied set; a malformed
+	// payload surfaces as ErrAuth at Push time. Production deployments
+	// should populate this.
 	KnownHostsPEM []byte
 }
 

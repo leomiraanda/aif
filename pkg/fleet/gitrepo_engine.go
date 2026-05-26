@@ -28,8 +28,17 @@ type gitRepoEngine struct {
 	settings   FleetSettings
 }
 
-// NewGitRepoEngine constructs the production FleetGitRepoEngine.
+// NewGitRepoEngine constructs the production FleetGitRepoEngine. Panics
+// if c or g is nil — both are required collaborators (the client SSAs
+// the GitRepo CR; the git.Engine pushes the manifest tree). Failing at
+// construction beats a nil-deref at the first Apply.
 func NewGitRepoEngine(logger *slog.Logger, c client.Client, g git.Engine) FleetGitRepoEngine {
+	if c == nil {
+		panic("fleet.NewGitRepoEngine: client.Client is nil")
+	}
+	if g == nil {
+		panic("fleet.NewGitRepoEngine: git.Engine is nil")
+	}
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -63,12 +72,15 @@ func (e *gitRepoEngine) snapshot() FleetSettings {
 //  3. SSA each GitRepo CR with the stable field-manager owner.
 //  4. Read back each GitRepo CR; mirror status into PerCluster.
 //
-// Returns GitRepoObservedStatus with one entry per requested cluster
-// even on partial failure (the caller's phase aggregation reduces
-// worst-wins).
+// Fails fast on the first SSA conflict or apply error: PerCluster will
+// contain entries only for clusters processed before the failure, not
+// one per requested cluster. The caller's phase aggregation treats a
+// short PerCluster slice as the unprocessed clusters being Unknown.
+// (Collect-all-errors semantics may land in a later phase if the
+// downstream reducer needs them.)
 func (e *gitRepoEngine) Apply(ctx context.Context, spec GitRepoDeploymentSpec) (GitRepoObservedStatus, error) {
 	if err := validateGitRepoSpec(spec); err != nil {
-		return GitRepoObservedStatus{}, fmt.Errorf("%w: %v", ErrBundleInvalidSpec, err)
+		return GitRepoObservedStatus{}, fmt.Errorf("%w: %v", ErrGitRepoInvalidSpec, err)
 	}
 	s := e.snapshot()
 	if s.GitRepoURL == "" {
@@ -115,9 +127,9 @@ func (e *gitRepoEngine) Apply(ctx context.Context, spec GitRepoDeploymentSpec) (
 			client.FieldOwner(fieldManager),
 			client.ForceOwnership); err != nil {
 			if apierrors.IsConflict(err) {
-				return out, fmt.Errorf("%w: %s/%s: %v", ErrBundleConflict, gr.Namespace, gr.Name, err)
+				return out, fmt.Errorf("%w: %s/%s: %v", ErrGitRepoConflict, gr.Namespace, gr.Name, err)
 			}
-			return out, fmt.Errorf("%w: %s/%s: %v", ErrBundleApplyFailed, gr.Namespace, gr.Name, err)
+			return out, fmt.Errorf("%w: %s/%s: %v", ErrGitRepoApplyFailed, gr.Namespace, gr.Name, err)
 		}
 
 		var got fleetv1.GitRepo

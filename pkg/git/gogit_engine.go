@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net"
 	"net/url"
+	"os"
 	"path"
 	"sync"
 	"time"
@@ -24,6 +25,7 @@ import (
 	sshauth "github.com/go-git/go-git/v5/plumbing/transport/ssh"
 	"github.com/go-git/go-git/v5/storage/memory"
 	cryptossh "golang.org/x/crypto/ssh"
+	sshknownhosts "golang.org/x/crypto/ssh/knownhosts"
 )
 
 // gogitEngine is the production Engine. Holds:
@@ -158,10 +160,51 @@ func buildAuthMethod(a GitAuth) (transport.AuthMethod, error) {
 		am := &sshauth.PublicKeys{User: user, Signer: signer}
 		if len(a.SSH.KnownHostsPEM) == 0 {
 			am.HostKeyCallback = cryptossh.InsecureIgnoreHostKey() //nolint:gosec // documented insecure default; production sets KnownHostsPEM
+		} else {
+			cb, err := parseKnownHostsCallback(a.SSH.KnownHostsPEM)
+			if err != nil {
+				return nil, fmt.Errorf("%w: parse known_hosts: %v", ErrAuth, err)
+			}
+			am.HostKeyCallback = cb
 		}
 		return am, nil
 	}
 	return nil, nil // anonymous (e.g., file:// or test transports)
+}
+
+// parseKnownHostsCallback materialises a HostKeyCallback from raw
+// OpenSSH-format known_hosts bytes. The upstream knownhosts package
+// only takes file paths, so we round-trip through a temp file — read
+// eagerly during New(), then unlink immediately. The callback retains
+// the parsed entries in memory; the file is no longer needed.
+//
+// Returns ErrAuth-friendly errors (the caller wraps with ErrAuth);
+// returns an explicit error on empty/garbage input so the field can't
+// be silently dropped.
+func parseKnownHostsCallback(data []byte) (cryptossh.HostKeyCallback, error) {
+	if len(bytes.TrimSpace(data)) == 0 {
+		return nil, errors.New("empty known_hosts payload")
+	}
+	f, err := os.CreateTemp("", "aif-known-hosts-*")
+	if err != nil {
+		return nil, fmt.Errorf("create temp file: %w", err)
+	}
+	name := f.Name()
+	// Best-effort unlink even if subsequent steps fail; the goroutine
+	// owns the only reference to this path.
+	defer func() { _ = os.Remove(name) }()
+	if _, err := f.Write(data); err != nil {
+		_ = f.Close()
+		return nil, fmt.Errorf("write temp file: %w", err)
+	}
+	if err := f.Close(); err != nil {
+		return nil, fmt.Errorf("close temp file: %w", err)
+	}
+	cb, err := sshknownhosts.New(name)
+	if err != nil {
+		return nil, fmt.Errorf("parse known_hosts: %w", err)
+	}
+	return cb, nil
 }
 
 func classifyTransport(err error) error {

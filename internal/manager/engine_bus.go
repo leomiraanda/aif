@@ -30,9 +30,9 @@ type engineBus struct {
 	// FleetSettings with git.Credentials and auth fields.
 	fleetGitRepo fleet.FleetGitRepoEngine
 	nvidiaDisc   nvidia.Discovery
-	nvidiaDepl  nvidia.Deployer
-	appCollect  source_collection.Client
-	logger      *slog.Logger
+	nvidiaDepl   nvidia.Deployer
+	appCollect   source_collection.Client
+	logger       *slog.Logger
 }
 
 // NewEngineBus constructs the production SettingsApplier with refs to all

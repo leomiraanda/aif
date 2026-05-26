@@ -32,11 +32,27 @@ var (
 	ErrConnectionLost = errors.New("fleet bundle connection error")
 )
 
-// --- GitRepo engine sentinels. The parallel GitRepo engine consumes
-// these; declared here so its package files can land without editing
-// this file.
+// --- GitRepo engine sentinels. Parallel set to the Bundle sentinels
+// above so callers can errors.Is on a GitRepo failure without picking
+// up a Bundle failure (and vice versa). The Bundle-named sentinels are
+// for the Bundle engine only; the GitRepo engine uses these.
 
 var (
-	ErrGitRepoNotReady    = errors.New("fleet gitrepo not ready")
+	// ErrGitRepoNotReady marks a transient state: the GitRepo exists
+	// but Fleet has not finished reconciling it. Reconciler should
+	// requeue.
+	ErrGitRepoNotReady = errors.New("fleet gitrepo not ready")
+
+	// ErrGitRepoApplyFailed wraps a hard failure from the apiserver
+	// (server-side apply rejected, network error, etc.).
 	ErrGitRepoApplyFailed = errors.New("fleet gitrepo apply failed")
+
+	// ErrGitRepoConflict wraps an SSA conflict — another field manager
+	// owns conflicting fields on the GitRepo CR. Reconciler should
+	// retry with backoff.
+	ErrGitRepoConflict = errors.New("fleet gitrepo conflict")
+
+	// ErrGitRepoInvalidSpec is returned from Apply when the input
+	// GitRepoDeploymentSpec fails validateGitRepoSpec checks.
+	ErrGitRepoInvalidSpec = errors.New("fleet gitrepo invalid spec")
 )
