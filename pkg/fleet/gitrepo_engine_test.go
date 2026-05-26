@@ -9,7 +9,9 @@ import (
 
 	fleetv1 "github.com/rancher/fleet/pkg/apis/fleet.cattle.io/v1alpha1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -17,6 +19,17 @@ import (
 	"github.com/SUSE/aif/pkg/fleet"
 	"github.com/SUSE/aif/pkg/git"
 )
+
+// noMatchClient wraps a client.Client and forces List calls to return a
+// NoMatchError, simulating a cluster where the Fleet GitRepo CRD is not
+// installed. Used by TestGitRepoEngine_TeardownSwallowsNoMatchError.
+type noMatchClient struct {
+	client.Client
+}
+
+func (n *noMatchClient) List(_ context.Context, _ client.ObjectList, _ ...client.ListOption) error {
+	return &apimeta.NoKindMatchError{GroupKind: schema.GroupKind{Group: "fleet.cattle.io", Kind: "GitRepo"}}
+}
 
 func newScheme(t *testing.T) *runtime.Scheme {
 	t.Helper()
@@ -101,6 +114,27 @@ func TestGitRepoEngine_AppliesGitRepoPerCluster(t *testing.T) {
 	}
 }
 
+func TestBuildManifestTree_RejectsTooManyComponents(t *testing.T) {
+	// BuildManifestTree is exported and accepts a spec directly; tests
+	// and future direct callers must not be able to bypass the index
+	// bound and trip ManifestFilename's empty-string fallback (which
+	// would produce a "manifests/" file with no suffix). The function
+	// self-validates so the unsafe path is closed at the call site.
+	spec := fleet.GitRepoDeploymentSpec{
+		WorkloadID:     "wl-1",
+		WorkloadNS:     "ns-a",
+		TargetClusters: []string{"c"},
+		Components:     make([]fleet.ComponentBundle, git.MaxComponentIndex+2),
+	}
+	for i := range spec.Components {
+		spec.Components[i] = fleet.ComponentBundle{Name: "c", ChartRef: "oci://x:1"}
+	}
+	_, err := fleet.BuildManifestTree(spec, "c")
+	if !errors.Is(err, fleet.ErrGitRepoInvalidSpec) {
+		t.Fatalf("got %v, want ErrGitRepoInvalidSpec", err)
+	}
+}
+
 func TestGitRepoEngine_RejectsTooManyComponents(t *testing.T) {
 	s := newScheme(t)
 	c := fake.NewClientBuilder().WithScheme(s).Build()
@@ -163,5 +197,17 @@ func TestGitRepoEngine_TeardownIdempotent(t *testing.T) {
 	}
 	if err := e.Teardown(context.Background(), "ns-a", "wl-1"); err != nil {
 		t.Fatalf("second Teardown: %v", err)
+	}
+}
+
+// TestGitRepoEngine_TeardownSwallowsNoMatchError covers the case where
+// the Fleet GitRepo CRD is not installed on the cluster: Teardown must
+// return nil so a pure-helm Workload delete still succeeds.
+func TestGitRepoEngine_TeardownSwallowsNoMatchError(t *testing.T) {
+	s := newScheme(t)
+	c := &noMatchClient{Client: fake.NewClientBuilder().WithScheme(s).Build()}
+	e := fleet.NewGitRepoEngine(newSilentLogger(), c, &git.FakeEngine{})
+	if err := e.Teardown(context.Background(), "ns-a", "wl-1"); err != nil {
+		t.Fatalf("Teardown must swallow NoMatchError, got: %v", err)
 	}
 }

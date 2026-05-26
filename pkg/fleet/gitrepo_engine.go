@@ -8,6 +8,7 @@ import (
 
 	fleetv1 "github.com/rancher/fleet/pkg/apis/fleet.cattle.io/v1alpha1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/yaml"
 
@@ -144,12 +145,18 @@ func (e *gitRepoEngine) Apply(ctx context.Context, spec GitRepoDeploymentSpec) (
 
 // Teardown deletes every GitRepo CR labeled with this workload, across
 // all clusters. Iterates and ignores NotFound so the call is idempotent.
+// A NoMatchError on the initial List is swallowed: clusters without the
+// Fleet GitRepo CRD installed (older Fleet, partial install) have nothing
+// to clean up, and a pure-helm Workload delete must still succeed.
 func (e *gitRepoEngine) Teardown(ctx context.Context, namespace, workloadID string) error {
 	var list fleetv1.GitRepoList
 	if err := e.client.List(ctx, &list,
 		client.InNamespace(namespace),
 		client.MatchingLabels{labelWorkload: workloadID, labelManagedBy: managedByValue},
 	); err != nil {
+		if apimeta.IsNoMatchError(err) {
+			return nil
+		}
 		return fmt.Errorf("list GitRepos for teardown: %w", err)
 	}
 	for i := range list.Items {
@@ -169,8 +176,15 @@ func (e *gitRepoEngine) Teardown(ctx context.Context, namespace, workloadID stri
 //
 //	{Path}/fleet.yaml
 //	{Path}/manifests/00-namespace.yaml
-//	{Path}/manifests/{1N-..|1-N-..}-{component}.yaml  (one per component)
+//	{Path}/manifests/NN-{component}.yaml  (NN = index+10, range 10..99)
+//
+// Self-validates via validateGitRepoSpec so direct callers can't bypass
+// the index bound and trip ManifestFilename's empty-string fallback.
+// Apply also validates upstream; the second call here is idempotent.
 func BuildManifestTree(spec GitRepoDeploymentSpec, cluster string) (git.ManifestSubtree, error) {
+	if err := validateGitRepoSpec(spec); err != nil {
+		return git.ManifestSubtree{}, fmt.Errorf("%w: %v", ErrGitRepoInvalidSpec, err)
+	}
 	path := gitRepoPath(spec.WorkloadID, cluster)
 	files := map[string][]byte{
 		"fleet.yaml":                  fleetYAMLForBundle(spec.WorkloadNS),
