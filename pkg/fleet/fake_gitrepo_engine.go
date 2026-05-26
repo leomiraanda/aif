@@ -44,4 +44,17 @@ func (f *FakeGitRepoEngine) UpdateSettings(s FleetSettings) {
 	f.Settings = s
 }
 
+// AppliedSnapshot returns a copy of Applied under the mutex. Tests that
+// read the recorded specs from a goroutine other than the one calling
+// Apply (e.g. envtest specs polling via Eventually while the reconciler
+// drives Apply on the controller's worker) must use this accessor to
+// avoid `go test -race` failures.
+func (f *FakeGitRepoEngine) AppliedSnapshot() []GitRepoDeploymentSpec {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]GitRepoDeploymentSpec, len(f.Applied))
+	copy(out, f.Applied)
+	return out
+}
+
 var _ FleetGitRepoEngine = (*FakeGitRepoEngine)(nil)

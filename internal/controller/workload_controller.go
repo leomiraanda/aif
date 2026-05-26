@@ -477,5 +477,6 @@ func (r *WorkloadReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&aifv1.Workload{}).
 		Owns(&fleetv1.Bundle{}).
+		Owns(&fleetv1.GitRepo{}).
 		Complete(r)
 }

@@ -898,6 +898,7 @@ var _ = Describe("WorkloadReconciler Fleet Bundle integration (P4-3b)", Serial, 
 	//      acknowledges this — the Modified→Running unit guard lives in
 	//      pkg/workload/fleet_phase_test.go (Task 1).
 	var savedDeployer workload.Deployer
+	var fakeGitRepoEngine *fleet.FakeGitRepoEngine
 
 	BeforeEach(func() {
 		// Drain any Workloads left by prior Describe blocks before swapping
@@ -932,11 +933,12 @@ var _ = Describe("WorkloadReconciler Fleet Bundle integration (P4-3b)", Serial, 
 		directClient, err := client.New(testEnv.Config, client.Options{Scheme: scheme.Scheme})
 		Expect(err).NotTo(HaveOccurred())
 		nvDisc, _ := nvidia.NewDiscovery(slog.Default())
+		fakeGitRepoEngine = &fleet.FakeGitRepoEngine{}
 		workloadReconciler.Deployer = workload.NewDeployer(
 			slog.Default(),
 			helm.NewFake(),
 			fleet.NewBundleEngine(slog.Default(), directClient),
-			&fleet.FakeGitRepoEngine{},
+			fakeGitRepoEngine,
 			blueprint.NewFakeRepository(),
 			nvDisc,
 			nvidia.NewDeployer(slog.Default()),
@@ -1036,6 +1038,62 @@ var _ = Describe("WorkloadReconciler Fleet Bundle integration (P4-3b)", Serial, 
 
 		// Cleanup: remove the Workload. The production deployer's Teardown
 		// calls FleetBundleEngine.Teardown, which deletes the Bundle.
+		Expect(k8sClient.Delete(ctx, w)).To(Succeed())
+		Eventually(func() bool {
+			var got aifv1.Workload
+			err := k8sClient.Get(ctx, client.ObjectKeyFromObject(w), &got)
+			return errors.IsNotFound(err)
+		}, timeout, interval).Should(BeTrue(), "Workload should be fully deleted")
+	})
+
+	It("dispatches to FleetGitRepoEngine when deployStrategy=gitops", func() {
+		nsName := "wl-gitops-" + randomSuffix()
+		Expect(k8sClient.Create(ctx, &corev1.Namespace{
+			ObjectMeta: metav1.ObjectMeta{Name: nsName},
+		})).To(Succeed())
+
+		const wlName = "demo-gitops"
+		w := &aifv1.Workload{
+			ObjectMeta: metav1.ObjectMeta{Namespace: nsName, Name: wlName},
+			Spec: aifv1.WorkloadSpec{
+				Name:           "llama",
+				DeployStrategy: aifv1.DeployStrategyTypeGitOps,
+				TargetClusters: []string{"prod-east"},
+				Source: aifv1.WorkloadSource{
+					Kind: aifv1.WorkloadSourceKindApp,
+					App: &aifv1.AppRef{
+						Repo:    "registry.example.test/charts",
+						Chart:   "llama",
+						Version: "1.0.0",
+					},
+				},
+			},
+		}
+		Expect(k8sClient.Create(ctx, w)).To(Succeed())
+
+		// The deployer must dispatch to FleetGitRepoEngine.Apply, not
+		// FleetBundleEngine.Apply, when deployStrategy=gitops.
+		// AppliedSnapshot takes the fake's mutex; raw .Applied access from
+		// the test goroutine races the reconciler worker goroutine.
+		Eventually(func() int {
+			return len(fakeGitRepoEngine.AppliedSnapshot())
+		}, timeout, interval).Should(BeNumerically(">=", 1),
+			"reconciler should drive deployer to call FleetGitRepoEngine.Apply")
+
+		applied := fakeGitRepoEngine.AppliedSnapshot()[0]
+		Expect(applied.WorkloadID).To(Equal(wlName))
+		Expect(applied.WorkloadNS).To(Equal(nsName))
+		Expect(applied.TargetClusters).To(ConsistOf("prod-east"))
+
+		// And no Fleet Bundle should have been created for this Workload.
+		var b fleetv1.Bundle
+		bundleKey := client.ObjectKey{Namespace: nsName, Name: nsName + "-" + wlName}
+		Consistently(func() bool {
+			err := k8sClient.Get(ctx, bundleKey, &b)
+			return errors.IsNotFound(err)
+		}, "2s", interval).Should(BeTrue(),
+			"gitops dispatch must NOT create a Fleet Bundle")
+
 		Expect(k8sClient.Delete(ctx, w)).To(Succeed())
 		Eventually(func() bool {
 			var got aifv1.Workload
