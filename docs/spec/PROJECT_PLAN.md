@@ -2953,6 +2953,16 @@ kubectl apply -f testdata/installaiextension-cr.yaml
 
 > **NOTE:** The `charts/aif-ui/` chart must be revisited after P6-11 is complete. P6-11's outcome (container-based vs git-based deployment, two source modes, Deployment+Service+ClusterRepo) will drive the chart's template structure. The current chart (single UIPlugin template) will likely need to be restructured or replaced entirely. Defer any non-trivial aif-ui chart work until P6-11 lands.
 
+> **Follow-up (post-merge):**
+>
+> - **Rancher catalog extracted to `internal/infra/rancher/`**, not `pkg/`. One consumer (InstallAIExtension controller), so consumer-defined port rule applies. Move to `pkg/rancher/` if a second consumer arrives.
+> - **CatalogManager interface has 7 methods** (exceeds the ≤4 ISP target). All methods are cohesive — Rancher catalog CRUD for ClusterRepo + UIPlugin. Splitting would add complexity without a real second consumer. ISP exemption, same rationale as `pkg/helm.Engine`.
+> - **Health checks (`checkDeploymentReady`, `diagnosePodFailures`, `discoverServiceURL`) stay as controller methods** in `installaiextension_health.go`. No `internal/infra/kubernetes/` package — one consumer, extract when a second arrives.
+> - **`convertValues()` stays in controller** — bridges CRD `apiextensionsv1.JSON` to `map[string]any`, which is a controller-level conversion concern (would pull `aifv1` into rancher).
+> - **`DeriveReleaseName`, `GitRepoToRawURL`, `ClusterRepoName` are exported package-level functions** in `rancher`, not on the interface — they're stateless pure functions.
+> - **Controller went from 945 → 627 lines** (plan target was ~450). The delta is `reconcileGitSource`, `ensureUIPluginGit`, and `cleanupStaleResources` which stayed in the controller because they orchestrate both `HelmEngine` and `Catalog`.
+> - **`rancher.New()` is wired in `internal/manager/setup.go`** (not `cmd/operator/main.go`) because it needs `mgr.GetClient()`, which isn't available until after `ctrl.NewManager`. `Options` still carries `Discovery` and the catalog is constructed in `setupControllers()`.
+
 ---
 
 **ID:** P6-12
