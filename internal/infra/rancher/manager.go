@@ -184,6 +184,8 @@ func (m *Catalog) FetchIndexMetadata(ctx context.Context, indexURL, chartName, c
 
 // DeriveReleaseName extracts a Helm release name from a chart URL,
 // stripping any OCI tag suffix (e.g. ":1.0.0").
+// Assumes chartURL is a well-formed URL with a non-empty path component
+// (enforced by CRD validation: +kubebuilder:validation:MinLength=1).
 func DeriveReleaseName(chartURL string) string {
 	base := path.Base(chartURL)
 	if i := strings.LastIndex(base, ":"); i > 0 {

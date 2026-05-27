@@ -2961,7 +2961,7 @@ kubectl apply -f testdata/installaiextension-cr.yaml
 > - **`convertValues()` stays in controller** — bridges CRD `apiextensionsv1.JSON` to `map[string]any`, which is a controller-level conversion concern (would pull `aifv1` into rancher).
 > - **`DeriveReleaseName`, `GitRepoToRawURL`, `ClusterRepoName` are exported package-level functions** in `rancher`, not on the interface — they're stateless pure functions.
 > - **`GitRepoToRawURL` only supports github.com** — returns an error for other hosts (gitlab.com, bitbucket.org, etc.). Extend when a non-GitHub git source is needed.
-> - **Controller went from 945 → 651 lines** (plan target was ~450). The delta is `reconcileGitSource`, `ensureUIPluginGit`, and `cleanupStaleResources` which stayed in the controller because they orchestrate both `HelmEngine` and `Catalog`.
+> - **Controller went from 945 → 654 lines** (plan target was ~450). The delta is `reconcileGitSource`, `ensureUIPluginGit`, and `cleanupStaleResources` which stayed in the controller because they orchestrate both `HelmEngine` and `Catalog`.
 > - **`rancher.New()` is wired in `internal/manager/setup.go`** (not `cmd/operator/main.go`) because it needs `mgr.GetClient()`, which isn't available until after `ctrl.NewManager`. `Options` still carries `Discovery` and the catalog is constructed in `setupControllers()`.
 
 ---

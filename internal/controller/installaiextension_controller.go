@@ -583,6 +583,7 @@ func (r *InstallAIExtensionReconciler) cleanup(ctx context.Context, ext *aifv1.I
 
 	for _, name := range names {
 		if name == "" {
+			logger.Info("skipping cleanup for empty extension name")
 			continue
 		}
 		if err := r.Catalog.DeleteClusterRepo(ctx, name); err != nil {
