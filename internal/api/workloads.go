@@ -85,15 +85,16 @@ func (h *WorkloadsHandler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/v1/workloads/{namespace}/{name}/upgrade", h.upgrade)
 }
 
-// guard wraps next in a SAR check for verb on "workloads" using selector to
-// derive the namespace. When the handler has no checker (test setups), the
-// wrapper is a no-op — handlers still self-check that Impersonate-User is
-// present so the existing 403-on-missing-user contract is preserved.
+// guard wraps next in a SAR check for verb on "workloads" (ai.suse.com
+// group) using selector to derive the namespace. When the handler has no
+// checker (test setups), the wrapper is a no-op — handlers still self-check
+// that Impersonate-User is present so the existing 403-on-missing-user
+// contract is preserved.
 func (h *WorkloadsHandler) guard(verb string, selector ResourceSelector, next http.HandlerFunc) http.HandlerFunc {
 	if h.authMiddleware == nil {
 		return next
 	}
-	return h.authMiddleware.RequireResource(verb, "workloads", selector, next)
+	return h.authMiddleware.RequireResource("ai.suse.com", verb, "workloads", selector, next)
 }
 
 // pathNamespace pulls the namespace from the {namespace} URL path segment.
@@ -205,15 +206,19 @@ func (h *WorkloadsHandler) createWorkload(w http.ResponseWriter, r *http.Request
 
 	// SAR check happens inline (rather than via RequireResource middleware)
 	// because the namespace lives in the request body, not the URL path.
+	// Trade-off: an authenticated-but-unauthorized caller learns whether
+	// the body shape parses before being told "forbidden". No resource is
+	// read, so no resource state leaks — only the JSON-schema verdict on
+	// their own input. Acceptable for this endpoint.
 	if h.checker != nil {
-		allowed, err := h.checker.CheckResource(r.Context(), user, groups, req.Metadata.Namespace, "create", "workloads")
+		allowed, err := h.checker.CheckResource(r.Context(), user, groups, "ai.suse.com", req.Metadata.Namespace, "create", "workloads")
 		if err != nil {
 			LoggerFromContext(r.Context()).Error("create workload SAR failed", "error", err)
 			writeError(w, http.StatusInternalServerError, ErrInternal)
 			return
 		}
 		if !allowed {
-			writeError(w, http.StatusForbidden, errInsufficientPermissions)
+			writeError(w, http.StatusForbidden, errResourceAccessDenied)
 			return
 		}
 	}

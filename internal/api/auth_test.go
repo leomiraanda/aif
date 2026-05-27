@@ -16,8 +16,8 @@ import (
 // fakeAuthChecker implements AuthChecker for testing.
 //
 // allowed/err drive CheckPublisher; resourceAllowed/resourceErr drive
-// CheckResource. resourceCalls records each (namespace, verb, resource)
-// invocation so tests can assert what the middleware asked.
+// CheckResource. resourceCalls records each (group, namespace, verb,
+// resource) invocation so tests can assert what the middleware asked.
 type fakeAuthChecker struct {
 	allowed bool
 	err     error
@@ -29,8 +29,8 @@ type fakeAuthChecker struct {
 }
 
 type resourceCall struct {
-	user, verb, resource, namespace string
-	groups                          []string
+	user, group, verb, resource, namespace string
+	groups                                 []string
 }
 
 func (f *fakeAuthChecker) CheckPublisher(_ context.Context, _ string, _ []string) (bool, error) {
@@ -38,9 +38,9 @@ func (f *fakeAuthChecker) CheckPublisher(_ context.Context, _ string, _ []string
 	return f.allowed, f.err
 }
 
-func (f *fakeAuthChecker) CheckResource(_ context.Context, user string, groups []string, namespace, verb, resource string) (bool, error) {
+func (f *fakeAuthChecker) CheckResource(_ context.Context, user string, groups []string, group, namespace, verb, resource string) (bool, error) {
 	f.resourceCalls = append(f.resourceCalls, resourceCall{
-		user: user, groups: groups, namespace: namespace, verb: verb, resource: resource,
+		user: user, groups: groups, group: group, namespace: namespace, verb: verb, resource: resource,
 	})
 	return f.resourceAllowed, f.resourceErr
 }
@@ -186,7 +186,7 @@ func TestRequireResource_Allowed(t *testing.T) {
 	handlerCalled := false
 	next := func(w http.ResponseWriter, r *http.Request) { handlerCalled = true }
 	sel := func(r *http.Request) string { return "team-a" }
-	h := mw.RequireResource("delete", "workloads", sel, next)
+	h := mw.RequireResource("ai.suse.com", "delete", "workloads", sel, next)
 
 	req := httptest.NewRequest(http.MethodDelete, "/api/v1/workloads/team-a/wl", nil)
 	req.Header.Set("Impersonate-User", "alice")
@@ -209,7 +209,7 @@ func TestRequireResource_Denied(t *testing.T) {
 	handlerCalled := false
 	next := func(w http.ResponseWriter, r *http.Request) { handlerCalled = true }
 	sel := func(r *http.Request) string { return "team-a" }
-	h := mw.RequireResource("delete", "workloads", sel, next)
+	h := mw.RequireResource("ai.suse.com", "delete", "workloads", sel, next)
 
 	req := httptest.NewRequest(http.MethodDelete, "/api/v1/workloads/team-a/wl", nil)
 	req.Header.Set("Impersonate-User", "alice")
@@ -218,6 +218,13 @@ func TestRequireResource_Denied(t *testing.T) {
 
 	assert.False(t, handlerCalled)
 	assert.Equal(t, http.StatusForbidden, w.Code)
+
+	// Generic SAR denials MUST NOT leak the publisher-role message — that
+	// would tell a workload-RBAC-denied user to chase the wrong binding.
+	var apiErr APIError
+	require.NoError(t, json.NewDecoder(w.Body).Decode(&apiErr))
+	assert.NotContains(t, apiErr.Message, "aif-blueprint-publisher")
+	assert.Contains(t, apiErr.Message, "insufficient permissions")
 }
 
 func TestRequireResource_NoUser(t *testing.T) {
@@ -227,7 +234,7 @@ func TestRequireResource_NoUser(t *testing.T) {
 	handlerCalled := false
 	next := func(w http.ResponseWriter, r *http.Request) { handlerCalled = true }
 	sel := func(r *http.Request) string { return "team-a" }
-	h := mw.RequireResource("delete", "workloads", sel, next)
+	h := mw.RequireResource("ai.suse.com", "delete", "workloads", sel, next)
 
 	req := httptest.NewRequest(http.MethodDelete, "/api/v1/workloads/team-a/wl", nil)
 	w := httptest.NewRecorder()
@@ -245,7 +252,7 @@ func TestRequireResource_CheckerError(t *testing.T) {
 	handlerCalled := false
 	next := func(w http.ResponseWriter, r *http.Request) { handlerCalled = true }
 	sel := func(r *http.Request) string { return "team-a" }
-	h := mw.RequireResource("delete", "workloads", sel, next)
+	h := mw.RequireResource("ai.suse.com", "delete", "workloads", sel, next)
 
 	req := httptest.NewRequest(http.MethodDelete, "/api/v1/workloads/team-a/wl", nil)
 	req.Header.Set("Impersonate-User", "alice")
@@ -260,14 +267,14 @@ func TestSARAuthChecker_CacheTTL(t *testing.T) {
 	checker := &SARAuthChecker{}
 
 	// Manually store a cache entry that is fresh (within 30s TTL).
-	key := cacheKey("alice", []string{"admins", "devs"}, "", "", "")
+	key := cacheKey("alice", []string{"admins", "devs"}, "ai.suse.com", "", "", "")
 	checker.cache.Store(key, cacheEntry{
 		allowed: true,
 		at:      time.Now(),
 	})
 
 	// Should hit cache.
-	allowed, err := checker.checkCache("alice", []string{"admins", "devs"}, "", "", "")
+	allowed, err := checker.checkCache("alice", []string{"admins", "devs"}, "ai.suse.com", "", "", "")
 	require.NoError(t, err)
 	assert.True(t, allowed)
 
@@ -278,16 +285,21 @@ func TestSARAuthChecker_CacheTTL(t *testing.T) {
 	})
 
 	// Should miss cache.
-	_, err = checker.checkCache("alice", []string{"admins", "devs"}, "", "", "")
+	_, err = checker.checkCache("alice", []string{"admins", "devs"}, "ai.suse.com", "", "", "")
 	assert.ErrorIs(t, err, errCacheMiss)
 }
 
 func TestSARAuthChecker_CacheKey(t *testing.T) {
-	pubKey := cacheKey("alice", []string{"admins", "devs"}, "", "", "")
-	assert.Equal(t, "alice|admins,devs|||", pubKey)
+	pubKey := cacheKey("alice", []string{"admins", "devs"}, "ai.suse.com", "", "", "")
+	assert.Equal(t, "alice|admins,devs|ai.suse.com|||", pubKey)
 	// Different verbs on the same resource must yield distinct cache keys so
 	// e.g. "get workloads in team-a" cannot leak into "delete workloads in team-a".
-	getKey := cacheKey("alice", []string{"admins"}, "get", "workloads", "team-a")
-	deleteKey := cacheKey("alice", []string{"admins"}, "delete", "workloads", "team-a")
+	getKey := cacheKey("alice", []string{"admins"}, "ai.suse.com", "get", "workloads", "team-a")
+	deleteKey := cacheKey("alice", []string{"admins"}, "ai.suse.com", "delete", "workloads", "team-a")
 	assert.NotEqual(t, getKey, deleteKey)
+	// Different API groups on the same verb/resource/namespace must also
+	// yield distinct keys.
+	aifKey := cacheKey("alice", []string{"admins"}, "ai.suse.com", "get", "workloads", "team-a")
+	apiextKey := cacheKey("alice", []string{"admins"}, "apiextensions.k8s.io", "get", "workloads", "team-a")
+	assert.NotEqual(t, aifKey, apiextKey)
 }

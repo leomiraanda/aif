@@ -35,10 +35,12 @@ func ExtractUser(r *http.Request) (user string, groups []string) {
 // with publish.go). CheckResource is the general verb+resource check used
 // by the workload CRUD endpoints; downstream handlers call it directly when
 // they need per-namespace authorization tailored to the request (e.g.
-// create's namespace comes from the request body, not the URL path).
+// create's namespace comes from the request body, not the URL path). The
+// API group is a parameter so the checker can serve resources outside
+// ai.suse.com (e.g. apiextensions.k8s.io) without further interface churn.
 type AuthChecker interface {
 	CheckPublisher(ctx context.Context, user string, groups []string) (bool, error)
-	CheckResource(ctx context.Context, user string, groups []string, namespace, verb, resource string) (bool, error)
+	CheckResource(ctx context.Context, user string, groups []string, group, namespace, verb, resource string) (bool, error)
 }
 
 // AuthMiddleware provides HTTP middleware methods for authorization.
@@ -52,9 +54,20 @@ func NewAuthMiddleware(checker AuthChecker) *AuthMiddleware {
 }
 
 // errInsufficientPermissions is returned when a user lacks the publisher role.
+// Reserved for RequirePublisher — it names the role to bind. Generic CRUD
+// denials go through errResourceAccessDenied instead.
 var errInsufficientPermissions = &APIError{
 	Code:    ErrCodeForbidden,
 	Message: "requires aif-blueprint-publisher role; ask your cluster admin to bind you to the role",
+}
+
+// errResourceAccessDenied is the generic SAR-deny envelope used by
+// RequireResource and inline CheckResource call sites. Keeping it separate
+// from errInsufficientPermissions prevents a workload-RBAC denial from
+// telling the user to chase the bundle-publisher role.
+var errResourceAccessDenied = &APIError{
+	Code:    ErrCodeForbidden,
+	Message: "forbidden: insufficient permissions for the requested action",
 }
 
 // RequirePublisher returns middleware that checks whether the calling user has
@@ -89,10 +102,10 @@ func (m *AuthMiddleware) RequirePublisher(next http.HandlerFunc) http.HandlerFun
 // the handler after decoding the body.
 type ResourceSelector func(r *http.Request) (namespace string)
 
-// RequireResource returns middleware that performs an ai.suse.com SAR
-// (verb, resource, namespace) before invoking next. Namespace is computed per
-// request via selector.
-func (m *AuthMiddleware) RequireResource(verb, resource string, selector ResourceSelector, next http.HandlerFunc) http.HandlerFunc {
+// RequireResource returns middleware that performs a SAR
+// (group, verb, resource, namespace) before invoking next. Namespace is
+// computed per request via selector.
+func (m *AuthMiddleware) RequireResource(group, verb, resource string, selector ResourceSelector, next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		user, groups := ExtractUser(r)
 		if user == "" {
@@ -103,13 +116,13 @@ func (m *AuthMiddleware) RequireResource(verb, resource string, selector Resourc
 		if selector != nil {
 			ns = selector(r)
 		}
-		allowed, err := m.checker.CheckResource(r.Context(), user, groups, ns, verb, resource)
+		allowed, err := m.checker.CheckResource(r.Context(), user, groups, group, ns, verb, resource)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, fmt.Errorf("authorization check failed: %w", err))
 			return
 		}
 		if !allowed {
-			writeError(w, http.StatusForbidden, errInsufficientPermissions)
+			writeError(w, http.StatusForbidden, errResourceAccessDenied)
 			return
 		}
 		next(w, r)
@@ -140,18 +153,23 @@ func NewSARAuthChecker(client kubernetes.Interface) *SARAuthChecker {
 	return &SARAuthChecker{client: client}
 }
 
-// cacheKey builds a deterministic cache key from user, sorted groups, and
-// (for CheckResource) verb/resource/namespace. CheckPublisher passes empty
-// strings for the last three to preserve the original key shape; that key
-// still serializes uniquely because the three separators are part of the
-// constant suffix and no real verb/resource/namespace is the empty string.
-func cacheKey(user string, groups []string, verb, resource, namespace string) string {
-	return user + "|" + strings.Join(groups, ",") + "|" + verb + "|" + resource + "|" + namespace
+// cacheKey builds a deterministic cache key from user, sorted groups, API
+// group, and (for CheckResource) verb/resource/namespace. CheckPublisher
+// passes "ai.suse.com" for group and empty strings for verb/resource/
+// namespace.
+//
+// The "|" separator is collision-free in practice: K8s username/group/
+// namespace validation rejects pipes (RFC 1123 / DNS-1123 subdomains), and
+// verb, resource, and API group come from closed enumerations. If a custom
+// auth proxy is ever wired in that accepts pipes in usernames, the join
+// scheme here MUST move to a length-prefixed or escaped encoding.
+func cacheKey(user string, groups []string, group, verb, resource, namespace string) string {
+	return user + "|" + strings.Join(groups, ",") + "|" + group + "|" + verb + "|" + resource + "|" + namespace
 }
 
 // checkCache returns the cached result if within TTL, or errCacheMiss otherwise.
-func (s *SARAuthChecker) checkCache(user string, groups []string, verb, resource, namespace string) (bool, error) {
-	key := cacheKey(user, groups, verb, resource, namespace)
+func (s *SARAuthChecker) checkCache(user string, groups []string, group, verb, resource, namespace string) (bool, error) {
+	key := cacheKey(user, groups, group, verb, resource, namespace)
 	val, ok := s.cache.Load(key)
 	if !ok {
 		return false, errCacheMiss
@@ -174,7 +192,7 @@ func (s *SARAuthChecker) checkCache(user string, groups []string, verb, resource
 // subresource "approve" in group "ai.suse.com". Results are cached; errors are not.
 func (s *SARAuthChecker) CheckPublisher(ctx context.Context, user string, groups []string) (bool, error) {
 	// Check cache first.
-	allowed, err := s.checkCache(user, groups, "", "", "")
+	allowed, err := s.checkCache(user, groups, "ai.suse.com", "", "", "")
 	if err == nil {
 		return allowed, nil
 	}
@@ -200,7 +218,7 @@ func (s *SARAuthChecker) CheckPublisher(ctx context.Context, user string, groups
 	}
 
 	// Cache the result.
-	key := cacheKey(user, groups, "", "", "")
+	key := cacheKey(user, groups, "ai.suse.com", "", "", "")
 	s.cache.Store(key, cacheEntry{
 		allowed: result.Status.Allowed,
 		at:      time.Now(),
@@ -209,13 +227,13 @@ func (s *SARAuthChecker) CheckPublisher(ctx context.Context, user string, groups
 	return result.Status.Allowed, nil
 }
 
-// CheckResource checks whether the user may perform verb on resource (in the
-// ai.suse.com group) within namespace. Empty namespace means cluster-scoped
-// (e.g. for list across all namespaces). Results are cached for cacheTTL keyed
-// by user+groups+verb+resource+namespace so different verbs on the same
-// resource don't collide.
-func (s *SARAuthChecker) CheckResource(ctx context.Context, user string, groups []string, namespace, verb, resource string) (bool, error) {
-	allowed, err := s.checkCache(user, groups, verb, resource, namespace)
+// CheckResource checks whether the user may perform verb on resource (in
+// the given API group) within namespace. Empty namespace means
+// cluster-scoped (e.g. for list across all namespaces). Results are cached
+// for cacheTTL keyed by user+groups+group+verb+resource+namespace so
+// different verbs / groups / namespaces on the same resource don't collide.
+func (s *SARAuthChecker) CheckResource(ctx context.Context, user string, groups []string, group, namespace, verb, resource string) (bool, error) {
+	allowed, err := s.checkCache(user, groups, group, verb, resource, namespace)
 	if err == nil {
 		return allowed, nil
 	}
@@ -226,7 +244,7 @@ func (s *SARAuthChecker) CheckResource(ctx context.Context, user string, groups 
 			Groups: groups,
 			ResourceAttributes: &authorizationv1.ResourceAttributes{
 				Verb:      verb,
-				Group:     "ai.suse.com",
+				Group:     group,
 				Resource:  resource,
 				Namespace: namespace,
 			},
@@ -238,7 +256,7 @@ func (s *SARAuthChecker) CheckResource(ctx context.Context, user string, groups 
 		return false, fmt.Errorf("SubjectAccessReview: %w", err)
 	}
 
-	key := cacheKey(user, groups, verb, resource, namespace)
+	key := cacheKey(user, groups, group, verb, resource, namespace)
 	s.cache.Store(key, cacheEntry{
 		allowed: result.Status.Allowed,
 		at:      time.Now(),
