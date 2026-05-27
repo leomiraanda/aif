@@ -66,6 +66,9 @@ func NewEngineBus(
 // breaking-change. If any engine grows fallibility, aggregate via
 // errors.Join here.
 func (b *engineBus) Apply(_ context.Context, s controller.SettingsSnapshot) error {
+	// Hoisted (not recomputed per-engine) so both Fleet engines provably
+	// receive the byte-identical projection — engine-bus tests assert
+	// LastSettings() equality across the two. Semantic clarity, not perf.
 	fleetSettings := b.projectFleet(s)
 	b.helm.UpdateSettings(b.projectHelm(s))
 	b.fleetBundle.UpdateSettings(fleetSettings)
