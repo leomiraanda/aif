@@ -151,9 +151,23 @@ export function listWorkloads(): Promise<any> {
 }
 
 export function getWorkload(namespace: string, name: string): Promise<any> {
-  return operatorFetch(`/api/v1/workloads/${ namespace }/${ name }`);
+  return operatorFetch(`/api/v1/workloads/${ encodeURIComponent(namespace) }/${ encodeURIComponent(name) }`);
+}
+
+export function createWorkload(payload: { metadata: { name: string; namespace: string }; spec: any }): Promise<any> {
+  return operatorFetch('/api/v1/workloads', {
+    method: 'POST',
+    body:   JSON.stringify(payload),
+  });
+}
+
+export function putWorkload(namespace: string, name: string, spec: any): Promise<any> {
+  return operatorFetch(`/api/v1/workloads/${ encodeURIComponent(namespace) }/${ encodeURIComponent(name) }`, {
+    method: 'PUT',
+    body:   JSON.stringify({ spec }),
+  });
 }
 
 export function deleteWorkload(namespace: string, name: string): Promise<void> {
-  return operatorFetch(`/api/v1/workloads/${ namespace }/${ name }`, { method: 'DELETE' });
+  return operatorFetch(`/api/v1/workloads/${ encodeURIComponent(namespace) }/${ encodeURIComponent(name) }`, { method: 'DELETE' });
 }
