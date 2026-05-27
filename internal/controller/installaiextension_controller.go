@@ -179,7 +179,15 @@ func (r *InstallAIExtensionReconciler) reconcileHelmSource(ctx context.Context, 
 	}
 
 	releaseName := rancher.DeriveReleaseName(helmSource.ChartURL)
-	ext.Status.HelmReleaseName = releaseName
+
+	// If the chart URL changed, the release name changes too. Uninstall the
+	// old release before installing the new one so it doesn't get orphaned.
+	if ext.Status.HelmReleaseName != "" && ext.Status.HelmReleaseName != releaseName {
+		logger.Info("chart URL changed, uninstalling old release", "old", ext.Status.HelmReleaseName, "new", releaseName)
+		if err := r.HelmEngine.Uninstall(ctx, rancher.UIPluginNamespace, ext.Status.HelmReleaseName); err != nil {
+			logger.Error(err, "failed to uninstall old Helm release", "release", ext.Status.HelmReleaseName)
+		}
+	}
 
 	overrides := helm.Overrides{}
 	if len(helmSource.Values) > 0 {
@@ -213,6 +221,7 @@ func (r *InstallAIExtensionReconciler) reconcileHelmSource(ctx context.Context, 
 			Message:            fmt.Sprintf("Helm release %s revision %d", existing.Name, existing.Revision),
 			ObservedGeneration: ext.Generation,
 		})
+		ext.Status.HelmReleaseName = releaseName
 	} else {
 		installReq := helm.InstallRequest{
 			Namespace:   rancher.UIPluginNamespace,
@@ -262,6 +271,7 @@ func (r *InstallAIExtensionReconciler) reconcileHelmSource(ctx context.Context, 
 			Message:            fmt.Sprintf("Helm release %s revision %d", status.Name, status.Revision),
 			ObservedGeneration: ext.Generation,
 		})
+		ext.Status.HelmReleaseName = releaseName
 		ext.Status.HelmReleaseRevision = int32(status.Revision)
 		r.Recorder.Eventf(ext, nil, corev1.EventTypeNormal, conditions.ReasonInstalled, conditions.ActionInstalling, "Helm release %s revision %d deployed", status.Name, status.Revision)
 	}
@@ -321,15 +331,23 @@ func (r *InstallAIExtensionReconciler) reconcileHelmSource(ctx context.Context, 
 		CRName:        ext.Name,
 		ServiceURL:    serviceURL,
 	}); err != nil {
+		msg := fmt.Sprintf("ClusterRepo failed: %v", err)
 		conditions.Set(&ext.Status.Conditions, metav1.Condition{
 			Type:               conditions.TypeClusterRepoReady,
 			Status:             metav1.ConditionFalse,
 			Reason:             conditions.ReasonClusterRepoFailed,
-			Message:            fmt.Sprintf("ClusterRepo failed: %v", err),
+			Message:            msg,
+			ObservedGeneration: ext.Generation,
+		})
+		conditions.Set(&ext.Status.Conditions, metav1.Condition{
+			Type:               conditions.TypeReady,
+			Status:             metav1.ConditionFalse,
+			Reason:             conditions.ReasonClusterRepoFailed,
+			Message:            msg,
 			ObservedGeneration: ext.Generation,
 		})
 		ext.Status.Phase = aifv1.InstallAIExtensionPhaseFailed
-		return ctrl.Result{}, err
+		return ctrl.Result{}, nil
 	}
 
 	conditions.Set(&ext.Status.Conditions, metav1.Condition{
@@ -355,6 +373,13 @@ func (r *InstallAIExtensionReconciler) reconcileHelmSource(ctx context.Context, 
 				Message:            msg,
 				ObservedGeneration: ext.Generation,
 			})
+			conditions.Set(&ext.Status.Conditions, metav1.Condition{
+				Type:               conditions.TypeReady,
+				Status:             metav1.ConditionFalse,
+				Reason:             conditions.ReasonInvalidSpec,
+				Message:            msg,
+				ObservedGeneration: ext.Generation,
+			})
 			ext.Status.Phase = aifv1.InstallAIExtensionPhaseFailed
 			r.Recorder.Eventf(ext, nil, corev1.EventTypeWarning, conditions.ReasonInvalidSpec, conditions.ActionCreating, msg)
 			return ctrl.Result{}, nil
@@ -370,16 +395,24 @@ func (r *InstallAIExtensionReconciler) reconcileHelmSource(ctx context.Context, 
 		Endpoint:         pluginEndpoint,
 		Metadata:         pluginMeta,
 	}); err != nil {
+		msg := fmt.Sprintf("UIPlugin creation failed: %v", err)
 		conditions.Set(&ext.Status.Conditions, metav1.Condition{
 			Type:               conditions.TypeUIPluginReady,
 			Status:             metav1.ConditionFalse,
 			Reason:             conditions.ReasonUIPluginNotCreated,
-			Message:            fmt.Sprintf("UIPlugin creation failed: %v", err),
+			Message:            msg,
+			ObservedGeneration: ext.Generation,
+		})
+		conditions.Set(&ext.Status.Conditions, metav1.Condition{
+			Type:               conditions.TypeReady,
+			Status:             metav1.ConditionFalse,
+			Reason:             conditions.ReasonUIPluginNotCreated,
+			Message:            msg,
 			ObservedGeneration: ext.Generation,
 		})
 		ext.Status.Phase = aifv1.InstallAIExtensionPhaseFailed
 		r.Recorder.Eventf(ext, nil, corev1.EventTypeWarning, conditions.ReasonUIPluginNotCreated, conditions.ActionCreating, err.Error())
-		return ctrl.Result{}, err
+		return ctrl.Result{}, nil
 	}
 
 	conditions.Set(&ext.Status.Conditions, metav1.Condition{
@@ -414,15 +447,23 @@ func (r *InstallAIExtensionReconciler) reconcileGitSource(ctx context.Context, e
 		RepoURL:       gitSource.Repo,
 		Branch:        gitSource.Branch,
 	}); err != nil {
+		msg := fmt.Sprintf("ClusterRepo failed: %v", err)
 		conditions.Set(&ext.Status.Conditions, metav1.Condition{
 			Type:               conditions.TypeClusterRepoReady,
 			Status:             metav1.ConditionFalse,
 			Reason:             conditions.ReasonClusterRepoFailed,
-			Message:            fmt.Sprintf("ClusterRepo failed: %v", err),
+			Message:            msg,
+			ObservedGeneration: ext.Generation,
+		})
+		conditions.Set(&ext.Status.Conditions, metav1.Condition{
+			Type:               conditions.TypeReady,
+			Status:             metav1.ConditionFalse,
+			Reason:             conditions.ReasonClusterRepoFailed,
+			Message:            msg,
 			ObservedGeneration: ext.Generation,
 		})
 		ext.Status.Phase = aifv1.InstallAIExtensionPhaseFailed
-		return ctrl.Result{}, err
+		return ctrl.Result{}, nil
 	}
 
 	conditions.Set(&ext.Status.Conditions, metav1.Condition{
@@ -436,11 +477,19 @@ func (r *InstallAIExtensionReconciler) reconcileGitSource(ctx context.Context, e
 
 	rawURL, err := rancher.GitRepoToRawURL(gitSource.Repo, gitSource.Branch)
 	if err != nil {
+		msg := fmt.Sprintf("cannot derive raw URL: %v", err)
 		conditions.Set(&ext.Status.Conditions, metav1.Condition{
 			Type:               conditions.TypeUIPluginReady,
 			Status:             metav1.ConditionFalse,
 			Reason:             conditions.ReasonUIPluginNotCreated,
-			Message:            fmt.Sprintf("cannot derive raw URL: %v", err),
+			Message:            msg,
+			ObservedGeneration: ext.Generation,
+		})
+		conditions.Set(&ext.Status.Conditions, metav1.Condition{
+			Type:               conditions.TypeReady,
+			Status:             metav1.ConditionFalse,
+			Reason:             conditions.ReasonUIPluginNotCreated,
+			Message:            msg,
 			ObservedGeneration: ext.Generation,
 		})
 		ext.Status.Phase = aifv1.InstallAIExtensionPhaseFailed
@@ -462,16 +511,24 @@ func (r *InstallAIExtensionReconciler) reconcileGitSource(ctx context.Context, e
 		})
 	} else {
 		if err := r.ensureUIPluginGit(ctx, ext, rawURL); err != nil {
+			msg := fmt.Sprintf("UIPlugin chart install failed: %v", err)
 			conditions.Set(&ext.Status.Conditions, metav1.Condition{
 				Type:               conditions.TypeUIPluginReady,
 				Status:             metav1.ConditionFalse,
 				Reason:             conditions.ReasonUIPluginNotCreated,
-				Message:            fmt.Sprintf("UIPlugin chart install failed: %v", err),
+				Message:            msg,
+				ObservedGeneration: ext.Generation,
+			})
+			conditions.Set(&ext.Status.Conditions, metav1.Condition{
+				Type:               conditions.TypeReady,
+				Status:             metav1.ConditionFalse,
+				Reason:             conditions.ReasonUIPluginNotCreated,
+				Message:            msg,
 				ObservedGeneration: ext.Generation,
 			})
 			ext.Status.Phase = aifv1.InstallAIExtensionPhaseFailed
 			r.Recorder.Eventf(ext, nil, corev1.EventTypeWarning, conditions.ReasonUIPluginNotCreated, conditions.ActionInstalling, err.Error())
-			return ctrl.Result{}, err
+			return ctrl.Result{}, nil
 		}
 
 		conditions.Set(&ext.Status.Conditions, metav1.Condition{
@@ -548,6 +605,24 @@ func (r *InstallAIExtensionReconciler) cleanupStaleResources(ctx context.Context
 	if oldSource != "" && oldSource != newSource {
 		logger.Info("source kind changed, cleaning up old source resources", "old", oldSource, "new", newSource)
 
+		// Delete ClusterRepo and UIPlugin from the old source so the new
+		// source can recreate them cleanly (different backing: URL-based
+		// vs git-based ClusterRepo, Helm-managed vs unstructured UIPlugin).
+		name := oldName
+		if name == "" {
+			name = newName
+		}
+		if name != "" {
+			if err := r.Catalog.DeleteClusterRepo(ctx, name); err != nil {
+				logger.Error(err, "failed to delete ClusterRepo on source switch", "name", name)
+				errs = append(errs, err)
+			}
+			if err := r.Catalog.DeleteUIPlugin(ctx, name); err != nil {
+				logger.Error(err, "failed to delete UIPlugin on source switch", "name", name)
+				errs = append(errs, err)
+			}
+		}
+
 		if oldSource == aifv1.ExtensionSourceKindHelm {
 			if ext.Status.HelmReleaseName != "" {
 				if err := r.HelmEngine.Uninstall(ctx, rancher.UIPluginNamespace, ext.Status.HelmReleaseName); err != nil {
@@ -564,10 +639,6 @@ func (r *InstallAIExtensionReconciler) cleanupStaleResources(ctx context.Context
 		}
 
 		if oldSource == aifv1.ExtensionSourceKindGit {
-			name := oldName
-			if name == "" {
-				name = newName
-			}
 			if err := r.HelmEngine.Uninstall(ctx, rancher.UIPluginNamespace, name); err != nil {
 				logger.Error(err, "failed to uninstall UIPlugin Helm release on source switch", "release", name)
 				errs = append(errs, err)
