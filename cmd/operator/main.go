@@ -258,7 +258,9 @@ func main() {
 		os.Exit(1)
 	}
 	sarChecker := api.NewSARAuthChecker(kubeClient)
-	// workloadK8sRepo satisfies both workloadReader and workloadMutator — pass it for both.
+	// The same K8s adapter serves the upgrader workflow and the CRUD handler —
+	// two narrow ports (workload.Reader + the consumer-defined mutator port in
+	// internal/api), one backing struct.
 	workloadsHandler := api.NewWorkloadsHandler(workloadUpgrader, workloadK8sRepo, workloadK8sRepo, sarChecker, logger)
 
 	// Setup API server
