@@ -173,10 +173,12 @@ func PhaseToCR(p Phase) aifv1.WorkloadPhase {
 }
 
 // blueprintCRName encodes (lineage, version) as the CR's metadata.name.
-// Blueprint CRs are cluster-scoped, immutable per version, named by joining
-// lineage and version with a hyphen.
-func blueprintCRName(name, version string) string {
-	return name + "-" + version
+// Blueprint CRs are cluster-scoped, immutable per version, named
+// "{lineage}.{version}" per ARCHITECTURE.md §4.3 — the dot disambiguates
+// the join because lineages themselves contain hyphens
+// (e.g. "nvidia-nim-llm.1.0.0", not "nvidia-nim-llm-1.0.0").
+func blueprintCRName(lineage, version string) string {
+	return lineage + "." + version
 }
 
 // perClusterPhasesFromCR projects the per-cluster phase strings stored in

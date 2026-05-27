@@ -59,7 +59,7 @@ func TestResolveSource_Blueprint_FetchesAndCopiesComponents(t *testing.T) {
 
 	bpRepo := d.bpRepo.(*blueprint.FakeRepository)
 	bpRepo.Seed(&aifv1.Blueprint{
-		ObjectMeta: metav1.ObjectMeta{Name: "rag-1.2.0"},
+		ObjectMeta: metav1.ObjectMeta{Name: "rag.1.2.0"},
 		Spec: aifv1.BlueprintSpec{
 			BlueprintName: "rag",
 			Version:       "1.2.0",
@@ -98,6 +98,39 @@ func TestResolveSource_Blueprint_FetchesAndCopiesComponents(t *testing.T) {
 	}
 }
 
+// TestResolveSource_Blueprint_HyphenInLineage locks in the canonical
+// {lineage}.{version} CR name encoding (ARCHITECTURE.md §4.3) against
+// regression to a hyphen separator. Wrapped vendor Blueprints use
+// lineages like "nvidia-nim-llm" (pkg/blueprint/wrapper.go), so a
+// hyphen separator would produce the ambiguous "nvidia-nim-llm-1.0.0"
+// and miss the real "nvidia-nim-llm.1.0.0" CR.
+func TestResolveSource_Blueprint_HyphenInLineage(t *testing.T) {
+	d := newTestDeployer(t)
+
+	bpRepo := d.bpRepo.(*blueprint.FakeRepository)
+	bpRepo.Seed(&aifv1.Blueprint{
+		ObjectMeta: metav1.ObjectMeta{Name: "nvidia-nim-llm.1.0.0"},
+		Spec: aifv1.BlueprintSpec{
+			BlueprintName: "nvidia-nim-llm",
+			Version:       "1.0.0",
+			Components: []aifv1.ComponentRef{
+				{Name: "nvidia-nim-llm", Kind: aifv1.ComponentKindApp, App: &aifv1.AppRef{Repo: "r", Chart: "nim-llm", Version: "1.0.0"}},
+			},
+		},
+	})
+
+	req := DeployRequest{
+		Source: SourceRef{
+			Kind:      SourceKindBlueprint,
+			Blueprint: &BlueprintRef{Name: "nvidia-nim-llm", Version: "1.0.0"},
+		},
+	}
+
+	if _, err := d.resolveSource(context.Background(), req); err != nil {
+		t.Fatalf("resolveSource: %v", err)
+	}
+}
+
 func TestResolveSource_Blueprint_NotFound_ReturnsErrSourceNotResolved(t *testing.T) {
 	d := newTestDeployer(t)
 	req := DeployRequest{
@@ -113,7 +146,7 @@ func TestResolveSource_Blueprint_RejectsNestedBlueprint(t *testing.T) {
 	d := newTestDeployer(t)
 	bpRepo := d.bpRepo.(*blueprint.FakeRepository)
 	bpRepo.Seed(&aifv1.Blueprint{
-		ObjectMeta: metav1.ObjectMeta{Name: "outer-1.0"},
+		ObjectMeta: metav1.ObjectMeta{Name: "outer.1.0"},
 		Spec: aifv1.BlueprintSpec{
 			Components: []aifv1.ComponentRef{
 				{Name: "child", Kind: aifv1.ComponentKindBlueprint, Blueprint: &aifv1.BlueprintRef{Name: "inner", Version: "1"}},
