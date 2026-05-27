@@ -444,3 +444,61 @@ func TestWorkloadsCreate_MissingUser(t *testing.T) {
 		t.Errorf("expected 403, got %d", rr.Code)
 	}
 }
+
+func TestWorkloadsPatch_HappyPath(t *testing.T) {
+	rig := newListDeleteTestRig(t)
+	// Seed an App workload
+	w := &aifv1.Workload{}
+	w.Namespace = "team-a"
+	w.Name = "my-app"
+	w.ResourceVersion = "1"
+	w.Spec.Source.Kind = aifv1.WorkloadSourceKindApp
+	w.Spec.Source.App = &aifv1.AppRef{Repo: "repo", Chart: "chart", Version: "1.0.0"}
+	rig.repo.Seed(w)
+
+	body := map[string]any{
+		"spec": map[string]any{
+			"source": map[string]any{
+				"kind": "App",
+				"app":  map[string]any{"repo": "repo", "chart": "chart", "version": "2.0.0"},
+			},
+		},
+	}
+	buf, _ := json.Marshal(body)
+	req := httptest.NewRequest("PATCH", "/api/v1/workloads/team-a/my-app", bytes.NewReader(buf))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Impersonate-User", "alice")
+	rr := httptest.NewRecorder()
+	rig.mux.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestWorkloadsPatch_NotFound(t *testing.T) {
+	rig := newListDeleteTestRig(t)
+	body := map[string]any{"spec": map[string]any{}}
+	buf, _ := json.Marshal(body)
+	req := httptest.NewRequest("PATCH", "/api/v1/workloads/ns/missing", bytes.NewReader(buf))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Impersonate-User", "alice")
+	rr := httptest.NewRecorder()
+	rig.mux.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusNotFound {
+		t.Errorf("expected 404, got %d", rr.Code)
+	}
+}
+
+func TestWorkloadsPatch_MissingUser(t *testing.T) {
+	rig := newListDeleteTestRig(t)
+	req := httptest.NewRequest("PATCH", "/api/v1/workloads/ns/wl", bytes.NewReader([]byte(`{}`)))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	rig.mux.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusForbidden {
+		t.Errorf("expected 403, got %d", rr.Code)
+	}
+}

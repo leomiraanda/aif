@@ -62,6 +62,7 @@ func (h *WorkloadsHandler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/workloads", h.list)
 	mux.HandleFunc("POST /api/v1/workloads", h.createWorkload)
 	mux.HandleFunc("DELETE /api/v1/workloads/{namespace}/{name}", h.deleteWorkload)
+	mux.HandleFunc("PATCH /api/v1/workloads/{namespace}/{name}", h.patchWorkload)
 	mux.HandleFunc("POST /api/v1/workloads/{namespace}/{name}/upgrade", h.upgrade)
 }
 
@@ -149,6 +150,64 @@ func (h *WorkloadsHandler) createWorkload(w http.ResponseWriter, r *http.Request
 
 	LoggerFromContext(r.Context()).Info("workload created", "namespace", wl.Namespace, "name", wl.Name, "user", user)
 	writeJSON(w, http.StatusCreated, wl)
+}
+
+type patchWorkloadRequest struct {
+	Spec aifv1.WorkloadSpec `json:"spec"`
+}
+
+func (h *WorkloadsHandler) patchWorkload(w http.ResponseWriter, r *http.Request) {
+	user, _ := ExtractUser(r)
+	if user == "" {
+		writeError(w, http.StatusForbidden, fmt.Errorf("%w: Impersonate-User header missing", ErrForbidden))
+		return
+	}
+
+	ns := r.PathValue("namespace")
+	name := r.PathValue("name")
+
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+	var req patchWorkloadRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("%w: invalid request body: %v", ErrInvalidInput, err))
+		return
+	}
+
+	orig, err := h.reader.Get(r.Context(), ns, name)
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			writeError(w, http.StatusNotFound, ErrNotFound)
+			return
+		}
+		LoggerFromContext(r.Context()).Error("get workload failed", "ns", ns, "name", name, "error", err)
+		writeError(w, http.StatusInternalServerError, ErrInternal)
+		return
+	}
+
+	patched := orig.DeepCopy()
+	patched.Spec = req.Spec
+	// Preserve the required display-name field — callers sending a partial spec
+	// should not accidentally zero it out.
+	if patched.Spec.Name == "" {
+		patched.Spec.Name = orig.Spec.Name
+	}
+
+	if err := h.mutator.Patch(r.Context(), patched, orig); err != nil {
+		if apierrors.IsConflict(err) {
+			writeError(w, http.StatusConflict, ErrConflict)
+			return
+		}
+		if apierrors.IsNotFound(err) {
+			writeError(w, http.StatusNotFound, ErrNotFound)
+			return
+		}
+		LoggerFromContext(r.Context()).Error("patch workload failed", "ns", ns, "name", name, "error", err)
+		writeError(w, http.StatusInternalServerError, ErrInternal)
+		return
+	}
+
+	LoggerFromContext(r.Context()).Info("workload patched", "namespace", ns, "name", name, "user", user)
+	writeJSON(w, http.StatusOK, patched)
 }
 
 type upgradeRequest struct {
