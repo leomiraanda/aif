@@ -31,3 +31,8 @@ test('InstallProgressModal.vue: uses ModalWithCard', () => {
   const src = read('components/wizards/InstallProgressModal.vue');
   assert.match(src, /import\s+ModalWithCard\s+from\s+'@shell\/components\/ModalWithCard'/);
 });
+
+test('InstallProgressModal.vue: defines hasFailures computed', () => {
+  const src = read('components/wizards/InstallProgressModal.vue');
+  assert.match(src, /hasFailures\s*\(\)\s*\{[\s\S]*?PROGRESS_STATUS\.FAILED/);
+});

@@ -189,4 +189,5 @@ aif:
     installProgress:
       title:  'Installing'
       done:   'Done'
+      close:  'Close'
       cancel: 'Cancel'

@@ -21,7 +21,10 @@
     </template>
     <template #footer>
       <div class="aif-progress-modal__footer">
-        <button v-if="isDone" class="btn role-primary" @click="$emit('done')">
+        <button v-if="isDone && hasFailures" class="btn role-primary" @click="$emit('done')">
+          <t k="aif.wizards.installProgress.close" />
+        </button>
+        <button v-else-if="isDone" class="btn role-primary" @click="$emit('done')">
           <t k="aif.wizards.installProgress.done" />
         </button>
         <button v-else class="btn role-secondary" @click="$emit('cancel')">
@@ -33,6 +36,8 @@
 </template>
 
 <script>
+// AIDEV-NOTE: first consumer is the App-install wizard (Group 1 Task 1-1 / P6-3).
+// Component shape may evolve when wired up; revisit prop names + emits there.
 import { defineComponent } from 'vue';
 import ModalWithCard from '@shell/components/ModalWithCard';
 
@@ -66,6 +71,10 @@ export default defineComponent({
 
     isDone() {
       return this.progress.length > 0 && this.progress.every((p) => p.status !== PROGRESS_STATUS.INSTALLING);
+    },
+
+    hasFailures() {
+      return this.progress.some((p) => p.status === PROGRESS_STATUS.FAILED);
     },
   },
 });
