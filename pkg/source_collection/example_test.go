@@ -26,36 +26,61 @@ import (
 // Spec hooks: ARCHITECTURE.md §13.2 (Application Collection HTTP API
 // shape) and §6.2 (source_collection.Client interface).
 func Example_clientList() {
-	// 1. Spin up a fake Application Collection API serving three SUSE-
-	//    certified HELM_CHART applications.
+	// 1. Spin up a fake Application Collection API serving three
+	//    applications. List endpoint returns minimal items; detail
+	//    endpoint supplies labels (→ Categories); /v1/artifacts
+	//    supplies (version, revision) → (LatestVersion, ChartTag).
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/applications", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"items": []map[string]any{
-				{
-					"slug_name":      "milvus",
-					"title":          "Milvus",
-					"publisher_name": "Zilliz",
-					"helm":           map[string]string{"repository_url": "oci://dp.apps.rancher.io/charts", "chart_name": "milvus"},
-					"latest_version": map[string]string{"version": "2.4.0"},
-				},
-				{
-					"slug_name":      "ollama",
-					"title":          "Ollama",
-					"publisher_name": "Ollama Inc",
-					"helm":           map[string]string{"repository_url": "oci://dp.apps.rancher.io/charts", "chart_name": "ollama"},
-					"latest_version": map[string]string{"version": "0.4.1"},
-				},
-				{
-					"slug_name":      "vllm",
-					"title":          "vLLM",
-					"publisher_name": "vLLM Project",
-					"helm":           map[string]string{"repository_url": "oci://dp.apps.rancher.io/charts", "chart_name": "vllm"},
-					"latest_version": map[string]string{"version": "0.6.0"},
-				},
+				{"slug_name": "milvus", "name": "Milvus"},
+				{"slug_name": "ollama", "name": "Ollama"},
+				{"slug_name": "vllm", "name": "vLLM"},
 			},
 		})
+	})
+	mux.HandleFunc("/v1/applications/", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		slug := r.URL.Path[len("/v1/applications/"):]
+		details := map[string]map[string]any{
+			"milvus": {
+				"slug_name": "milvus",
+				"labels":    []string{"category:vector-db"},
+				"branches":  []map[string]any{{"baseline": "2.4.0", "is_lts": false}},
+			},
+			"ollama": {
+				"slug_name": "ollama",
+				"labels":    []string{"category:llm"},
+				"branches":  []map[string]any{{"baseline": "0.4.1", "is_lts": false}},
+			},
+			"vllm": {
+				"slug_name": "vllm",
+				"labels":    []string{"category:llm"},
+				"branches":  []map[string]any{{"baseline": "0.6.0", "is_lts": false}},
+			},
+		}
+		_ = json.NewEncoder(w).Encode(details[slug])
+	})
+	mux.HandleFunc("/v1/artifacts", func(w http.ResponseWriter, r *http.Request) {
+		slug := r.URL.Query().Get("component_slug_name")
+		// Map each example slug to a deterministic chart tag. Add entries
+		// here whenever the list mock above gains a new app.
+		tags := map[string]struct{ version, revision string }{
+			"milvus": {"2.4.0", "1"},
+			"ollama": {"0.4.1", "1"},
+			"vllm":   {"0.6.0", "1"},
+		}
+		v, ok := tags[slug]
+		if !ok {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		_, _ = w.Write([]byte(fmt.Sprintf(`{
+			"items":[{"name":"%s:%s-%s","version":%q,"revision":%q,"packaging_format":"HELM_CHART","application_version":"ignored"}],
+			"page":1,"page_size":1,"total_size":1,"total_pages":1
+		}`, slug, v.version, v.revision, v.version, v.revision)))
 	})
 	ts := httptest.NewServer(mux)
 	defer ts.Close()
@@ -65,6 +90,7 @@ func Example_clientList() {
 	c, _ := source_collection.NewClient(logger)
 	c.UpdateSettings(source_collection.EngineSettings{
 		APIURL:   ts.URL,
+		OCIHost:  "dp.apps.rancher.io",
 		Username: "demo-user",
 		Token:    "demo-token",
 	})
@@ -80,13 +106,17 @@ func Example_clientList() {
 	//    by ID to make the Output independent of upstream ordering).
 	sort.Slice(apps, func(i, j int) bool { return apps[i].ID < apps[j].ID })
 	for _, a := range apps {
-		fmt.Printf("%-10s  publisher=%-15s  chart=%s\n", a.ID, a.Publisher, a.ChartRef)
+		category := ""
+		if len(a.Categories) > 0 {
+			category = a.Categories[0]
+		}
+		fmt.Printf("%-10s  version=%-6s  category=%-10s  chart=%s\n", a.ID, a.LatestVersion, category, a.ChartRef)
 	}
 
 	// Output:
-	// milvus      publisher=Zilliz           chart=oci://dp.apps.rancher.io/charts/milvus:2.4.0
-	// ollama      publisher=Ollama Inc       chart=oci://dp.apps.rancher.io/charts/ollama:0.4.1
-	// vllm        publisher=vLLM Project     chart=oci://dp.apps.rancher.io/charts/vllm:0.6.0
+	// milvus      version=2.4.0   category=vector-db   chart=oci://dp.apps.rancher.io/charts/milvus:2.4.0-1
+	// ollama      version=0.4.1   category=llm         chart=oci://dp.apps.rancher.io/charts/ollama:0.4.1-1
+	// vllm        version=0.6.0   category=llm         chart=oci://dp.apps.rancher.io/charts/vllm:0.6.0-1
 }
 
 // Example_chartAnnotations exercises the AnnotationReader against an

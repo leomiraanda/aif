@@ -16,7 +16,8 @@
           <span v-if="app.referenceBlueprint" class="publisher-badge publisher-badge--ref-blueprint">
             {{ t('aif.pages.apps.badge.referenceBlueprint') }}
           </span>
-          <span class="app-card__version">v{{ app.version }}</span>
+          <span v-if="formattedVersion" class="app-card__version">{{ formattedVersion }}</span>
+          <span v-if="formattedVersion && formattedDate" class="app-card__meta-sep" aria-hidden="true">·</span>
           <span v-if="formattedDate" class="app-card__updated">{{ formattedDate }}</span>
         </div>
       </div>
@@ -86,6 +87,16 @@ export default defineComponent({
       return formatted === '—' ? '' : formatted;
     });
 
+    const formattedVersion = computed(() => {
+      const v = props.app.version;
+
+      if (!v) {
+        return '';
+      }
+
+      return /^\d/.test(v) ? `v${ v }` : v;
+    });
+
     const displayTags = computed(() => {
       const all = [...(props.app.categories || []), ...(props.app.tags || [])];
       const unique = [...new Set(all)];
@@ -97,7 +108,7 @@ export default defineComponent({
       event.target.src = FALLBACK_LOGO;
     };
 
-    return { fallbackLogo, formattedDate, displayTags, onImgError, t };
+    return { fallbackLogo, formattedDate, formattedVersion, displayTags, onImgError, t };
   }
 });
 </script>
@@ -183,7 +194,8 @@ export default defineComponent({
 }
 
 .app-card__version,
-.app-card__updated {
+.app-card__updated,
+.app-card__meta-sep {
   color: var(--muted);
   font-size: 10px;
 }
