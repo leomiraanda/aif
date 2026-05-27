@@ -146,10 +146,6 @@ const MOCK_APPS: App[] = [
 ];
 
 export const mockAPI = {
-  bundles: {
-    // submit, withdraw, approve, requestChanges, testDeploy, pendingReview
-  },
-
   blueprints: {
     // versions, deploy, deprecate, withdraw, reactivate
   },
