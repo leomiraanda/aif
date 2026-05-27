@@ -122,7 +122,7 @@ func (u *upgrader) validate(ctx context.Context, view *UpgradeWorkloadView, toVe
 
 	lineage := view.Blueprint.Name
 	currentVersion := view.Blueprint.Version
-	targetCRName := lineage + "." + toVersion
+	targetCRName := blueprintCRName(lineage, toVersion)
 
 	bp, err := u.blueprints.GetForUpgrade(ctx, targetCRName)
 	if err != nil {
