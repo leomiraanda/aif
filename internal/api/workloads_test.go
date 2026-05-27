@@ -386,3 +386,61 @@ func TestWorkloadsDelete_MissingUser(t *testing.T) {
 		t.Errorf("expected 403, got %d", rr.Code)
 	}
 }
+
+func TestWorkloadsCreate_HappyPathApp(t *testing.T) {
+	rig := newListDeleteTestRig(t)
+	body := map[string]any{
+		"metadata": map[string]any{
+			"name":      "my-wl",
+			"namespace": "team-a",
+		},
+		"spec": map[string]any{
+			"source": map[string]any{
+				"kind": "App",
+				"app":  map[string]any{"repo": "dp.apps.rancher.io", "chart": "nvidia-nim", "version": "1.0.0"},
+			},
+			"targetClusters": []string{"c-abc123"},
+			"deployStrategy": "helm",
+		},
+	}
+	buf, _ := json.Marshal(body)
+	req := httptest.NewRequest("POST", "/api/v1/workloads", bytes.NewReader(buf))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Impersonate-User", "alice")
+	rr := httptest.NewRecorder()
+	rig.mux.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestWorkloadsCreate_MissingName(t *testing.T) {
+	rig := newListDeleteTestRig(t)
+	body := map[string]any{
+		"metadata": map[string]any{"namespace": "team-a"},
+		"spec":     map[string]any{"source": map[string]any{"kind": "App"}},
+	}
+	buf, _ := json.Marshal(body)
+	req := httptest.NewRequest("POST", "/api/v1/workloads", bytes.NewReader(buf))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Impersonate-User", "alice")
+	rr := httptest.NewRecorder()
+	rig.mux.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d", rr.Code)
+	}
+}
+
+func TestWorkloadsCreate_MissingUser(t *testing.T) {
+	rig := newListDeleteTestRig(t)
+	req := httptest.NewRequest("POST", "/api/v1/workloads", bytes.NewReader([]byte(`{}`)))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	rig.mux.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusForbidden {
+		t.Errorf("expected 403, got %d", rr.Code)
+	}
+}

@@ -60,6 +60,7 @@ func NewWorkloadsHandler(upgrader workload.Upgrader, reader workloadReader, muta
 // Register wires this handler's routes onto the provided mux.
 func (h *WorkloadsHandler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/workloads", h.list)
+	mux.HandleFunc("POST /api/v1/workloads", h.createWorkload)
 	mux.HandleFunc("DELETE /api/v1/workloads/{namespace}/{name}", h.deleteWorkload)
 	mux.HandleFunc("POST /api/v1/workloads/{namespace}/{name}/upgrade", h.upgrade)
 }
@@ -98,6 +99,56 @@ func (h *WorkloadsHandler) deleteWorkload(w http.ResponseWriter, r *http.Request
 	}
 	LoggerFromContext(r.Context()).Info("workload deleted", "namespace", ns, "name", name, "user", user)
 	w.WriteHeader(http.StatusNoContent)
+}
+
+type createWorkloadRequest struct {
+	Metadata struct {
+		Name      string `json:"name"`
+		Namespace string `json:"namespace"`
+	} `json:"metadata"`
+	Spec aifv1.WorkloadSpec `json:"spec"`
+}
+
+func (h *WorkloadsHandler) createWorkload(w http.ResponseWriter, r *http.Request) {
+	user, _ := ExtractUser(r)
+	if user == "" {
+		writeError(w, http.StatusForbidden, fmt.Errorf("%w: Impersonate-User header missing", ErrForbidden))
+		return
+	}
+
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+	var req createWorkloadRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("%w: invalid request body: %v", ErrInvalidInput, err))
+		return
+	}
+	if req.Metadata.Name == "" || req.Metadata.Namespace == "" {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("%w: metadata.name and metadata.namespace are required", ErrInvalidInput))
+		return
+	}
+
+	wl := &aifv1.Workload{}
+	wl.Name = req.Metadata.Name
+	wl.Namespace = req.Metadata.Namespace
+	wl.Spec = req.Spec
+	// WorkloadSpec.Name is a required display-name field (MinLength=1). Default
+	// to metadata.name if the caller omits it.
+	if wl.Spec.Name == "" {
+		wl.Spec.Name = req.Metadata.Name
+	}
+
+	if err := h.mutator.Create(r.Context(), wl); err != nil {
+		if apierrors.IsAlreadyExists(err) {
+			writeError(w, http.StatusConflict, ErrConflict)
+			return
+		}
+		LoggerFromContext(r.Context()).Error("create workload failed", "name", wl.Name, "namespace", wl.Namespace, "error", err)
+		writeError(w, http.StatusInternalServerError, ErrInternal)
+		return
+	}
+
+	LoggerFromContext(r.Context()).Info("workload created", "namespace", wl.Namespace, "name", wl.Name, "user", user)
+	writeJSON(w, http.StatusCreated, wl)
 }
 
 type upgradeRequest struct {
