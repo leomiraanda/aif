@@ -71,9 +71,8 @@ export function init($plugin: IPlugin, store: any): void {
   ignoreType(CRD_TYPES.SETTINGS);
 
   // Blueprints: minted by approval workflow; only Deprecate/Withdraw/Reactivate are valid lifecycle actions.
-  // Workloads: removed via a custom Uninstall action (P6-6) that cleans up K8s resources, not raw delete.
   // Settings: singleton CR managed by the operator; no delete action in spec.
   configureType(CRD_TYPES.BLUEPRINT,  { isCreatable: false, isEditable: false, isRemovable: false, canYaml: true  });
-  configureType(CRD_TYPES.WORKLOAD,   { isCreatable: false, isEditable: false, isRemovable: false               });
-  configureType(CRD_TYPES.SETTINGS,   { isCreatable: false, isEditable: true,  isRemovable: false               });
+  configureType(CRD_TYPES.WORKLOAD,   { isCreatable: true,  isEditable: true,  isRemovable: true                  });
+  configureType(CRD_TYPES.SETTINGS,   { isCreatable: false, isEditable: true,  isRemovable: false                 });
 }
