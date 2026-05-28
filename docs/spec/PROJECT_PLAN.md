@@ -365,6 +365,10 @@ helm template aif-ui charts/aif-ui | grep 'ui-extensions-version: ">= 3.0.0 < 4.
 **Agent Prompt:**
 > Create five Helm charts in `charts/`: `aif-operator`, `aif-ui`, `generic-container`, `nim-llm`, `nim-vlm`. Follow `ARCHITECTURE.md §9` exactly. For `aif-operator`: (1) `values.yaml` per §9.1 — service ports api/health/metrics/webhook only (NO 5000), NO nvidia.apiKeySecretRef, include webhook.{enabled,certManager.enabled} block. (2) `templates/deployment.yaml` — securityContext per spec; emptyDir for `/data/charts`, `/data/git`, `/tmp`; probes at port 8081. NO env var `NVIDIA_API_KEY`. (3) `templates/rbac.yaml` — `ClusterRole` `aif-operator` with specific verbs per §8.4 markers, plus a separate `ClusterRole` `aif-blueprint-publisher` (unbound by default). (4) `templates/webhook.yaml` — `ValidatingWebhookConfiguration` for `aif-blueprint-immutability` plus cert-manager `Issuer` and `Certificate` resources, all gated by `.Values.webhook.enabled`. For `aif-ui`: single `UIPlugin` template with required annotation. For `nim-llm`/`nim-vlm`: GPU resource requests, tolerations, `imagePullSecrets: [{name: suse-registry-creds}]`. Done when `helm lint` passes on all five charts with no errors.
 
+> **Follow-up (post-merge, from PR #62 smoke-e2e harness):**
+>
+> 1. **`make helm-install` is a stub; smoke-e2e bypasses the chart entirely** because the throwaway k3d cluster has no cert-manager. Blocked on P0-7's `webhook.tlsMode=helm-hook` mode; once that ships, the same `hack/smoke-e2e.sh --via-chart` variant unblocks both stories. See P0-7's follow-up for the full AC; this story's chart skeleton is currently exercised only via `helm lint` + `helm template`.
+
 ---
 
 **ID:** P0-4
@@ -557,6 +561,10 @@ helm lint charts/aif-operator --set webhook.tlsMode=manual --set webhook.manual.
 
 **Agent Prompt:**
 > Implement webhook TLS mode parameterization per `ARCHITECTURE.md §9.1` + `§9.1.1`. Add the `webhook.tlsMode` enum to `values.yaml`. Implement `templates/webhook-tls-helm-hook.yaml` matching `§9.1.1 "Mode 3 — helm-hook"` verbatim — the ServiceAccount + ClusterRole + ClusterRoleBinding + Job with the four hook annotations. Implement `cmd/tls-bootstrap/main.go` (~150 lines, pure Go using `crypto/x509`, NO external image dependency — air-gap-friendly): generates self-signed CA + server cert (DNS names from §9.1.1 cert-manager template), writes Secret + patches ValidatingWebhookConfiguration. Update `templates/webhook-configuration.yaml` to template `caBundle` per mode. Update `templates/deployment.yaml` to mount the Secret regardless of mode (with mode-2 rename via volumeMount). Document trade-offs in `values.yaml` comments. Runtime E2E is OWNED BY P9-6 — do not implement runtime tests in this story; only chart-template + binary-build tests. Done when all 6 helm-template validation greps pass and `go build ./cmd/tls-bootstrap` succeeds.
+
+> **Follow-up (post-merge, from PR #62 smoke-e2e harness):**
+>
+> 1. **Wire `tlsMode=helm-hook` into the smoke-e2e harness once this story ships.** The smoke harness (`hack/smoke-e2e.sh`, PR #62) currently bypasses the chart and runs the operator out-of-process because the throwaway k3d cluster has no cert-manager. Once helm-hook mode is available, add a smoke-e2e variant (`hack/smoke-e2e.sh --via-chart`) that runs `make helm-install` with `--set webhook.tlsMode=helm-hook` instead of `make run`, so a regression in the chart's TLS bootstrap fails CI rather than slipping past the out-of-cluster code path. This is the canonical end-state for the P0-3 follow-up as well; both stories converge here, so updating this AC unblocks P0-3 too. **Depends-on:** ships alongside P0-3's follow-up — don't land one half.
 
 ---
 
@@ -767,6 +775,10 @@ go test ./internal/controller/ -run TestInstallAIExtension -v
 ```bash
 go test ./internal/manager/ -v
 ```
+
+> **Follow-up (post-merge, from PR #62 smoke-e2e harness):**
+>
+> 1. **Call `ctrl.SetLogger` in `internal/manager/setup.go` so controller-runtime logs route through `slog`.** Smoke runs surface noisy `[controller-runtime] log.SetLogger(...) was never called; logs will not be displayed (nil)` warnings before every reconcile, because `NewManager` builds the controller-runtime Manager without first installing a logr backend. The fix is one line in `NewManager` — wire controller-runtime's logr through the existing `slog` handler (e.g. `ctrl.SetLogger(logr.FromSlogHandler(slog.Default().Handler()))`) before `ctrl.NewManager`. Cosmetic, but the missing wiring trains future contributors to ignore controller-runtime's log channel, which masks real warnings. Add an AC: "`ctrl.SetLogger` is called from `NewManager` before `ctrl.NewManager`; controller-runtime log lines appear as slog-formatted JSON entries (with the expected `time`/`level`/`logger` keys) in the operator log tail when the smoke-e2e harness runs."
 
 ---
 
@@ -1814,6 +1826,10 @@ go test -race ./pkg/helm/ -v
 > 1. **Engine port shape deviated from the AC** — line 1759 above specifies `CreateOrUpdate(ctx, spec BundleDeploymentSpec) error` + `Delete(ctx, workloadID string) error`. The implementation that shipped is `Apply(ctx, spec) (BundleObservedStatus, error)` + `Teardown(ctx, namespace, workloadID) error`. The change was deliberate: (a) `Apply` returns the post-SSA observed status so the caller can mirror per-cluster phases without a separate read, and (b) `Teardown` takes `(namespace, workloadID)` because the Fleet `Bundle` namespace is the Workload's namespace, not the operator namespace. Update the AC to match the shipped interface when revising this story; the rename is API-shape only and the semantics (SSA idempotency, owner-reference cascade) are unchanged.
 >
 > 2. **`mirrorStatus` emits `FleetState=""`** — the current implementation (`pkg/fleet/status.go`) projects only `(ClusterName, Phase)` per target. Extracting the rich Fleet state from `Bundle.Status.Summary` / `Bundle.Status.PartitionStatus` was punted out of scope because the exact shape we get from a real Fleet manager wasn't yet reproducible in envtest. Lift this when live-cluster validation (`make verify-fleet-live`) is exercised against a real manager; the field on `ClusterDeploymentStatus` already exists and the parsing helper is the only new code needed.
+
+> **Follow-up (post-merge, from PR #62 smoke-e2e harness):**
+>
+> 1. **Operator must degrade gracefully when Fleet CRDs are absent.** During smoke-e2e bring-up on a vanilla k3d cluster (no Fleet), the operator failed cache-sync at 120s and the Manager exited silently because `fleet.cattle.io/v1alpha1 Bundle` was not registered — the controller's `Owns(&fleetv1.Bundle{})` watch blocks `WaitForCacheSync` indefinitely when the CRD is missing. The smoke harness (`hack/smoke-e2e.sh`, PR #62) now hard-waits on Workload `phase=Pending` so the regression fails loudly instead of returning an exit-0 with an unset phase, but the controller still has no graceful degradation path. Add an AC: "If the Fleet CRDs are absent at Manager start, the controller logs a new Reason `FleetCRDsMissing` (added to `pkg/conditions/types.go` as part of this story), skips the `Owns(&fleetv1.Bundle{})` watch, and continues serving status updates rather than blocking cache-sync. Smoke harness either (a) installs Fleet CRDs during bring-up, or (b) sets a new `--feature-gates=FleetEngine=false` flag to skip the watch — pick one before P4-3b ships, and document it in `docs/dev/validation.md`."
 
 ---
 
