@@ -62,3 +62,12 @@ test('manage.vue: shows Loading component while fetching', () => {
   assert.match(src, /import\s+Loading\s+from\s+['"]@shell\/components\/Loading['"]/);
   assert.match(src, /<Loading\b/);
 });
+
+test('manage.vue: refuses non-App workloads with appOnly l10n key', () => {
+  const src = read('pages/manage.vue');
+
+  // Guard: source.kind must equal 'App' before the rest of fetch() proceeds.
+  assert.match(src, /source[?.\s]*kind\s*!==\s*['"]App['"]/);
+  // The friendly error must reference the new l10n key, not a hard-coded string.
+  assert.match(src, /aif\.pages\.wizards\.manage\.appOnly/);
+});

@@ -338,6 +338,10 @@ export default defineComponent({
         await createWorkload({
           metadata: { name: this.form.name, namespace: this.form.namespace },
           spec:     {
+            // Explicit spec.name matches the CRD's required field rather than
+            // relying on the handler's metadata.name → spec.name default; keeps
+            // the wizard resilient if validation tightens server-side.
+            name:   this.form.name,
             source: {
               kind: 'App',
               app:  {

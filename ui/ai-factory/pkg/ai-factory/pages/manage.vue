@@ -53,6 +53,15 @@ export default defineComponent({
     try {
       const wl = await getWorkload(this.$route.params.ns, this.$route.params.name);
 
+      // Blueprint workloads carry one valueOverrides entry per component;
+      // applyChanges collapses them all into a single key. Refuse to load
+      // here so the user is redirected to the upgrade flow (Task 5-2) instead
+      // of silently losing per-component state.
+      if (wl.spec?.source?.kind !== 'App') {
+        this.fetchError = new Error(this.t('aif.pages.wizards.manage.appOnly'));
+        return;
+      }
+
       this.workload = wl;
       this.form.chartVersion = wl.spec?.source?.app?.version || '';
       // App workloads key valueOverrides by the workload name (deployer.go:

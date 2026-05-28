@@ -67,3 +67,13 @@ test('app-install.vue: keys valueOverrides by the instance name (not empty strin
   assert.match(src, /\[\s*this\.form\.name\s*\]|\[\s*form\.name\s*\]/);
   assert.doesNotMatch(src, /valueOverrides:\s*\{\s*''\s*:/);
 });
+
+test('app-install.vue: sends explicit spec.name (not just metadata.name)', () => {
+  const src = read('pages/wizards/app-install.vue');
+  // `name: this.form.name` must appear at least twice: once in metadata, once in
+  // spec. The spec-level copy removes the wizard's implicit dependency on the
+  // handler defaulting spec.name from metadata.name.
+  const matches = src.match(/name:\s*this\.form\.name/g) || [];
+
+  assert.ok(matches.length >= 2, `expected ≥2 occurrences of "name: this.form.name", got ${ matches.length }`);
+});

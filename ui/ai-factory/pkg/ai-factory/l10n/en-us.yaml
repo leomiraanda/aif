@@ -238,6 +238,7 @@ aif:
         cancel: 'Cancel'
         applySuccess: 'Workload updated.'
         fetchError: 'Failed to load workload: {message}'
+        appOnly: 'Manage is only available for App-sourced workloads. Use the upgrade action on Blueprint workloads.'
 
   wizards:
     installProgress:
