@@ -2,6 +2,7 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -654,6 +655,54 @@ func TestWorkloadsPut_RejectsUnknownFields(t *testing.T) {
 	rig.mux.ServeHTTP(rr, req)
 	if rr.Code != http.StatusBadRequest {
 		t.Errorf("expected 400 on unknown top-level field, got %d: %s", rr.Code, rr.Body.String())
+	}
+}
+
+// PUT replaces the whole spec, but the display-name field (spec.name) is
+// required (CRD MinLength=1) and rarely something a caller wants to change
+// when, say, bumping a chart version. The handler falls back to the existing
+// spec.name when the body omits it; this test locks that contract in.
+func TestWorkloadsPut_PreservesSpecNameWhenOmitted(t *testing.T) {
+	rig := newListDeleteTestRig(t)
+	w := &aifv1.Workload{}
+	w.Namespace = "team-a"
+	w.Name = "my-app"
+	w.ResourceVersion = "1"
+	w.Spec.Name = "Original Display Name"
+	w.Spec.Source.Kind = aifv1.WorkloadSourceKindApp
+	w.Spec.Source.App = &aifv1.AppRef{Repo: "repo", Chart: "chart", Version: "1.0.0"}
+	rig.repo.Seed(w)
+
+	// Body intentionally OMITS spec.name — only the source changes.
+	body := map[string]any{
+		"spec": map[string]any{
+			"source": map[string]any{
+				"kind": "App",
+				"app":  map[string]any{"repo": "repo", "chart": "chart", "version": "2.0.0"},
+			},
+		},
+	}
+	buf, _ := json.Marshal(body)
+	req := httptest.NewRequest("PUT", "/api/v1/workloads/team-a/my-app", bytes.NewReader(buf))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Impersonate-User", "alice")
+	rr := httptest.NewRecorder()
+	rig.mux.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+
+	got, err := rig.repo.Get(context.Background(), "team-a", "my-app")
+	if err != nil {
+		t.Fatalf("get after PUT: %v", err)
+	}
+	if got.Spec.Name != "Original Display Name" {
+		t.Errorf("expected spec.Name preserved as %q, got %q", "Original Display Name", got.Spec.Name)
+	}
+	// Sanity: the field we DID send was applied.
+	if got.Spec.Source.App == nil || got.Spec.Source.App.Version != "2.0.0" {
+		t.Errorf("expected spec.source.app.version updated to 2.0.0, got %+v", got.Spec.Source.App)
 	}
 }
 
