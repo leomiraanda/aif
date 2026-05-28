@@ -228,6 +228,15 @@ aif:
         target:        'Target'
         configuration: 'Configuration'
         review:        'Review'
+      manage:
+        title: 'Manage {name}'
+        chartVersion: 'Chart version'
+        helmValues: 'Helm values (YAML)'
+        apply: 'Apply'
+        applying: 'Applying…'
+        cancel: 'Cancel'
+        applySuccess: 'Workload updated.'
+        fetchError: 'Failed to load workload: {message}'
 
   wizards:
     installProgress:
