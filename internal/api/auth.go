@@ -76,7 +76,7 @@ func (m *AuthMiddleware) RequirePublisher(next http.HandlerFunc) http.HandlerFun
 	return func(w http.ResponseWriter, r *http.Request) {
 		user, groups := ExtractUser(r)
 		if user == "" {
-			writeError(w, http.StatusForbidden, errors.New("authentication required"))
+			writeError(w, http.StatusForbidden, fmt.Errorf("%w: authentication required", ErrForbidden))
 			return
 		}
 
@@ -109,7 +109,7 @@ func (m *AuthMiddleware) RequireResource(group, verb, resource string, selector 
 	return func(w http.ResponseWriter, r *http.Request) {
 		user, groups := ExtractUser(r)
 		if user == "" {
-			writeError(w, http.StatusForbidden, errors.New("authentication required"))
+			writeError(w, http.StatusForbidden, fmt.Errorf("%w: authentication required", ErrForbidden))
 			return
 		}
 		ns := ""

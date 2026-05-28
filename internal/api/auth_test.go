@@ -154,6 +154,10 @@ func TestRequirePublisher_NoUser(t *testing.T) {
 	var apiErr APIError
 	require.NoError(t, json.NewDecoder(w.Body).Decode(&apiErr))
 	assert.Contains(t, apiErr.Message, "authentication required")
+	// Body MUST carry the structured FORBIDDEN code so the UI's error
+	// envelope handling doesn't see the default INTERNAL_ERROR fallback
+	// and render a 500-style banner on what is really a 403.
+	assert.Equal(t, ErrCodeForbidden, apiErr.Code)
 }
 
 func TestRequirePublisher_CheckerError(t *testing.T) {
@@ -243,6 +247,14 @@ func TestRequireResource_NoUser(t *testing.T) {
 	assert.False(t, handlerCalled)
 	assert.Equal(t, http.StatusForbidden, w.Code)
 	assert.Len(t, checker.resourceCalls, 0)
+
+	// Same FORBIDDEN-code requirement as RequirePublisher_NoUser: the
+	// body must surface "error": "FORBIDDEN" so the UI handles the 403
+	// envelope, not the default INTERNAL_ERROR fallback.
+	var apiErr APIError
+	require.NoError(t, json.NewDecoder(w.Body).Decode(&apiErr))
+	assert.Equal(t, ErrCodeForbidden, apiErr.Code)
+	assert.Contains(t, apiErr.Message, "authentication required")
 }
 
 func TestRequireResource_CheckerError(t *testing.T) {
