@@ -1,4 +1,4 @@
-.PHONY: help build test run docker-build docker-push helm-install helm-uninstall charts-package lint manifests generate install-tools envtest test-controllers dev-cluster dev-cluster-down dev-install dev-certs examples test-nim verify-nim-mock verify-nim-live test-appco verify-appco-mock verify-appco-live test-apps verify-apps-mock verify-apps-live test-api-apps test-helm verify-helm-mock test-helm-envtest test-wrapper verify-wrapper-mock verify-wrapper-live test-fleet verify-fleet-mock verify-fleet-live test-git verify-git-mock verify-git-live
+.PHONY: help build test run docker-build docker-push helm-install helm-uninstall charts-package lint manifests generate install-tools envtest test-controllers dev-cluster dev-cluster-down dev-install dev-certs examples test-nim verify-nim-mock verify-nim-live test-appco verify-appco-mock verify-appco-live test-apps verify-apps-mock verify-apps-live test-api-apps test-helm verify-helm-mock test-helm-envtest test-wrapper verify-wrapper-mock verify-wrapper-live test-fleet verify-fleet-mock verify-fleet-live test-git verify-git-mock verify-git-live smoke-e2e verify-all-live
 
 # Force bash shell on Windows (supports Unix commands like mkdir -p)
 SHELL := bash
@@ -341,3 +341,31 @@ dev-certs:
 			-keyout /tmp/k8s-webhook-server/serving-certs/tls.key \
 			-out /tmp/k8s-webhook-server/serving-certs/tls.crt 2>/dev/null; \
 	fi
+
+# --- E2E and live-aggregator validation targets ----------------------------
+# Documented in docs/dev/validation.md.
+
+# smoke-e2e drives the full local round-trip: fresh k3d cluster + CRDs +
+# operator + sample CRs + status assertions, then tears everything down.
+# Override behaviour via env vars: SMOKE_CLUSTER_NAME, SMOKE_KEEP=1,
+# SMOKE_TIMEOUT (see hack/smoke-e2e.sh for the full list).
+smoke-e2e:
+	@echo "Running local end-to-end smoke (always-fresh k3d)..."
+	@bash hack/smoke-e2e.sh
+
+# verify-all-live runs every verify-*-live target and reports a per-target
+# pass/fail/skip summary at the end. Continues past failures so one missing
+# credential pair doesn't mask the state of the rest. Exits non-zero iff at
+# least one target failed (skips don't count as failures). Designed to be
+# run by a human with .env populated, NOT by CI.
+verify-all-live:
+	@set +e; \
+	fail=0; results=""; \
+	for t in nim appco apps wrapper fleet git; do \
+		echo "=== verify-$$t-live ==="; \
+		$(MAKE) verify-$$t-live; rc=$$?; \
+		if [ $$rc -eq 0 ]; then results="$$results\nverify-$$t-live: PASS"; \
+		else fail=1; results="$$results\nverify-$$t-live: FAIL (rc=$$rc)"; fi; \
+	done; \
+	echo; echo "=== verify-all-live summary ==="; printf "$$results\n"; \
+	exit $$fail
