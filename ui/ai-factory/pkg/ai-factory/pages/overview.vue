@@ -233,7 +233,11 @@ export default defineComponent({
       if (src?.blueprint) {
         return `${ src.blueprint.name } v${ src.blueprint.version }`;
       }
-      return src?.kind || '—';
+      // WorkloadSource.Kind enum is App|Blueprint (BundleTest was removed in
+      // P4-3 — see CLAUDE.md follow-up note on `WorkloadSource.Kind`). Both
+      // kinds are handled above, so this branch only fires for a missing or
+      // malformed source — render the em-dash placeholder.
+      return '—';
     },
 
     phaseBadge(wl) {
