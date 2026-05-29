@@ -7,17 +7,21 @@
       </button>
     </div>
 
-    <Banner v-if="error" color="error" :label="t('aif.pages.workloads.empty.error')" />
+    <Banner v-if="loadError" color="error" :label="t('aif.pages.workloads.empty.error')" />
+    <Banner v-if="actionError" color="error" :label="actionError.message || t('aif.pages.workloads.actionFailedGeneric')" />
 
-    <div v-else-if="loading" class="aif-workloads__loading">
+    <div v-if="loading" class="aif-workloads__loading">
       <Loading />
     </div>
 
-    <div v-else-if="workloads.length === 0" class="aif-workloads__empty">
+    <!-- loadError gates the empty/data branch so a failed initial load
+         doesn't render an empty table; an action failure leaves the
+         previously-loaded data intact and surfaces actionError above. -->
+    <div v-else-if="!loadError && workloads.length === 0" class="aif-workloads__empty">
       <p>{{ t('aif.pages.workloads.empty.none') }}</p>
     </div>
 
-    <template v-else>
+    <template v-else-if="!loadError">
       <input
         v-model="search"
         type="search"
@@ -139,7 +143,13 @@ export default defineComponent({
       workloads:              [],
       blueprints:             [],
       loading:                false,
-      error:                  null,
+      // loadError is set by loadWorkloads only — its banner reads
+      // "Failed to load workloads". actionError is set by per-row
+      // actions (delete/upgrade) and carries the upstream message.
+      // Keeping them separate prevents an upgrade 400 from rendering
+      // a misleading "Failed to load workloads" toast.
+      loadError:              null,
+      actionError:            null,
       deleteTarget:           null,
       deleting:               false,
       upgradeTarget:          null,
@@ -176,14 +186,14 @@ export default defineComponent({
   methods: {
     async loadWorkloads() {
       this.loading = this.workloads.length === 0;
-      this.error = null;
+      this.loadError = null;
       try {
         this.workloads = await listWorkloads();
         // Blueprints power the lineage→versions picker in the upgrade modal.
         // Fetch via Steve so we share the management-cluster cache.
         this.blueprints = await this.$store.dispatch('management/findAll', { type: CRD_TYPES.BLUEPRINT });
       } catch (e) {
-        this.error = e;
+        this.loadError = e;
       } finally {
         this.loading = false;
       }
@@ -207,6 +217,7 @@ export default defineComponent({
     },
 
     confirmDelete(wl) {
+      this.actionError = null;
       this.deleteTarget = wl;
     },
 
@@ -214,13 +225,14 @@ export default defineComponent({
       if (!this.deleteTarget) {
         return;
       }
+      this.actionError = null;
       this.deleting = true;
       try {
         await deleteWorkload(this.deleteTarget.metadata.namespace, this.deleteTarget.metadata.name);
         this.deleteTarget = null;
         await this.loadWorkloads();
       } catch (e) {
-        this.error = e;
+        this.actionError = e;
       } finally {
         this.deleting = false;
       }
@@ -253,6 +265,7 @@ export default defineComponent({
       if (candidates.length === 0) {
         return;
       }
+      this.actionError            = null;
       this.upgradeTarget          = wl;
       this.availableVersions      = candidates;
       this.upgradeSelectedVersion = candidates[0];
@@ -272,6 +285,7 @@ export default defineComponent({
       if (!this.upgradeTarget || !this.upgradeSelectedVersion) {
         return;
       }
+      this.actionError = null;
       this.upgrading = true;
       try {
         await upgradeWorkload(
@@ -282,7 +296,7 @@ export default defineComponent({
         this.upgradeTarget = null;
         await this.loadWorkloads();
       } catch (e) {
-        this.error = e;
+        this.actionError = e;
       } finally {
         this.upgrading = false;
       }

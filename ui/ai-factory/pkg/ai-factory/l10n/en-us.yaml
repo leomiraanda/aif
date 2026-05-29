@@ -129,6 +129,7 @@ aif:
       empty:
         none: 'No workloads yet. Install an App or Blueprint to create one.'
         error: 'Failed to load workloads'
+      actionFailedGeneric: 'Action failed'
       phase:
         running: 'Running'
         pending: 'Pending'
