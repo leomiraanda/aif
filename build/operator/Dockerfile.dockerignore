@@ -1,0 +1,17 @@
+.git
+.github
+.claude
+bin
+charts
+docs
+examples
+tmp
+ui
+.dockerignore
+.gitignore
+.golangci.yml
+*.exe
+*.tgz
+LICENSE
+Makefile
+README.md
