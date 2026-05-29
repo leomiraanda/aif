@@ -114,6 +114,7 @@ aif:
         delete: 'Delete'
         manage: 'Manage'
         upgrade: 'Upgrade'
+        noUpgradeAvailable: 'No newer blueprint version is available.'
       deleteModal:
         title: 'Delete Workload'
         body: 'Delete workload "{name}"? This also removes the Fleet Bundle or GitRepo that drives it.'

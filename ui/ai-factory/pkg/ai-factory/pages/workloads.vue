@@ -62,7 +62,8 @@
               <button
                 v-else
                 class="btn btn-sm role-secondary"
-                :disabled="wl.status?.phase !== 'Running'"
+                :disabled="wl.status?.phase !== 'Running' || !hasUpgradeCandidates(wl)"
+                :title="hasUpgradeCandidates(wl) ? '' : t('aif.pages.workloads.actions.noUpgradeAvailable')"
                 @click="confirmUpgrade(wl)"
               >
                 {{ t('aif.pages.workloads.actions.upgrade') }}
@@ -121,6 +122,7 @@ import { defineComponent } from 'vue';
 import Loading from '@shell/components/Loading';
 import { Banner } from '@components/Banner';
 import { listWorkloads, deleteWorkload, upgradeWorkload } from '../utils/operator-api';
+import { compareVersions } from '../utils/blueprint';
 import { PRODUCT_NAME, MANAGEMENT_CLUSTER, CRD_TYPES } from '../config/types';
 
 export default defineComponent({
@@ -224,19 +226,46 @@ export default defineComponent({
       }
     },
 
-    blueprintVersionsForLineage(lineageName) {
+    // Returns versions of `lineageName` strictly greater than `currentVersion`
+    // and currently Active, sorted ascending (so the picker lists the lowest
+    // valid upgrade first). Matches pkg/workload/upgrader.go behavior:
+    // downgrades and same-version writes return ErrDowngradeNotSupported.
+    // Deprecated/Withdrawn versions are excluded — the gallery hides them by
+    // default (pages/blueprints.vue line 180 filters phase === 'Active'),
+    // so they must not become silent upgrade candidates here either.
+    blueprintUpgradeCandidates(lineageName, currentVersion) {
       return this.blueprints
-        .filter((b) => b.spec.blueprintName === lineageName)
+        .filter((b) => b.spec?.blueprintName === lineageName)
+        .filter((b) => b.status?.phase === 'Active')
         .map((b) => b.spec.version)
-        .sort();
+        .filter((v) => compareVersions(v, currentVersion) > 0)
+        .sort(compareVersions);
     },
 
     confirmUpgrade(wl) {
+      const lineage = wl.spec?.source?.blueprint?.name || '';
+      const current = wl.spec?.source?.blueprint?.version || '';
+      const candidates = this.blueprintUpgradeCandidates(lineage, current);
+
+      // The row's Upgrade button is gated on candidates.length > 0
+      // (hasUpgradeCandidates), so this is defence-in-depth: if a click
+      // somehow races a refresh that emptied the list, do nothing.
+      if (candidates.length === 0) {
+        return;
+      }
       this.upgradeTarget          = wl;
-      this.upgradeSelectedVersion = wl.spec?.source?.blueprint?.version || '';
-      this.availableVersions      = this.blueprintVersionsForLineage(
-        wl.spec?.source?.blueprint?.name || '',
-      );
+      this.availableVersions      = candidates;
+      this.upgradeSelectedVersion = candidates[0];
+    },
+
+    hasUpgradeCandidates(wl) {
+      if (wl.spec?.source?.kind !== 'Blueprint') {
+        return false;
+      }
+      const lineage = wl.spec?.source?.blueprint?.name || '';
+      const current = wl.spec?.source?.blueprint?.version || '';
+
+      return this.blueprintUpgradeCandidates(lineage, current).length > 0;
     },
 
     async doUpgrade() {
