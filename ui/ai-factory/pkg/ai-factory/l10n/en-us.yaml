@@ -125,7 +125,6 @@ aif:
       actions:
         delete: 'Delete'
         manage: 'Manage'
-        upgrade: 'Upgrade'
       deleteModal:
         title: 'Delete Workload'
         body: 'Delete workload "{name}"? This also removes the Fleet Bundle or GitRepo that drives it.'
