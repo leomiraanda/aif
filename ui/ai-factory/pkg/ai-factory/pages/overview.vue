@@ -342,4 +342,20 @@ export default defineComponent({
   text-align: left;
   width:      100%;
 }
+
+/* Drop default browser bullets on the Active Blueprints list so the panel
+   matches the Recent Workloads table — both panels render flush-left rows. */
+.aif-overview__bp-list {
+  list-style: none;
+  padding:    0;
+  margin:     0;
+}
+
+/* Empty-state copy in both panels (Recent Workloads, Active Blueprints).
+   Mirrors the bp-page__empty rule on the Blueprints page. */
+.aif-overview__empty {
+  text-align: center;
+  color:      var(--muted);
+  padding:    12px;
+}
 </style>
