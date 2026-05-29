@@ -11,22 +11,42 @@
 
     <!-- Summary cards -->
     <div class="aif-overview__cards">
-      <div class="aif-overview__card" @click="goTo('workloads')">
+      <button
+        type="button"
+        class="aif-overview__card"
+        :aria-label="t('aif.pages.overview.cards.totalWorkloads')"
+        @click="goTo('workloads')"
+      >
         <div class="aif-overview__card-value">{{ counts.total }}</div>
         <div class="aif-overview__card-label">{{ t('aif.pages.overview.cards.totalWorkloads') }}</div>
-      </div>
-      <div class="aif-overview__card aif-overview__card--success" @click="goTo('workloads')">
+      </button>
+      <button
+        type="button"
+        class="aif-overview__card aif-overview__card--success"
+        :aria-label="t('aif.pages.overview.cards.running')"
+        @click="goTo('workloads')"
+      >
         <div class="aif-overview__card-value">{{ counts.running }}</div>
         <div class="aif-overview__card-label">{{ t('aif.pages.overview.cards.running') }}</div>
-      </div>
-      <div class="aif-overview__card aif-overview__card--warning" @click="goTo('workloads')">
+      </button>
+      <button
+        type="button"
+        class="aif-overview__card aif-overview__card--warning"
+        :aria-label="t('aif.pages.overview.cards.withIssues')"
+        @click="goTo('workloads')"
+      >
         <div class="aif-overview__card-value">{{ counts.withIssues }}</div>
         <div class="aif-overview__card-label">{{ t('aif.pages.overview.cards.withIssues') }}</div>
-      </div>
-      <div class="aif-overview__card" @click="goTo('blueprints')">
+      </button>
+      <button
+        type="button"
+        class="aif-overview__card"
+        :aria-label="t('aif.pages.overview.cards.activeBlueprints')"
+        @click="goTo('blueprints')"
+      >
         <div class="aif-overview__card-value">{{ counts.activeBlueprints }}</div>
         <div class="aif-overview__card-label">{{ t('aif.pages.overview.cards.activeBlueprints') }}</div>
-      </div>
+      </button>
     </div>
 
     <!-- Recent Workloads + Active Blueprints panels -->
@@ -34,7 +54,7 @@
       <div class="aif-overview__panel">
         <div class="aif-overview__panel-header">
           <h3>{{ t('aif.pages.overview.recentWorkloads.title') }}</h3>
-          <a @click.prevent="goTo('workloads')">{{ t('aif.pages.overview.recentWorkloads.viewAll') }}</a>
+          <a href="#" @click.prevent="goTo('workloads')">{{ t('aif.pages.overview.recentWorkloads.viewAll') }}</a>
         </div>
         <p v-if="recentWorkloads.length === 0" class="aif-overview__empty">
           {{ t('aif.pages.overview.recentWorkloads.empty') }}
@@ -53,7 +73,7 @@
       <div class="aif-overview__panel">
         <div class="aif-overview__panel-header">
           <h3>{{ t('aif.pages.overview.activeBlueprints.title') }}</h3>
-          <a @click.prevent="goTo('blueprints')">{{ t('aif.pages.overview.activeBlueprints.viewAll') }}</a>
+          <a href="#" @click.prevent="goTo('blueprints')">{{ t('aif.pages.overview.activeBlueprints.viewAll') }}</a>
         </div>
         <p v-if="activeBlueprints.length === 0" class="aif-overview__empty">
           {{ t('aif.pages.overview.activeBlueprints.empty') }}
@@ -71,18 +91,33 @@
     <div class="aif-overview__quick-actions">
       <h3>{{ t('aif.pages.overview.quickActions.title') }}</h3>
       <div class="aif-overview__actions-grid">
-        <div class="aif-overview__action-card" @click="goTo('apps')">
+        <button
+          type="button"
+          class="aif-overview__action-card"
+          :aria-label="t('aif.pages.overview.quickActions.browseApps')"
+          @click="goTo('apps')"
+        >
           <strong>{{ t('aif.pages.overview.quickActions.browseApps') }}</strong>
           <p>{{ t('aif.pages.overview.quickActions.browseAppsDesc') }}</p>
-        </div>
-        <div class="aif-overview__action-card" @click="goTo('blueprints')">
+        </button>
+        <button
+          type="button"
+          class="aif-overview__action-card"
+          :aria-label="t('aif.pages.overview.quickActions.manageBlueprints')"
+          @click="goTo('blueprints')"
+        >
           <strong>{{ t('aif.pages.overview.quickActions.manageBlueprints') }}</strong>
           <p>{{ t('aif.pages.overview.quickActions.manageBlueprintsDesc') }}</p>
-        </div>
-        <div class="aif-overview__action-card" @click="goTo('workloads')">
+        </button>
+        <button
+          type="button"
+          class="aif-overview__action-card"
+          :aria-label="t('aif.pages.overview.quickActions.viewWorkloads')"
+          @click="goTo('workloads')"
+        >
           <strong>{{ t('aif.pages.overview.quickActions.viewWorkloads') }}</strong>
           <p>{{ t('aif.pages.overview.quickActions.viewWorkloadsDesc') }}</p>
-        </div>
+        </button>
       </div>
     </div>
   </div>
@@ -243,6 +278,11 @@ export default defineComponent({
   padding: 20px;
   cursor: pointer;
   text-align: center;
+  /* Reset native <button> defaults so the element renders like the old <div>
+     card while keeping focus, keyboard activation, and role=button. */
+  font:    inherit;
+  color:   inherit;
+  width:   100%;
 }
 
 .aif-overview__card-value {
@@ -293,5 +333,11 @@ export default defineComponent({
   border-radius: 4px;
   padding: 16px;
   cursor: pointer;
+  /* Reset native <button> defaults so the element renders like the old <div>
+     card while keeping focus, keyboard activation, and role=button. */
+  font:       inherit;
+  color:      inherit;
+  text-align: left;
+  width:      100%;
 }
 </style>
