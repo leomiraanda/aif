@@ -80,7 +80,6 @@ aif:
       deprecateModal:
         title: 'Deprecate Blueprint'
         body: 'Deprecate {name} v{version}?'
-        bodySecondary: 'Deprecated blueprints are hidden by default. Existing workloads keep running.'
         confirm: 'Deprecate'
         cancel: 'Cancel'
       undeprecateModal:
