@@ -48,7 +48,7 @@
               <span class="badge badge--primary">{{ sourceKind(wl) }}</span>
               {{ sourceName(wl) }}
             </td>
-            <td><span class="badge badge--secondary">{{ wl.spec?.deployStrategy || 'helm' }}</span></td>
+            <td><span class="badge badge--secondary">{{ deployStrategyLabel(wl) }}</span></td>
             <td>{{ sourceVersion(wl) }}</td>
             <td class="aif-workloads__actions">
               <button
@@ -218,6 +218,12 @@ export default defineComponent({
         return src.blueprint.name;
       }
       return '';
+    },
+
+    deployStrategyLabel(wl) {
+      const strategy = wl.spec?.deployStrategy || 'helm';
+      const key     = `aif.pages.workloads.deployStrategy.${ strategy }`;
+      return this.t(key, undefined, true) || strategy;
     },
 
     sourceVersion(wl) {

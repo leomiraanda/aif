@@ -139,6 +139,9 @@ aif:
         degraded: 'Degraded'
         failed: 'Failed'
         unknown: 'Unknown'
+      deployStrategy:
+        helm: 'Helm'
+        gitops: 'GitOps'
     settings:
       title: 'Settings'
       apply: 'Apply'
