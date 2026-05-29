@@ -105,7 +105,7 @@
         <label>
           {{ t('aif.pages.workloads.upgradeModal.selectVersion') }}
           <select v-model="upgradeSelectedVersion" class="select">
-            <option v-for="v in availableVersions" :key="v" :value="v">{{ v }}</option>
+            <option v-for="v in availableVersions" :key="v.version" :value="v.version">{{ optionLabel(v) }}</option>
           </select>
         </label>
         <div class="aif-workloads__modal-actions">
@@ -238,20 +238,19 @@ export default defineComponent({
       }
     },
 
-    // Returns versions of `lineageName` strictly greater than `currentVersion`
-    // and currently Active, sorted ascending (so the picker lists the lowest
-    // valid upgrade first). Matches pkg/workload/upgrader.go behavior:
-    // downgrades and same-version writes return ErrDowngradeNotSupported.
-    // Deprecated/Withdrawn versions are excluded — the gallery hides them by
-    // default (pages/blueprints.vue line 180 filters phase === 'Active'),
-    // so they must not become silent upgrade candidates here either.
+    // Returns versions of `lineageName` strictly greater than `currentVersion`,
+    // sorted ascending (so the picker lists the lowest valid upgrade first).
+    // Mirrors pkg/workload/upgrader.go: it rejects Withdrawn and same-or-lower
+    // versions but accepts Deprecated targets — deprecation is "discouraged,
+    // not forbidden". The picker reflects the same policy and renders the
+    // phase suffix on Deprecated options so the user can choose informedly.
     blueprintUpgradeCandidates(lineageName, currentVersion) {
       return this.blueprints
         .filter((b) => b.spec?.blueprintName === lineageName)
-        .filter((b) => b.status?.phase === 'Active')
-        .map((b) => b.spec.version)
-        .filter((v) => compareVersions(v, currentVersion) > 0)
-        .sort(compareVersions);
+        .filter((b) => b.status?.phase !== 'Withdrawn')
+        .map((b) => ({ version: b.spec.version, phase: b.status?.phase || 'Active' }))
+        .filter((c) => compareVersions(c.version, currentVersion) > 0)
+        .sort((a, b) => compareVersions(a.version, b.version));
     },
 
     confirmUpgrade(wl) {
@@ -268,7 +267,7 @@ export default defineComponent({
       this.actionError            = null;
       this.upgradeTarget          = wl;
       this.availableVersions      = candidates;
-      this.upgradeSelectedVersion = candidates[0];
+      this.upgradeSelectedVersion = candidates[0].version;
     },
 
     hasUpgradeCandidates(wl) {
@@ -300,6 +299,16 @@ export default defineComponent({
       } finally {
         this.upgrading = false;
       }
+    },
+
+    optionLabel(v) {
+      if (v.phase === 'Active') {
+        return v.version;
+      }
+      return this.t('aif.pages.workloads.upgradeModal.candidateLabel', {
+        version: v.version,
+        phase:   this.t(`aif.pages.blueprints.phase.${ v.phase.toLowerCase() }`),
+      });
     },
 
     phaseBadge(wl) {

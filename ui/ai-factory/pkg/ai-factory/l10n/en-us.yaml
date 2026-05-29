@@ -123,6 +123,7 @@ aif:
         title: 'Upgrade Blueprint Workload'
         body: 'Select a new version for "{name}".'
         selectVersion: 'Target Version'
+        candidateLabel: '{version} ({phase})'
         confirm: 'Upgrade'
         cancel: 'Cancel'
       empty:
