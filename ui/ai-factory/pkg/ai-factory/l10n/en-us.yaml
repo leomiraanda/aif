@@ -53,7 +53,6 @@ aif:
         create: 'Create'
         refresh: 'Refresh'
       card:
-        useCase: 'Use case'
         version: 'Version'
         origin:
           published: 'Published from Bundle'

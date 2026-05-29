@@ -14,9 +14,6 @@
     </header>
 
     <div class="bp-card__meta">
-      <span class="bp-card__chip bp-card__chip--use-case">
-        {{ t('aif.pages.blueprints.card.useCase') }}: {{ selected.useCase || '—' }}
-      </span>
       <span
         class="bp-card__chip bp-card__chip--origin"
         :title="originTooltip"
