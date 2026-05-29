@@ -1,5 +1,12 @@
 <template>
   <div class="aif-wizard">
+    <div v-if="!bpName || !bpVersion" class="aif-wizard__missing">
+      <p>{{ t('aif.pages.wizards.install.missingBlueprint') }}</p>
+      <button class="btn role-primary" @click="cancel">
+        {{ t('aif.pages.wizards.install.backToBlueprints') }}
+      </button>
+    </div>
+    <template v-else>
     <h1>{{ t('aif.pages.wizards.install.title', { name: bpName }) }}</h1>
 
     <div class="aif-wizard__bp-banner">
@@ -100,6 +107,7 @@
       @done="onProgressDone"
       @cancel="onProgressCancel"
     />
+    </template>
   </div>
 </template>
 
@@ -124,7 +132,7 @@ export default defineComponent({
 
       // Filter out the Rancher local (management) cluster — AIF workloads run
       // on downstream managed clusters, never on the Rancher control plane.
-      this.availableClusters = (clusters || []).filter((c) => c.id !== 'local');
+      this.availableClusters = (clusters || []).filter((c) => c.id !== MANAGEMENT_CLUSTER);
     } catch (_) {
       this.availableClusters = [];
     }
