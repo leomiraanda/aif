@@ -24,7 +24,8 @@ export function init($plugin: IPlugin, store: RancherStore) {
   product({
     icon:        'suseai',
     iconHeader:  require('./assets/SUSE-AI-Factory-Logo_pos-green-horizontal.svg'),
-    inStore: SUSEAI_PRODUCT.inStore,
+    inStore:     SUSEAI_PRODUCT.inStore,
+    ifHaveGroup: 'ai-platform.suse.com',
     isMultiClusterApp: true,
     showClusterSwitcher: false,
     weight: SUSEAI_PRODUCT.weight,
