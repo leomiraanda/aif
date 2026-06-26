@@ -63,6 +63,8 @@ spec:
                   fieldPath: metadata.namespace
             - name: EXTENSION_NAMESPACE
               value: {{ include "aif-operator.extensionsNamespace" . | quote }}
+            - name: CHART_VERSION
+              value: {{ .Chart.Version | quote }}
           {{- range .Values.manager.env }}
             - {{ toYaml . | nindent 14 | trim }}
           {{- end }}
