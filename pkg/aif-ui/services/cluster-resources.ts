@@ -1,6 +1,6 @@
 // Cluster resource metrics service
 import type { Dispatchable, ClusterResource, ClusterInfo, NodeResource, NodeMetric } from '../types/rancher-types';
-import { createErrorHandler, handleSimpleError } from '../utils/error-handler';
+import { handleSimpleError } from '../utils/error-handler';
 import { TIMEOUT_VALUES } from '../utils/constants';
 
 export interface NodeResourceInfo {
