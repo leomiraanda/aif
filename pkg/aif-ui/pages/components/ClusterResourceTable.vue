@@ -1,29 +1,5 @@
 <template>
   <div class="cluster-resource-table">
-    <!-- Requirements display -->
-    <div
-      v-if="appRequirements"
-      class="requirements-info"
-      :class="{ 'requirements-estimated': isUsingDefaultRequirements }"
-    >
-      <span class="requirements-label">
-        {{ isUsingDefaultRequirements ? 'Estimated Requirements:' : 'Requirements:' }}
-      </span>
-      <span class="requirements-text">
-        {{ appRequirements.cpu }} CPU cores •
-        {{ appRequirements.memory }}GB Memory
-        <template v-if="appRequirements.gpu"> • {{ appRequirements.gpu }}GB GPU Memory</template>
-        • {{ appRequirements.storage }}GB Storage
-      </span>
-      <div
-        v-if="isUsingDefaultRequirements"
-        class="requirements-note"
-      >
-        Using conservative estimates - actual requirements may vary
-      </div>
-    </div>
-
-
     <!-- Loading state -->
     <div
       v-if="loading"
@@ -223,44 +199,6 @@
       <div class="selected-header">
         Selected: {{ selectedClusterInfo.name }}
       </div>
-      <div
-        class="selected-details"
-        :class="`details-${selectedClusterInfo.status}`"
-      >
-        <div
-          v-if="selectedClusterInfo.status === 'compatible'"
-          class="status-message"
-        >
-          This cluster meets all requirements
-        </div>
-        <div
-          v-else-if="selectedClusterInfo.status === 'limited'"
-          class="status-message"
-        >
-          {{ selectedClusterInfo.statusMessage || 'Limited compatibility' }}
-        </div>
-        <div
-          v-else-if="selectedClusterInfo.status === 'insufficient'"
-          class="status-message"
-        >
-          {{ selectedClusterInfo.statusMessage || 'Insufficient resources' }}
-        </div>
-        <div
-          v-else-if="selectedClusterInfo.status === 'error'"
-          class="status-message"
-        >
-          {{ selectedClusterInfo.statusMessage || 'Unable to check resources' }}
-          <div class="status-hint">
-            You can still install, but resource requirements cannot be verified.
-          </div>
-        </div>
-        <div
-          v-else-if="selectedClusterInfo.status === 'unavailable'"
-          class="status-message"
-        >
-          This cluster is not ready and cannot be selected for deployment.
-        </div>
-      </div>
     </div>
 
     <!-- Selected clusters display (multi-select mode) -->
@@ -287,12 +225,6 @@
           >×</button>
         </span>
       </div>
-      <div
-        v-if="hasIncompatibleSelections"
-        class="selected-warning"
-      >
-        Some selected clusters may have insufficient resources
-      </div>
     </div>
   </div>
 </template>
@@ -305,7 +237,6 @@ import ProgressBarMulti from '@shell/components/ProgressBarMulti';
 import StatusBadge from '@shell/components/StatusBadge';
 import {
   getAllClusterResourceMetrics,
-  checkAppCompatibility,
   type ClusterResourceSummary
 } from '../../services/cluster-resources';
 import logger from '../../utils/logger';
@@ -371,12 +302,7 @@ export default defineComponent({
         logger.debug('[SUSE-AI] ClusterResourceTable: Loading cluster resources...');
         const clusterSummaries = await getAllClusterResourceMetrics(store);
 
-        // Check compatibility for each cluster
-        const clustersWithCompatibility = clusterSummaries.map(cluster =>
-          checkAppCompatibility(props.appSlug, cluster, props.appName)
-        );
-
-        clusters.value = clustersWithCompatibility;
+        clusters.value = clusterSummaries;
         logger.debug(`[SUSE-AI] ClusterResourceTable: Loaded ${clusters.value.length} clusters`);
 
         // Auto-select first ready cluster if none selected
