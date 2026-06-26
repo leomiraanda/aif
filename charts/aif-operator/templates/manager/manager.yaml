@@ -62,6 +62,8 @@ spec:
                 fieldRef:
                   fieldPath: metadata.namespace
             - name: OPERATOR_SERVICE
+              # Static at install time (chart-derived name); not a fieldRef because
+              # the service name is determined by the chart, not the pod's runtime state.
               value: {{ include "aif-operator.fullname" . | quote }}
             - name: EXTENSION_NAMESPACE
               value: {{ include "aif-operator.extensionsNamespace" . | quote }}

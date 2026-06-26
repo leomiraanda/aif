@@ -159,6 +159,8 @@ func (r *InstallAIExtensionReconciler) reconcile(ctx context.Context, ext *v1alp
 // aif-ui-config ConfigMap so the UI extension can reach the operator without
 // manual configuration. It runs on every successful reconcile loop, giving
 // self-healing behaviour if the ConfigMap is deleted or corrupted.
+// The ConfigMap is intentionally not deleted when the CR is removed — the UI
+// retains the last-known operator coordinates so it remains functional.
 func (r *InstallAIExtensionReconciler) syncUIConfigMap(ctx context.Context) error {
 	cm := &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{
