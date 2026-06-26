@@ -16,6 +16,23 @@
       "settings": "Settings"
     },
     "pages": {
+      "about": {
+        "title": "About",
+        "sections": {
+          "versions": {
+            "title": "Component Versions",
+            "extension": "UI Extension",
+            "operator": "Operator",
+            "chart": "Helm Chart",
+"unavailable": "Unavailable"
+          },
+          "resources": {
+            "title": "Resources",
+            "documentation": "Documentation",
+            "support": "Support"
+          }
+        }
+      },
       "settings": {
         "title": "Settings",
         "apply": "Apply",

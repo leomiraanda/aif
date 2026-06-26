@@ -64,3 +64,11 @@ export function publishToFleetGit(bundleName: string, bundleYAML: string): Promi
     body:   JSON.stringify({ bundleName, bundleYAML }),
   });
 }
+
+export function getVersion(timeoutMs = 5000): Promise<{ version: string }> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+  return operatorFetch('/api/v1/version', { signal: controller.signal })
+    .finally(() => clearTimeout(timer));
+}
