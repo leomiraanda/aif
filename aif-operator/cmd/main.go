@@ -50,6 +50,12 @@ import (
 	// +kubebuilder:scaffold:imports
 )
 
+// version and commit are set at build time via -ldflags.
+var (
+	version = "unknown"
+	commit  = "unknown"
+)
+
 var (
 	scheme   = runtime.NewScheme()
 	setupLog = ctrl.Log.WithName("setup")
@@ -244,6 +250,7 @@ func main() {
 	api.NewSettingsHandler(mgr.GetClient(), operatorNamespace).Register(mux)
 	api.NewAIWorkloadHandler(mgr.GetClient()).Register(mux)
 	api.NewBlueprintHandler(mgr.GetClient()).Register(mux)
+	api.NewVersionHandler(version, commit, os.Getenv("CHART_VERSION")).Register(mux)
 	srv := &http.Server{Addr: apiBindAddr, Handler: api.Chain(mux)}
 
 	ctx := ctrl.SetupSignalHandler()
