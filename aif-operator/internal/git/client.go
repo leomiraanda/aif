@@ -11,8 +11,10 @@ import (
 	"github.com/go-git/go-billy/v5"
 	"github.com/go-git/go-billy/v5/memfs"
 	gogit "github.com/go-git/go-git/v5"
+	"github.com/go-git/go-git/v5/config"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
+	"github.com/go-git/go-git/v5/plumbing/transport"
 	gogithttp "github.com/go-git/go-git/v5/plumbing/transport/http"
 	"github.com/go-git/go-git/v5/storage/memory"
 
@@ -124,8 +126,40 @@ func (c *Client) clone(ctx context.Context) (*gogit.Repository, *gogit.Worktree,
 		Depth:         1,
 		Auth:          c.auth,
 	})
+	if errors.Is(err, transport.ErrEmptyRemoteRepository) {
+		// A freshly created GitOps repo has no commits yet, so go-git cannot
+		// clone it. Initialize an in-memory repo on the target branch wired to
+		// the remote; the first WriteFile commit then creates the branch on push.
+		return c.initEmpty()
+	}
 	if err != nil {
 		return nil, nil, fmt.Errorf("clone: %w", err)
+	}
+	wt, err := repo.Worktree()
+	if err != nil {
+		return nil, nil, fmt.Errorf("worktree: %w", err)
+	}
+	return repo, wt, nil
+}
+
+// initEmpty builds an in-memory repository positioned on c.branch with the
+// remote configured, for when the remote exists but has no commits.
+func (c *Client) initEmpty() (*gogit.Repository, *gogit.Worktree, error) {
+	repo, err := gogit.Init(memory.NewStorage(), memfs.New())
+	if err != nil {
+		return nil, nil, fmt.Errorf("init empty repo: %w", err)
+	}
+	if _, err := repo.CreateRemote(&config.RemoteConfig{
+		Name: gogit.DefaultRemoteName,
+		URLs: []string{c.repoURL},
+	}); err != nil {
+		return nil, nil, fmt.Errorf("create remote: %w", err)
+	}
+	// Point HEAD at the target branch so the initial commit lands there even
+	// though it does not exist yet (orphan/initial commit).
+	headRef := plumbing.NewSymbolicReference(plumbing.HEAD, plumbing.NewBranchReferenceName(c.branch))
+	if err := repo.Storer.SetReference(headRef); err != nil {
+		return nil, nil, fmt.Errorf("set HEAD to %s: %w", c.branch, err)
 	}
 	wt, err := repo.Worktree()
 	if err != nil {
@@ -145,8 +179,12 @@ func (c *Client) commitAndPush(ctx context.Context, repo *gogit.Repository, wt *
 	if err != nil {
 		return "", fmt.Errorf("commit: %w", err)
 	}
+	// Push the branch explicitly so this also creates the branch on a
+	// previously-empty remote (where there is no tracking config to default to).
+	branchRef := plumbing.NewBranchReferenceName(c.branch)
 	if err := repo.PushContext(ctx, &gogit.PushOptions{
 		RemoteName: gogit.DefaultRemoteName,
+		RefSpecs:   []config.RefSpec{config.RefSpec(fmt.Sprintf("%s:%s", branchRef, branchRef))},
 		Auth:       c.auth,
 	}); err != nil && !errors.Is(err, gogit.NoErrAlreadyUpToDate) {
 		return "", fmt.Errorf("push: %w", err)
