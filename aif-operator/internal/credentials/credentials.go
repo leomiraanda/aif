@@ -47,7 +47,7 @@ const (
 	ClusterRepoApplicationCollection = "application-collection"
 	ClusterRepoSUSERegistry          = "suse-ai-registry"
 	ClusterRepoNvidia                = "nvidia"
-	ClusterRepoNvidiaBlueprint       = "nvidia-blueprint"
+	ClusterRepoNvidiaBlueprint       = "nvidia-blueprints"
 )
 
 // Basic-auth secrets written to cattle-system for Rancher catalog / Fleet chart pulls.
