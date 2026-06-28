@@ -22,6 +22,7 @@ export function invalidateAccessCache(): void {
 
 async function resolveAccess(store: RancherStore): Promise<boolean> {
   const getters = store.getters;
+  if (!getters) return false;
 
   if (isAdminUser(getters)) return true;
 
