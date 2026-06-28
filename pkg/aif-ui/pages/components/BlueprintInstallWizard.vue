@@ -1,5 +1,5 @@
 <script lang="ts" setup>
-import { ref, computed, onMounted, getCurrentInstance } from 'vue';
+import { ref, computed, watch, onMounted, getCurrentInstance } from 'vue';
 import { useT } from '../../composables/useT';
 import { Banner } from '@components/Banner';
 import Loading from '@shell/components/Loading';
@@ -9,18 +9,21 @@ import BlueprintInstallReviewStep    from './wizard/BlueprintInstallReviewStep.v
 import InstallProgressModal, { type ClusterInstallProgress } from './wizard/InstallProgressModal.vue';
 import { getBlueprint, blueprintCRName, slugifyBlueprintName } from '../../utils/blueprint-api';
 import { createAIWorkload, listAIWorkloads } from '../../utils/operator-api';
+import { useFleetGitConfigured } from '../../composables/useFleetGitConfigured';
 import type { Blueprint } from '../../types/blueprint-types';
 import type { AIWorkloadDeployStrategy } from '../../types/aiworkload-types';
 import { PRODUCT } from '../../config/suseai';
+import logger from '../../utils/logger';
 
 interface Props {
   blueprintName:    string;
   blueprintVersion: string;
 }
 const props   = defineProps<Props>();
-const vm      = getCurrentInstance()!.proxy as any;
-const router  = vm.$router;
-const route   = vm.$route;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const vm      = getCurrentInstance()?.proxy as any;
+const router  = vm?.$router;
+const route   = vm?.$route;
 
 const t = useT();
 const cluster = (route?.params?.cluster as string) || '_';
@@ -35,6 +38,13 @@ const workloadName = ref('');
 const namespace    = ref('');
 const clusters     = ref<string[]>([]);
 const deployType   = ref<AIWorkloadDeployStrategy>('FleetBundle');
+const { fleetGitConfigured, fetchFleetGitConfigured } = useFleetGitConfigured();
+
+watch(fleetGitConfigured, (configured) => {
+  if (!configured && deployType.value === 'GitOps') {
+    deployType.value = 'FleetBundle';
+  }
+}, { immediate: true });
 
 const showProgressModal = ref(false);
 const installProgress   = ref<ClusterInstallProgress[]>([]);
@@ -52,11 +62,13 @@ onMounted(async () => {
     const slug = slugifyBlueprintName(props.blueprintName);
     workloadName.value = slug;
     namespace.value    = `${ slug }-system`;
-  } catch (e: any) {
-    error.value = e?.message || 'Failed to load blueprint';
+  } catch (e: unknown) {
+    error.value = (e instanceof Error ? e.message : null) || 'Failed to load blueprint';
   } finally {
     loading.value = false;
   }
+
+  await fetchFleetGitConfigured();
 });
 
 function nextStep() {
@@ -93,7 +105,7 @@ async function onInstall() {
       return;
     }
   } catch (e) {
-    console.warn('[SUSE-AI] Could not check for existing deployments (proceeding):', e);
+    logger.warn('[SUSE-AI] Could not check for existing deployments (proceeding)', { data: e });
   }
 
   installProgress.value = clusters.value.map(c => ({
@@ -131,10 +143,10 @@ async function onInstall() {
       progress: 100,
       message:  'AIWorkload created — controller will deploy bundles',
     }));
-  } catch (e: any) {
-    const errMsg = e?.status === 409
+  } catch (e: unknown) {
+    const errMsg = (e as Record<string, unknown>)?.status === 409
       ? `A deployment named "${workloadName.value}" already exists in namespace "${namespace.value}". Choose a different deployment name.`
-      : (e?.message || 'Unknown error');
+      : ((e instanceof Error ? e.message : null) || 'Unknown error');
     installProgress.value = installProgress.value.map(p => ({
       ...p,
       status:  'failed' as const,
@@ -157,10 +169,15 @@ function onProgressCancel() { showProgressModal.value = false; }
 <template>
   <div class="install-steps pt-20 outlet">
     <Loading v-if="loading" />
-    <div v-else class="custom-wizard">
+    <div
+      v-else
+      class="custom-wizard"
+    >
       <div class="wizard-header">
         <h1>Install Blueprint</h1>
-        <p class="text-muted">{{ blueprint?.spec.displayName }} v{{ props.blueprintVersion }}</p>
+        <p class="text-muted">
+          {{ blueprint?.spec.displayName }} v{{ props.blueprintVersion }}
+        </p>
       </div>
 
       <div class="wizard-nav">
@@ -172,16 +189,27 @@ function onProgressCancel() { showProgressModal.value = false; }
             :class="{ active: idx === currentStep, completed: idx < currentStep }"
           >
             <div class="step-number">
-              <i v-if="idx < currentStep" class="icon icon-checkmark" />
+              <i
+                v-if="idx < currentStep"
+                class="icon icon-checkmark"
+              />
               <span v-else>{{ idx + 1 }}</span>
             </div>
-            <div class="step-label">{{ step.label }}</div>
+            <div class="step-label">
+              {{ step.label }}
+            </div>
           </div>
         </div>
       </div>
 
       <div class="wizard-content-wrapper">
-        <Banner v-if="error" color="error" class="mb-20">{{ error }}</Banner>
+        <Banner
+          v-if="error"
+          color="error"
+          class="mb-20"
+        >
+          {{ error }}
+        </Banner>
         <div class="wizard-content">
           <BlueprintInstallBasicInfoStep
             v-if="currentStep === 0"
@@ -199,6 +227,7 @@ function onProgressCancel() { showProgressModal.value = false; }
             :clusters="clusters"
             :deploy-type="deployType"
             :helm-unsupported="true"
+            :git-ops-unconfigured="!fleetGitConfigured"
             @update:clusters="clusters = $event"
             @update:deploy-type="deployType = $event"
           />
@@ -217,9 +246,20 @@ function onProgressCancel() { showProgressModal.value = false; }
       </div>
 
       <div class="wizard-buttons-fixed">
-        <button v-if="currentStep > 0" class="btn role-secondary" @click="previousStep">Previous</button>
+        <button
+          v-if="currentStep > 0"
+          class="btn role-secondary"
+          @click="previousStep"
+        >
+          Previous
+        </button>
         <div class="flex-spacer" />
-        <button class="btn role-secondary mr-10" @click="onCancel">Cancel</button>
+        <button
+          class="btn role-secondary mr-10"
+          @click="onCancel"
+        >
+          Cancel
+        </button>
         <button
           v-if="currentStep < 2"
           class="btn role-primary"
@@ -234,7 +274,10 @@ function onProgressCancel() { showProgressModal.value = false; }
           :disabled="submitting || clusters.length === 0"
           @click="onInstall"
         >
-          <i v-if="submitting" class="icon icon-spinner icon-spin mr-5" />
+          <i
+            v-if="submitting"
+            class="icon icon-spinner icon-spin mr-5"
+          />
           Install
         </button>
       </div>
