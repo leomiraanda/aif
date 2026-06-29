@@ -412,3 +412,110 @@ func TestSettingsController_WiresWellKnownSecretsAndCreatesClusterRepos(t *testi
 		t.Errorf("public nvidia ClusterRepo must be anonymous, got clientSecret = %q", pubSecret)
 	}
 }
+
+// registerClusterRepoTypes teaches the fake client about the unstructured
+// ClusterRepo GVKs used across the rotation tests below.
+func registerClusterRepoTypes(s *runtime.Scheme) {
+	s.AddKnownTypeWithName(schema.GroupVersionKind{
+		Group: "catalog.cattle.io", Version: "v1", Kind: "ClusterRepo",
+	}, &unstructured.Unstructured{})
+	s.AddKnownTypeWithName(schema.GroupVersionKind{
+		Group: "catalog.cattle.io", Version: "v1", Kind: "ClusterRepoList",
+	}, &unstructured.UnstructuredList{})
+}
+
+func getClusterRepo(t *testing.T, c client.Client, name string) *unstructured.Unstructured {
+	t.Helper()
+	repo := &unstructured.Unstructured{}
+	repo.SetGroupVersionKind(schema.GroupVersionKind{
+		Group: "catalog.cattle.io", Version: "v1", Kind: "ClusterRepo",
+	})
+	if err := c.Get(context.Background(), types.NamespacedName{Name: name}, repo); err != nil {
+		t.Fatalf("get ClusterRepo %s: %v", name, err)
+	}
+	return repo
+}
+
+// A rotated registry credential must make the operator nudge the ClusterRepo
+// (spec.forceUpdate) so Rancher re-reads the clientSecret and re-authenticates.
+// Updating the mirror secret alone leaves Rancher serving the cached (often
+// 401) auth state until its ~1h periodic retry.
+func TestSettingsController_ForceUpdatesClusterRepoOnCredentialChange(t *testing.T) {
+	s := newScheme(t)
+	registerClusterRepoTypes(s)
+	const ns = "aif-operator"
+
+	cr := &aiplatformv1alpha1.Settings{
+		ObjectMeta: metav1.ObjectMeta{Name: credentials.SettingsName, Namespace: ns},
+		Spec:       aiplatformv1alpha1.SettingsSpec{},
+	}
+	// Well-known source secret carrying the NEW token.
+	src := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: credentials.ClusterRepoApplicationCollection, Namespace: ns},
+		Data:       map[string][]byte{"user": []byte("u@suse.com"), "token": []byte("new-token")},
+	}
+	// Existing cattle-system mirror still holding the OLD token (pre-rotation).
+	mirror := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: credentials.AuthSecretApplicationCollection, Namespace: "cattle-system"},
+		Type:       corev1.SecretTypeBasicAuth,
+		Data:       map[string][]byte{"username": []byte("u@suse.com"), "password": []byte("old-token")},
+	}
+	// Existing ClusterRepo with no forceUpdate yet.
+	repo := &unstructured.Unstructured{}
+	repo.SetGroupVersionKind(schema.GroupVersionKind{Group: "catalog.cattle.io", Version: "v1", Kind: "ClusterRepo"})
+	repo.SetName(credentials.ClusterRepoApplicationCollection)
+	_ = unstructured.SetNestedField(repo.Object, credentials.DefaultApplicationCollectionURL, "spec", "url")
+
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(cr, src, mirror, repo).
+		WithStatusSubresource(&aiplatformv1alpha1.Settings{}).Build()
+
+	r := &settings.SettingsReconciler{Client: c, Scheme: s, OperatorNamespace: ns}
+	if _, err := r.Reconcile(context.Background(), reconcile.Request{
+		NamespacedName: types.NamespacedName{Name: credentials.SettingsName, Namespace: ns},
+	}); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	got := getClusterRepo(t, c, credentials.ClusterRepoApplicationCollection)
+	if fu, _, _ := unstructured.NestedString(got.Object, "spec", "forceUpdate"); fu == "" {
+		t.Errorf("expected spec.forceUpdate to be set after credential change, got empty")
+	}
+}
+
+// When the mirror already matches the source credentials (no rotation), the
+// operator must NOT bump forceUpdate — otherwise every reconcile would churn
+// the ClusterRepo into a re-download.
+func TestSettingsController_NoForceUpdateWhenCredentialsUnchanged(t *testing.T) {
+	s := newScheme(t)
+	registerClusterRepoTypes(s)
+	const ns = "aif-operator"
+
+	cr := &aiplatformv1alpha1.Settings{
+		ObjectMeta: metav1.ObjectMeta{Name: credentials.SettingsName, Namespace: ns},
+		Spec:       aiplatformv1alpha1.SettingsSpec{},
+	}
+	src := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: credentials.ClusterRepoApplicationCollection, Namespace: ns},
+		Data:       map[string][]byte{"user": []byte("u@suse.com"), "token": []byte("same-token")},
+	}
+	// Mirror already in sync with the source.
+	mirror := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: credentials.AuthSecretApplicationCollection, Namespace: "cattle-system"},
+		Type:       corev1.SecretTypeBasicAuth,
+		Data:       map[string][]byte{"username": []byte("u@suse.com"), "password": []byte("same-token")},
+	}
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(cr, src, mirror).
+		WithStatusSubresource(&aiplatformv1alpha1.Settings{}).Build()
+
+	r := &settings.SettingsReconciler{Client: c, Scheme: s, OperatorNamespace: ns}
+	if _, err := r.Reconcile(context.Background(), reconcile.Request{
+		NamespacedName: types.NamespacedName{Name: credentials.SettingsName, Namespace: ns},
+	}); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	got := getClusterRepo(t, c, credentials.ClusterRepoApplicationCollection)
+	if fu, found, _ := unstructured.NestedString(got.Object, "spec", "forceUpdate"); found && fu != "" {
+		t.Errorf("expected no forceUpdate when credentials unchanged, got %q", fu)
+	}
+}

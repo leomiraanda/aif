@@ -19,6 +19,7 @@ package settings
 import (
 	"context"
 	"fmt"
+	"time"
 
 	aiplatformv1alpha1 "github.com/SUSE/aif-operator/api/v1alpha1"
 	"github.com/SUSE/aif-operator/internal/credentials"
@@ -309,14 +310,21 @@ func (r *SettingsReconciler) applyRegistryAuthSecret(
 	ns string,
 	secretName string,
 	userRef, tokenRef *aiplatformv1alpha1.SecretKeyRef,
-) (string, error) {
+) (name string, changed bool, err error) {
 	user, token, ok, err := credentials.ReadPair(ctx, r.Client, ns, userRef, tokenRef)
 	if err != nil {
-		return "", fmt.Errorf("read registry credentials: %w", err)
+		return "", false, fmt.Errorf("read registry credentials: %w", err)
 	}
 	if !ok {
-		return "", nil
+		return "", false, nil
 	}
+
+	// Capture whether the credentials rotated BEFORE overwriting the mirror.
+	// Rancher's ClusterRepo controller does not watch the clientSecret's
+	// content, so a rotated key only takes effect on its ~1h periodic retry
+	// (and a cached auth failure can linger). The caller bumps spec.forceUpdate
+	// when this reports a change so Rancher re-reads the secret immediately.
+	changed = r.registryAuthChanged(ctx, secretName, user, token)
 
 	for _, targetNS := range authSecretNamespaces {
 		mirror := &corev1.Secret{
@@ -337,11 +345,44 @@ func (r *SettingsReconciler) applyRegistryAuthSecret(
 			if targetNS != "cattle-system" && errors.IsNotFound(err) {
 				continue
 			}
-			return "", fmt.Errorf("apply auth secret %s/%s: %w", targetNS, secretName, err)
+			return "", false, fmt.Errorf("apply auth secret %s/%s: %w", targetNS, secretName, err)
 		}
 	}
 
-	return secretName, nil
+	return secretName, changed, nil
+}
+
+// registryAuthChanged reports whether the cattle-system basic-auth mirror named
+// secretName differs from the freshly-resolved (user, token) — i.e. the
+// credentials rotated. cattle-system is the copy the ClusterRepo authenticates
+// with. A missing mirror counts as changed (first write); an unreadable mirror
+// counts as unchanged to avoid spurious force-updates that would churn the
+// ClusterRepo into a re-download every reconcile.
+func (r *SettingsReconciler) registryAuthChanged(ctx context.Context, secretName, user, token string) bool {
+	var existing corev1.Secret
+	err := r.Get(ctx, types.NamespacedName{Namespace: "cattle-system", Name: secretName}, &existing)
+	if errors.IsNotFound(err) {
+		return true
+	}
+	if err != nil {
+		return false
+	}
+	return string(existing.Data["username"]) != user || string(existing.Data["password"]) != token
+}
+
+// forceUpdateClusterRepo bumps spec.forceUpdate to now (RFC3339) so Rancher
+// re-reads the clientSecret and re-downloads the index. A plain merge patch
+// keeps forceUpdate out of the SSA-managed field set (applyClusterRepo owns
+// url + clientSecret), so the two never fight over ownership.
+func (r *SettingsReconciler) forceUpdateClusterRepo(ctx context.Context, name string) error {
+	repo := &unstructured.Unstructured{}
+	repo.SetGroupVersionKind(schema.GroupVersionKind{Group: "catalog.cattle.io", Version: "v1", Kind: "ClusterRepo"})
+	repo.SetName(name)
+	patch := []byte(fmt.Sprintf(`{"spec":{"forceUpdate":%q}}`, time.Now().UTC().Format(time.RFC3339)))
+	if err := r.Patch(ctx, repo, client.RawPatch(types.MergePatchType, patch)); err != nil {
+		return fmt.Errorf("force-update ClusterRepo %s: %w", name, err)
+	}
+	return nil
 }
 
 func (r *SettingsReconciler) applyClusterRepo(ctx context.Context, name, url, clientSecretName string) error {
@@ -441,9 +482,10 @@ func (r *SettingsReconciler) reconcileRegistryRepo(
 	repoNames []string,
 ) error {
 	secretName := ""
+	changed := false
 	if userRef != nil && tokenRef != nil {
 		var err error
-		secretName, err = r.applyRegistryAuthSecret(ctx, namespace, authSecretName, userRef, tokenRef)
+		secretName, changed, err = r.applyRegistryAuthSecret(ctx, namespace, authSecretName, userRef, tokenRef)
 		if err != nil {
 			return err
 		}
@@ -456,6 +498,11 @@ func (r *SettingsReconciler) reconcileRegistryRepo(
 	for _, name := range repoNames {
 		if err := r.applyClusterRepo(ctx, name, url, secretName); err != nil {
 			return err
+		}
+		if changed {
+			if err := r.forceUpdateClusterRepo(ctx, name); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
@@ -479,9 +526,10 @@ func (r *SettingsReconciler) reconcileNvidiaRepos(ctx context.Context, s *aiplat
 	allNvidiaRepos := []string{credentials.ClusterRepoNvidia, credentials.ClusterRepoNvidiaBlueprint}
 
 	secretName := ""
+	changed := false
 	if nvUser != nil && nvToken != nil {
 		var err error
-		secretName, err = r.applyRegistryAuthSecret(ctx, s.Namespace, credentials.AuthSecretNvidia, nvUser, nvToken)
+		secretName, changed, err = r.applyRegistryAuthSecret(ctx, s.Namespace, credentials.AuthSecretNvidia, nvUser, nvToken)
 		if err != nil {
 			return err
 		}
@@ -497,7 +545,13 @@ func (r *SettingsReconciler) reconcileNvidiaRepos(ctx context.Context, s *aiplat
 		if err := r.deleteClusterRepo(ctx, credentials.ClusterRepoNvidiaBlueprint); err != nil {
 			return err
 		}
-		return r.applyClusterRepo(ctx, credentials.ClusterRepoNvidia, nvURL, secretName)
+		if err := r.applyClusterRepo(ctx, credentials.ClusterRepoNvidia, nvURL, secretName); err != nil {
+			return err
+		}
+		if changed {
+			return r.forceUpdateClusterRepo(ctx, credentials.ClusterRepoNvidia)
+		}
+		return nil
 	}
 
 	// Public NGC charts catalog: created WITHOUT a clientSecret (anonymous).
@@ -513,7 +567,15 @@ func (r *SettingsReconciler) reconcileNvidiaRepos(ctx context.Context, s *aiplat
 	if err := r.applyClusterRepo(ctx, credentials.ClusterRepoNvidia, credentials.DefaultNvidiaChartsURL, ""); err != nil {
 		return err
 	}
-	return r.applyClusterRepo(ctx, credentials.ClusterRepoNvidiaBlueprint, credentials.DefaultNvidiaBlueprintURL, secretName)
+	if err := r.applyClusterRepo(ctx, credentials.ClusterRepoNvidiaBlueprint, credentials.DefaultNvidiaBlueprintURL, secretName); err != nil {
+		return err
+	}
+	if changed {
+		// Only the blueprint repo authenticates (the public charts repo is
+		// anonymous), so it's the one whose cached auth must be refreshed.
+		return r.forceUpdateClusterRepo(ctx, credentials.ClusterRepoNvidiaBlueprint)
+	}
+	return nil
 }
 
 // pruneRegistryRepos deletes the given ClusterRepos and the registry's
