@@ -1,7 +1,8 @@
 // Cluster resource metrics service
-import type { RancherStore, ClusterResource, ClusterInfo, NodeResource, NodeMetric } from '../types/rancher-types';
+import type { Dispatchable, ClusterResource, ClusterInfo, NodeResource, NodeMetric } from '../types/rancher-types';
 import { handleSimpleError } from '../utils/error-handler';
 import { TIMEOUT_VALUES } from '../utils/constants';
+import logger from '../utils/logger';
 
 export interface NodeResourceInfo {
   nodeId: string;
@@ -27,8 +28,8 @@ export interface ClusterResourceSummary {
   nodes: NodeResourceInfo[];
 }
 
-export async function getClusterResourceMetrics(store: RancherStore, clusterId: string): Promise<ClusterResourceSummary> {
-  console.log(`[SUSE-AI] getClusterResourceMetrics: Starting for cluster ${clusterId}`);
+export async function getClusterResourceMetrics(store: Dispatchable, clusterId: string): Promise<ClusterResourceSummary> {
+  logger.debug(`getClusterResourceMetrics: Starting for cluster ${clusterId}`);
   
   try {
     // Get cluster basic info first using the same approach as getClusters
@@ -210,8 +211,8 @@ export async function getClusterResourceMetrics(store: RancherStore, clusterId: 
   }
 }
 
-export async function getAllClusterResourceMetrics(store: RancherStore): Promise<ClusterResourceSummary[]> {
-  console.log('[SUSE-AI] getAllClusterResourceMetrics: Starting...');
+export async function getAllClusterResourceMetrics(store: Dispatchable): Promise<ClusterResourceSummary[]> {
+  logger.debug('getAllClusterResourceMetrics: Starting...');
 
   try {
     const { getAllClusters } = await import('./rancher-apps');
@@ -275,16 +276,16 @@ function parseK8sMemory(memoryStr: string): number {
   }
 }
 
-async function fetchNodes(store: RancherStore, clusterId: string): Promise<NodeResource[]> {
+async function fetchNodes(store: Dispatchable, clusterId: string): Promise<NodeResource[]> {
   return fetchClusterData<NodeResource>(store, clusterId, 'nodes', 'nodes');
 }
 
-async function fetchNodeMetrics(store: RancherStore, clusterId: string): Promise<NodeMetric[]> {
+async function fetchNodeMetrics(store: Dispatchable, clusterId: string): Promise<NodeMetric[]> {
   return fetchClusterData<NodeMetric>(store, clusterId, 'metrics.k8s.io.nodes', 'node metrics');
 }
 
 async function fetchClusterData<T>(
-  store: RancherStore,
+  store: Dispatchable,
   clusterId: string,
   resourcePath: string,
   label: string
@@ -305,8 +306,8 @@ async function fetchClusterData<T>(
   }
 }
 
-async function fetchStorageClasses(store: RancherStore, clusterId: string): Promise<string[]> {
-  const storageClasses = await fetchClusterData<any>(
+async function fetchStorageClasses(store: Dispatchable, clusterId: string): Promise<string[]> {
+  const storageClasses = await fetchClusterData<Record<string, unknown>>(
     store,
     clusterId,
     'storage.k8s.io.storageclasses',

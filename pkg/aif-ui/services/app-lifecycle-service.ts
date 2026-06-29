@@ -8,9 +8,8 @@
 import { log as logger } from '../utils/logger';
 import { createErrorHandler, handleSimpleError } from '../utils/error-handler';
 import type {
-  RancherStore,
-  AppCRD,
-  InstallationPayload
+  Dispatchable,
+  AppCRD
 } from '../types/rancher-types';
 import { TIMEOUT_VALUES } from '../utils/constants';
 
@@ -90,7 +89,7 @@ export class AppLifecycleService {
    * ```
    */
   static async createOrUpgradeApp(
-    $store: RancherStore,
+    $store: Dispatchable,
     clusterId: string,
     namespace: string,
     releaseName: string,
@@ -328,7 +327,7 @@ export class AppLifecycleService {
    * ```
    */
   static async waitForAppInstall(
-    $store: RancherStore,
+    $store: Dispatchable,
     clusterId: string,
     namespace: string,
     releaseName: string,
@@ -450,7 +449,7 @@ export class AppLifecycleService {
    * ```
    */
   static async deleteApp(
-    $store: RancherStore,
+    $store: Dispatchable,
     clusterId: string,
     namespace: string,
     releaseName: string,
