@@ -262,7 +262,7 @@ export default defineComponent({
 
     const repositoryOptions = computed(() => [
       { label: 'SUSE AI Library', value: 'suse-ai' },
-      { label: 'Nvidia Library', value: 'nvidia' },
+      { label: 'NVIDIA AI Enterprise', value: 'nvidia' },
     ]);
 
     const hasRegistryConfigured = computed(() => {
