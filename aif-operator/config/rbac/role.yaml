@@ -9,8 +9,6 @@ rules:
   resources:
   - configmaps
   - persistentvolumeclaims
-  - pods
-  - serviceaccounts
   verbs:
   - delete
   - get
@@ -26,6 +24,16 @@ rules:
 - apiGroups:
   - ""
   resources:
+  - pods
+  - services
+  verbs:
+  - delete
+  - get
+  - list
+  - watch
+- apiGroups:
+  - ""
+  resources:
   - secrets
   verbs:
   - create
@@ -38,11 +46,12 @@ rules:
 - apiGroups:
   - ""
   resources:
-  - services
+  - serviceaccounts
   verbs:
-  - delete
   - get
   - list
+  - patch
+  - update
   - watch
 - apiGroups:
   - ai-platform.suse.com
@@ -134,13 +143,6 @@ rules:
   - fleet.cattle.io
   resources:
   - bundles
-  verbs:
-  - delete
-  - get
-  - list
-- apiGroups:
-  - fleet.cattle.io
-  resources:
   - gitrepos
   verbs:
   - create

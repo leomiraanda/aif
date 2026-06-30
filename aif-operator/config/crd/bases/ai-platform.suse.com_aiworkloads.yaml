@@ -114,6 +114,18 @@ spec:
                         description: Release is the Helm release name.
                         minLength: 1
                         type: string
+                      vendor:
+                        default: suse
+                        description: |-
+                          Vendor selects the secret-injection profile. Defaults to "suse" so
+                          existing App-sourced workloads behave identically after CRD upgrade.
+                          The UI is expected to populate this from the chart's repo URL (e.g.
+                          "nvidia" for charts pulled from helm.ngc.nvidia.com), mirroring how
+                          BlueprintComponent.Vendor is filled at Blueprint-build time.
+                        enum:
+                        - suse
+                        - nvidia
+                        type: string
                     required:
                     - chartName
                     - chartRepo
@@ -262,6 +274,43 @@ spec:
                 - Failed
                 - Unknown
                 type: string
+              pullSecretDeliveries:
+                description: |-
+                  PullSecretDeliveries groups operator-delivered pull-secret names by
+                  the namespace they were written into. Replaces the prior flat
+                  PullSecretNames field so blueprints with components in different
+                  namespaces (BlueprintComponent.TargetNamespace) deliver correctly to
+                  each. Used by reconcilePullSecrets to merge into SAs per namespace,
+                  by deliverPullSecrets to emit one Fleet Bundle per (cluster, namespace),
+                  and by the finalizer to prune SA references on delete.
+                items:
+                  description: |-
+                    PullSecretDelivery groups operator-delivered pull-secret names by the
+                    target namespace they were written into. Blueprint workloads where each
+                    component opts in to its own BlueprintComponent.TargetNamespace produce
+                    one entry per distinct namespace; single-namespace blueprints and
+                    App-sourced workloads produce exactly one entry.
+                  properties:
+                    names:
+                      description: |-
+                        Names is the set of dockerconfigjson / Opaque Secret names the
+                        injectors created in that namespace.
+                      items:
+                        type: string
+                      type: array
+                      x-kubernetes-list-type: set
+                    namespace:
+                      description: |-
+                        Namespace is the target namespace the listed secrets were written
+                        into on the operator's local cluster (and where Fleet Bundles ship
+                        matching copies on each downstream cluster).
+                      minLength: 1
+                      type: string
+                  required:
+                  - names
+                  - namespace
+                  type: object
+                type: array
             type: object
         type: object
     served: true

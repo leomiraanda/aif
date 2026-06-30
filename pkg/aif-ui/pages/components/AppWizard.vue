@@ -33,8 +33,9 @@ import { fetchSuseAiApps, getClusterRepoNameFromUrl, getLibraryFromRepoUrl } fro
 import { isChartArchiveOversized } from '../../services/chart-values';
 import { createAIWorkload, updateAIWorkload, listAIWorkloads, getRegistryCredentials } from '../../utils/operator-api';
 import { useFleetGitConfigured } from '../../composables/useFleetGitConfigured';
-import { createFleetBundle, buildBundleName }        from '../../services/fleet-bundle';
+import { createFleetBundle, buildBundleName, buildBundleNameForCluster, ensureAppCollectionPullSecrets } from '../../services/fleet-bundle';
 import { publishToFleetGit }                          from '../../services/git-publish';
+import { crNameForCluster } from '../../utils/workload-name';
 import type { AIWorkloadClusterStatus, AIWorkloadPhase } from '../../types/aiworkload-types';
 
 const REPO_CLUSTER = 'local' as const;
@@ -403,6 +404,14 @@ async function loadAIWorkloadDetails() {
     if (app?.chartName)    form.value.chartName    = app.chartName;
     if (app?.chartVersion) form.value.chartVersion = app.chartVersion;
     if (app?.chartRepo)    form.value.chartRepo    = app.chartRepo;
+    // Restore the user's original release name from the CR. The URL query
+    // parameter (instanceName) contains the AIWorkload CR's metadata.name,
+    // which includes cluster ID suffixes for downstream deployments (e.g.,
+    // "qdrant-c-785f4"), but the Helm release name should stay stable across
+    // upgrades (e.g., "qdrant"). Without this sync, an upgrade would write a
+    // different releaseName to the HelmOp and Fleet would create a new Helm
+    // install instead of upgrading the existing release.
+    if (app?.release)      form.value.release      = app.release;
 
     // Authoritative deploy strategy from the CR.
     if (workload.spec.deployStrategy) {
@@ -722,13 +731,22 @@ async function submit() {
     });
 
     if (isInstallMode.value) {
+      // Per-cluster collision check: one AIWorkload CR per (release, cluster),
+      // so two installs of the same chart to different clusters are independent.
+      // We block only the cluster(s) where a CR already exists.
       try {
         const { items } = await listAIWorkloads();
-        const exists = items.some(
-          w => w.metadata?.namespace === form.value.namespace && w.metadata?.name === form.value.release,
+        const existingNames = new Set(
+          (items || [])
+            .filter((w: any) => w?.metadata?.namespace === form.value.namespace)
+            .map((w: any) => w.metadata.name),
         );
-        if (exists) {
-          error.value = `A deployment named "${form.value.release}" already exists in namespace "${form.value.namespace}". Choose a different instance name, or manage the existing deployment from the list.`;
+        const collisions = form.value.clusters.filter(
+          (c) => existingNames.has(crNameForCluster(form.value.release, c)),
+        );
+        if (collisions.length > 0) {
+          const list = collisions.map((c) => `${form.value.release} on ${c}`).join(', ');
+          error.value = `Already deployed: ${list}. Pick different clusters or manage the existing deployment(s) from the list.`;
           submitting.value = false;
           return;
         }
@@ -809,13 +827,37 @@ async function performMultiClusterInstall() {
     console.warn(`[SUSE-AI] Multi-cluster install completed with ${failed.length} failure(s)`);
   }
 
-  await recordAIWorkload('', 'Helm');
+  // One CR per cluster — Helm strategy has no fleet bundle name to record.
+  await Promise.all(targetClusters.map(c => recordAIWorkload({}, 'Helm', c)));
   submitting.value = false;
 }
 
-async function performFleetBundleInstall() {
-  const bundleName = buildBundleName(form.value.release, form.value.namespace);
+// Map per-cluster settled results onto installProgress and aggregate the
+// top-level error, mirroring BlueprintInstallWizard's per-cluster-independent
+// reporting: one cluster's failure marks only that cluster failed and leaves
+// the successful ones intact.
+function applyPerClusterResults(results: PromiseSettledResult<unknown>[], successMessage: string) {
+  installProgress.value = installProgress.value.map((p, i) => {
+    const r = results[i];
+    if (r && r.status === 'fulfilled') {
+      return { ...p, progress: 100, status: 'success' as const, message: successMessage };
+    }
+    const e: any = (r as PromiseRejectedResult | undefined)?.reason;
+    const errMsg = e?.status === 409
+      ? `A deployment for "${ form.value.release }" already exists on ${ p.clusterId }.`
+      : (e?.message || 'Unknown error');
+    return { ...p, status: 'failed' as const, message: errMsg, error: errMsg };
+  });
 
+  const failed = results.filter(r => r.status === 'rejected');
+  if (failed.length === results.length) {
+    error.value = (failed[0] as PromiseRejectedResult | undefined)?.reason?.message || 'All cluster installs failed';
+  } else if (failed.length > 0) {
+    error.value = `${ failed.length } of ${ results.length } cluster installs failed — see progress for details`;
+  }
+}
+
+async function performFleetBundleInstall() {
   installProgress.value = form.value.clusters.map(clusterId => ({
     clusterId,
     clusterName: clusterId,
@@ -826,6 +868,17 @@ async function performFleetBundleInstall() {
   showProgressModal.value = true;
 
   try {
+    // Per-cluster bundle name keeps two AIWorkloads installing the same chart
+    // to different downstream clusters from clobbering each other in
+    // fleet-default. Tracked here so the AIWorkload CR for each cluster
+    // records its specific bundle name.
+    const bundleNamesByCluster: Record<string, string> = {};
+    for (const clusterId of form.value.clusters) {
+      bundleNamesByCluster[clusterId] = buildBundleNameForCluster(
+        form.value.release, form.value.namespace, clusterId,
+      );
+    }
+
     // Pre-create pull secrets for ALL configured registries so subchart images from a
     // different registry than the parent chart are also covered.
     let creds: { applicationCollection?: any; suseRegistry?: any; nvidia?: any } = {};
@@ -852,24 +905,39 @@ async function performFleetBundleInstall() {
     const repoObj = repos.find((r: any) => r?.metadata?.name === form.value.chartRepo);
     const chartRepoUrl = repoObj?.spec?.url || repoObj?.spec?.ociRepo || '';
 
-    updateAllProgress(50, 'Creating Fleet Bundle...');
-    await createFleetBundle(store, {
-      bundleName,
-      chartRepo:                form.value.chartRepo,
-      chartRepoUrl,
-      chartName:                form.value.chartName,
-      chartVersion:             form.value.chartVersion,
-      values:                   form.value.values,
-      targetNamespace:          form.value.namespace,
-      targetClusterIds:         form.value.clusters,
-      additionalPullSecretNames: extraPullSecretNames,
-      library:                  getLibraryFromRepoUrl(chartRepoUrl),
-    });
+    updateAllProgress(50, 'Creating Fleet Bundles (one per cluster)...');
+    // One bundle per cluster — Fleet's per-workspace name uniqueness means
+    // sharing a name across clusters in fleet-default would silently overwrite.
+    // Per-cluster independence: a failure on one cluster must not roll back or
+    // mark failed the clusters that already succeeded (mirrors
+    // BlueprintInstallWizard.onInstall).
+    const results = await Promise.allSettled(form.value.clusters.map(async clusterId => {
+      // Create the AIWorkload CR BEFORE the workload HelmOp. The operator's
+      // pull-secret delivery (downstream secret bundle + SA-merge) is driven
+      // off the AIWorkload CR, while createFleetBundle's HelmOp starts the
+      // chart install immediately. Recording the CR first lets the operator
+      // begin delivering imagePullSecrets ahead of (or concurrent with) the
+      // chart install, instead of racing behind it — otherwise the chart's
+      // pods/ServiceAccounts can come up before the SUSE-AI pull secret lands,
+      // which surfaces as ImagePullBackOff on FleetBundle installs (the GitOps
+      // path masks this race because its git→Fleet sync is inherently slower).
+      await recordAIWorkload(bundleNamesByCluster, 'FleetBundle', clusterId, { phase: 'Pending', clusterStatuses: [] });
+      await createFleetBundle(store, {
+        bundleName:                bundleNamesByCluster[clusterId],
+        release:                   form.value.release,
+        chartRepo:                 form.value.chartRepo,
+        chartRepoUrl,
+        chartName:                 form.value.chartName,
+        chartVersion:              form.value.chartVersion,
+        values:                    form.value.values,
+        targetNamespace:           form.value.namespace,
+        targetClusterIds:          [clusterId],
+        additionalPullSecretNames: extraPullSecretNames,
+        library:                   getLibraryFromRepoUrl(chartRepoUrl),
+      });
+    }));
 
-    updateAllProgress(100, 'Fleet Bundle created — Fleet will deploy to selected clusters');
-    installProgress.value = installProgress.value.map(p => ({ ...p, status: 'success' as const }));
-
-    await recordAIWorkload(bundleName, 'FleetBundle', { phase: 'Pending', clusterStatuses: [] });
+    applyPerClusterResults(results, 'Fleet Bundle created — Fleet will deploy to selected cluster');
   } catch (e: any) {
     installProgress.value = installProgress.value.map(p => ({
       ...p, status: 'failed' as const, error: e?.message || 'Unknown error',
@@ -881,8 +949,6 @@ async function performFleetBundleInstall() {
 }
 
 async function performGitOpsInstall() {
-  const bundleName = buildBundleName(form.value.release, form.value.namespace);
-
   installProgress.value = form.value.clusters.map(clusterId => ({
     clusterId,
     clusterName: clusterId,
@@ -893,6 +959,16 @@ async function performGitOpsInstall() {
   showProgressModal.value = true;
 
   try {
+    // Per-cluster bundle name for the same reason as performFleetBundleInstall:
+    // Fleet bundles are unique per (workspace, name) and the GitOps publish ends
+    // up creating Fleet objects in fleet-default for downstream clusters.
+    const bundleNamesByCluster: Record<string, string> = {};
+    for (const clusterId of form.value.clusters) {
+      bundleNamesByCluster[clusterId] = buildBundleNameForCluster(
+        form.value.release, form.value.namespace, clusterId,
+      );
+    }
+
     const creds = await getRegistryCredentials(5000);
     const pullSecretNames: string[] = [];
     for (const clusterId of form.value.clusters) {
@@ -911,29 +987,49 @@ async function performGitOpsInstall() {
       }
     }
 
-    updateAllProgress(60, 'Publishing Fleet Bundle YAML to git...');
+    updateAllProgress(60, 'Publishing Fleet Bundle YAML(s) to git...');
 
     const repos = await listClusterRepos(store);
     const repoObj = repos.find((r: any) => r?.metadata?.name === form.value.chartRepo);
     const chartRepoUrl = repoObj?.spec?.url || repoObj?.spec?.ociRepo || '';
+    const helmSecretName = (() => { const cs = repoObj?.spec?.clientSecret; return typeof cs === 'object' ? (cs?.name || null) : (cs || null); })();
 
-    await publishToFleetGit({
-      bundleName,
-      chartName:        form.value.chartName,
-      chartVersion:     form.value.chartVersion,
-      chartRepoUrl,
-      helmSecretName:   (() => { const cs = repoObj?.spec?.clientSecret; return typeof cs === 'object' ? (cs?.name || null) : (cs || null); })(),
-      values:           form.value.values,
-      pullSecretNames,
-      targetClusterIds: form.value.clusters,
-      targetNamespace:  form.value.namespace,
-      library:          getLibraryFromRepoUrl(chartRepoUrl),
-    });
+    // SUSE-registry charts can bundle subcharts whose images come from
+    // AppCollection — wire those creds into the bundle values too (the SA's
+    // imagePullSecrets are ignored once the chart sets pod-spec imagePullSecrets).
+    if (getLibraryFromRepoUrl(chartRepoUrl) === 'suse-ai') {
+      await ensureAppCollectionPullSecrets(store, form.value.namespace, form.value.clusters, pullSecretNames);
+    }
 
-    updateAllProgress(100, 'Fleet Bundle YAML committed — Fleet will deploy to selected clusters');
-    installProgress.value = installProgress.value.map(p => ({ ...p, status: 'success' as const }));
+    // One bundle YAML per cluster — committed sequentially to avoid racing on
+    // the same git branch. Each cluster is independent: a failure records that
+    // cluster as failed and continues with the rest, rather than aborting the
+    // remaining clusters (per-cluster independence as in
+    // BlueprintInstallWizard.onInstall, kept sequential for the shared branch).
+    const results: PromiseSettledResult<void>[] = [];
+    for (const clusterId of form.value.clusters) {
+      try {
+        await publishToFleetGit({
+          bundleName:       bundleNamesByCluster[clusterId],
+          release:          form.value.release,
+          chartName:        form.value.chartName,
+          chartVersion:     form.value.chartVersion,
+          chartRepoUrl,
+          helmSecretName,
+          values:           form.value.values,
+          pullSecretNames,
+          targetClusterIds: [clusterId],
+          targetNamespace:  form.value.namespace,
+          library:          getLibraryFromRepoUrl(chartRepoUrl),
+        });
+        await recordAIWorkload(bundleNamesByCluster, 'GitOps', clusterId, { phase: 'Pending', clusterStatuses: [] });
+        results.push({ status: 'fulfilled', value: undefined });
+      } catch (e) {
+        results.push({ status: 'rejected', reason: e });
+      }
+    }
 
-    await recordAIWorkload(bundleName, 'GitOps', { phase: 'Pending', clusterStatuses: [] });
+    applyPerClusterResults(results, 'Fleet Bundle YAML committed — Fleet will deploy to selected cluster');
   } catch (e: any) {
     installProgress.value = installProgress.value.map(p => ({
       ...p, status: 'failed' as const, error: e?.message || 'Unknown error',
@@ -948,9 +1044,23 @@ function updateAllProgress(progress: number, message: string) {
   installProgress.value = installProgress.value.map(p => ({ ...p, progress, message }));
 }
 
+// recordAIWorkload writes ONE AIWorkload CR per (release, cluster). Each CR is
+// uniquely identifiable on the management cluster as `<release>-<clusterId>`
+// in the target namespace, so deploying the same chart to multiple clusters
+// (or to a new cluster after an existing deployment) never collides on
+// (namespace, name).
+//
+// The caller controls clusterId scoping:
+//   - Install flows pass each clusterId individually (one CR per cluster)
+//   - Manage flows pass the single cluster the user is editing
+//
+// fleetBundleNamesByCluster lets each per-cluster CR carry its own bundle
+// name (since FleetBundle/GitOps strategies emit one Fleet HelmOp per cluster
+// to avoid bundle-name collision in fleet-default).
 async function recordAIWorkload(
-  fleetBundleName: string,
+  fleetBundleNamesByCluster: Record<string, string>,
   strategy: 'Helm' | 'FleetBundle' | 'GitOps',
+  clusterId: string,
   initialStatus?: { phase: AIWorkloadPhase; clusterStatuses: AIWorkloadClusterStatus[] },
 ) {
   try {
@@ -961,18 +1071,28 @@ async function recordAIWorkload(
       phase = initialStatus.phase;
       clusterStatuses = initialStatus.clusterStatuses;
     } else {
-      clusterStatuses = installProgress.value.map(p => ({
-        clusterId: p.clusterId,
-        phase:     p.status === 'success' ? 'Running' : 'Failed',
-        message:   p.error || p.message || '',
-      }));
-
-      const allRunning = clusterStatuses.every(s => s.phase === 'Running');
-      const allFailed  = clusterStatuses.every(s => s.phase === 'Failed');
-      phase = allRunning ? 'Running' : allFailed ? 'Failed' : 'Degraded';
+      const p = installProgress.value.find(x => x.clusterId === clusterId);
+      const single: AIWorkloadClusterStatus = {
+        clusterId,
+        phase:   p?.status === 'success' ? 'Running' : 'Failed',
+        message: p?.error || p?.message || '',
+      };
+      clusterStatuses = [single];
+      phase = single.phase === 'Running' ? 'Running' : 'Failed';
     }
 
-    const crName = form.value.release;
+    const crName = crNameForCluster(form.value.release, clusterId);
+
+    // Resolve the chart's repo URL to derive `vendor` for the operator's
+    // pull-secret injector — mirrors BlueprintAppSelectorStep.vue's pattern.
+    // Without this, the operator's reconcileAppPullSecrets falls back to the
+    // CRD default "suse" and NVIDIA charts never get ngc-secret/ngc-api.
+    const repos = await listClusterRepos(store);
+    const repoObj = repos.find((r: any) => r?.metadata?.name === form.value.chartRepo);
+    const chartRepoUrl = repoObj?.spec?.url || repoObj?.spec?.ociRepo || '';
+    const vendor = getLibraryFromRepoUrl(chartRepoUrl) === 'nvidia' ? 'nvidia' : 'suse';
+
+    const fleetBundleName = fleetBundleNamesByCluster[clusterId];
     const spec = {
       displayName:     (route.query.n as string) || props.slug,
       source: {
@@ -982,10 +1102,11 @@ async function recordAIWorkload(
           chartName:    form.value.chartName,
           chartVersion: form.value.chartVersion,
           release:      form.value.release,
+          vendor,
         },
       },
       targetNamespace:  form.value.namespace,
-      targetClusters:   form.value.clusters,
+      targetClusters:   [clusterId],
       deployStrategy:   strategy,
       componentValues:  [{
         componentName: form.value.chartName,
@@ -1277,7 +1398,9 @@ async function performUpgrade() {
 
   try {
     await upgradeSingleCluster(clusterId);
-    await recordAIWorkload('', form.value.deployType);
+    // Manage mode operates on a single cluster instance (the AIWorkload CR
+    // the user is editing). The Helm strategy has no fleet bundle.
+    await recordAIWorkload({}, form.value.deployType, clusterId);
   } finally {
     submitting.value = false;
   }
@@ -1327,6 +1450,7 @@ async function performFleetBundleUpgrade() {
     updateAllProgress(60, 'Updating Fleet Bundle...');
     await createFleetBundle(store, {
       bundleName,
+      release:                  form.value.release,
       chartRepo:                form.value.chartRepo,
       chartRepoUrl,
       chartName:                form.value.chartName,
@@ -1342,7 +1466,10 @@ async function performFleetBundleUpgrade() {
     installProgress.value = installProgress.value.map(p => ({ ...p, status: 'success' as const }));
     managedFleetBundleNames.value = [bundleName];
 
-    await recordAIWorkload(bundleName, 'FleetBundle', { phase: 'Pending', clusterStatuses: [] });
+    // Upgrade flow operates on a single AIWorkload CR (form.value.clusters[0]
+    // is the cluster the user is editing in manage mode).
+    const clusterId = form.value.clusters[0];
+    await recordAIWorkload({ [clusterId]: bundleName }, 'FleetBundle', clusterId, { phase: 'Pending', clusterStatuses: [] });
   } catch (e: any) {
     installProgress.value = installProgress.value.map(p => ({
       ...p, status: 'failed' as const, error: e?.message || 'Unknown error',
@@ -1390,8 +1517,15 @@ async function performGitOpsUpgrade() {
     const repoObj = repos.find((r: any) => r?.metadata?.name === form.value.chartRepo);
     const chartRepoUrl = repoObj?.spec?.url || repoObj?.spec?.ociRepo || '';
 
+    // SUSE-registry charts can bundle subcharts whose images come from
+    // AppCollection — wire those creds in too (see performGitOpsInstall).
+    if (getLibraryFromRepoUrl(chartRepoUrl) === 'suse-ai') {
+      await ensureAppCollectionPullSecrets(store, form.value.namespace, form.value.clusters, pullSecretNames);
+    }
+
     await publishToFleetGit({
       bundleName,
+      release:          form.value.release,
       chartName:        form.value.chartName,
       chartVersion:     form.value.chartVersion,
       chartRepoUrl,
@@ -1407,7 +1541,10 @@ async function performGitOpsUpgrade() {
     installProgress.value = installProgress.value.map(p => ({ ...p, status: 'success' as const }));
     managedFleetBundleNames.value = [bundleName];
 
-    await recordAIWorkload(bundleName, 'GitOps', { phase: 'Pending', clusterStatuses: [] });
+    // Upgrade flow operates on a single AIWorkload CR (form.value.clusters[0]
+    // is the cluster the user is editing in manage mode).
+    const clusterId = form.value.clusters[0];
+    await recordAIWorkload({ [clusterId]: bundleName }, 'GitOps', clusterId, { phase: 'Pending', clusterStatuses: [] });
   } catch (e: any) {
     installProgress.value = installProgress.value.map(p => ({
       ...p, status: 'failed' as const, error: e?.message || 'Unknown error',

@@ -69,6 +69,16 @@ func newTestRemote(t *testing.T) string {
 	return "file://" + remoteDir
 }
 
+// newEmptyTestRemote creates a bare git repo with NO commits (no branches),
+// mimicking a freshly created, never-initialized GitOps repository.
+func newEmptyTestRemote(t *testing.T) string {
+	t.Helper()
+	remoteDir := t.TempDir()
+	_, err := gogit.PlainInit(remoteDir, true)
+	require.NoError(t, err)
+	return "file://" + remoteDir
+}
+
 // readFileFromRemote clones the remote and reads filePath. Returns error if file not found.
 func readFileFromRemote(t *testing.T, remoteURL, filePath string) (string, error) {
 	t.Helper()
@@ -118,6 +128,31 @@ func TestWriteFile(t *testing.T) {
 	got, err := readFileFromRemote(t, remote, filepath.Join("workloads", "test.yaml"))
 	require.NoError(t, err)
 	require.Equal(t, "content: true\n", got)
+}
+
+func TestWriteFile_EmptyRemoteInitializes(t *testing.T) {
+	remote := newEmptyTestRemote(t)
+	c := newClient(t, remote)
+
+	hash, err := c.WriteFile(context.Background(),
+		filepath.Join("workloads", "test.yaml"),
+		"content: true\n",
+		"chore: initialize gitops repo")
+	require.NoError(t, err)
+	require.NotEmpty(t, hash)
+
+	got, err := readFileFromRemote(t, remote, filepath.Join("workloads", "test.yaml"))
+	require.NoError(t, err)
+	require.Equal(t, "content: true\n", got)
+}
+
+func TestDeleteFile_EmptyRemoteIsNoOp(t *testing.T) {
+	remote := newEmptyTestRemote(t)
+	c := newClient(t, remote)
+
+	hash, err := c.DeleteFile(context.Background(), "workloads/missing.yaml", "remove")
+	require.NoError(t, err)
+	require.Empty(t, hash) // nothing to delete on an empty repo
 }
 
 func TestWriteFile_UnchangedContentIsNoOp(t *testing.T) {

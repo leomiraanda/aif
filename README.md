@@ -1,8 +1,8 @@
 # SUSE AI Factory
 
-SUSE AI Factory is a Rancher UI Extension for managing SUSE AI components across Kubernetes clusters. This extension provides a unified interface for installing, managing, and monitoring AI workloads in Rancher-managed clusters.
+SUSE AI Factory is a Rancher UI Extension for managing SUSE AI Factory components across Kubernetes clusters. This extension provides a unified interface for installing, managing, and monitoring AI workloads in Rancher-managed clusters.
 
-> **Note:** This extension requires an active [SUSE AI](https://www.suse.com/products/ai/) subscription to access the application catalog.
+> **Note:** This extension requires an active [SUSE AI Factory](https://www.suse.com/products/ai/) subscription to access the application catalog.
 
 ## Development
 
@@ -56,7 +56,7 @@ yarn build-pkg aif-ui --mode production
 
 ## Extension Catalog Container
 
-- The container packages the SUSE AI Factory (Rancher UI Extension) into a single OCI container image.
+- The container packages SUSE AI Factory (Rancher UI Extension) into a single OCI container image.
 - This container is:
    - Built and published during CI
    - Stored in GitHub Container Registry (GHCR)
