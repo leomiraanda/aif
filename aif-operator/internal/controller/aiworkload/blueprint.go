@@ -20,6 +20,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	aiplatformv1alpha1 "github.com/SUSE/aif-operator/api/v1alpha1"
+	"github.com/SUSE/aif-operator/internal/cluster"
+	"github.com/SUSE/aif-operator/internal/credentials"
 	igit "github.com/SUSE/aif-operator/internal/git"
 	"github.com/SUSE/aif-operator/internal/registryurl"
 )
@@ -105,12 +107,34 @@ func (r *AIWorkloadReconciler) ensureBlueprintHelmOp(
 
 	isOCI := strings.HasPrefix(repoInfo.URL, "oci://")
 	helmSpec := map[string]any{
-		"version":     c.ChartVersion,
-		"releaseName": capReleaseName(bundleName),
+		"version": c.ChartVersion,
+		// releaseName uses the chart name (not the full bundleName) so chart
+		// sub-resources templated as `{{ .Release.Name }}-foo` fit under the
+		// 63-char DNS-label limit. bundleName already includes the workload
+		// name and component slug for uniqueness in fleet-default, so on long
+		// blueprints the bundleName-derived release name burned all the chart's
+		// remaining headroom — e.g. nvidia-blueprint-rag's `-etcd-headless`
+		// (14 chars) tipped a 52-char release past 63 and Kubernetes rejected
+		// the Service. Helm release names are unique per (cluster, namespace),
+		// and Blueprint components are addressed by chart name, so the chart
+		// name alone is the right level of granularity here.
+		"releaseName": capReleaseName(c.ChartName),
 		// Disable Fleet's ${ } value templating: we resolve all values ourselves,
 		// and upstream charts legitimately use ${ } (e.g. OTel ${env:MY_POD_IP}),
 		// which Fleet would otherwise mis-parse as a template function.
 		"disablePreProcess": true,
+		// takeOwnership lets the chart's Helm install adopt resources we
+		// pre-delivered (ngc-secret, ngc-api, suse-ai-pull-combined via the
+		// pull-secret bundle). Many NVIDIA NIM-family charts template their
+		// own ngc-secret resource by default — without takeOwnership, the
+		// install aborts with "Secret ... cannot be imported into the
+		// current release: invalid ownership metadata; key meta.helm.sh/
+		// release-name must equal ...". The pull-secret bundle's Helm
+		// wrapper stamps a different release-name on those secrets, so the
+		// workload chart can't claim them. takeOwnership says "claim them
+		// anyway", which is the right call here: the secrets logically
+		// belong to whichever workload uses them.
+		"takeOwnership": true,
 	}
 	if !isOCI {
 		helmSpec["repo"] = repoInfo.URL
@@ -122,16 +146,15 @@ func (r *AIWorkloadReconciler) ensureBlueprintHelmOp(
 	if c.Values != nil {
 		_ = json.Unmarshal(c.Values.Raw, &vals)
 	}
+	// Per-component namespace (ai-factory's componentNamespace helper) lets a
+	// blueprint component override the workload-level TargetNamespace. The
+	// injector and the HelmOp's defaultNamespace below both consume this.
 	ns := componentNamespace(w, c)
-	pullSecretName, err := r.ensureCombinedPullSecret(ctx, ns, repoInfo)
+	created, err := r.injectorFor(c.Vendor).Apply(ctx, r.localCC(), ns, repoInfo, vals)
 	if err != nil {
-		log.FromContext(ctx).Error(err, "could not create image pull secret", "namespace", ns)
+		return fmt.Errorf("inject secrets for %s: %w", c.ChartName, err)
 	}
-	if pullSecretName != "" {
-		pullSecrets := []any{map[string]any{"name": pullSecretName}}
-		vals["imagePullSecrets"] = pullSecrets
-		vals["global"] = map[string]any{"imagePullSecrets": pullSecrets}
-	}
+	w.Status.PullSecretDeliveries = mergePullSecretDelivery(w.Status.PullSecretDeliveries, ns, created)
 	if len(vals) > 0 {
 		helmSpec["values"] = vals
 	}
@@ -198,17 +221,194 @@ const (
 	defaultSUSERegistryHost  = "registry.suse.com"
 	defaultNvidiaHost        = "nvcr.io"
 	combinedPullSecretName   = "suse-ai-pull-combined"
+
+	nvidiaImagePullSecretName = "ngc-secret"
+	nvidiaAPISecretName       = "ngc-api"
 )
+
+// nvidiaAPISecretKeys are the env-var names different NVIDIA chart families
+// expect for the same NGC API token. We populate all of them so charts that
+// read any one of them work without per-chart tuning:
+//   - NGC_API_KEY: original SUSE-AI / NIM convention
+//   - NGC_CLI_API_KEY: ngc-cli auth (used by some NIM containers)
+//   - NVIDIA_API_KEY: nvidia-blueprints (e.g. nvidia-blueprint-rag)
+var nvidiaAPISecretKeys = []string{"NGC_API_KEY", "NGC_CLI_API_KEY", "NVIDIA_API_KEY"}
+
+// ngcAPISecretData builds the ngc-api Opaque secret payload with all
+// nvidiaAPISecretKeys mapped to the same token value.
+func ngcAPISecretData(token string) map[string][]byte {
+	out := make(map[string][]byte, len(nvidiaAPISecretKeys))
+	for _, k := range nvidiaAPISecretKeys {
+		out[k] = []byte(token)
+	}
+	return out
+}
+
+// secretInjector configures Helm values for a blueprint component so its
+// rendered workloads can pull images and access vendor APIs. Each implementation
+// owns the namespace-scoped Secret objects it requires and the Helm-values paths
+// it writes. A no-op Apply (e.g., missing credentials) is acceptable; Helm will
+// surface the resulting ImagePullBackOff downstream.
+type secretInjector interface {
+	// Apply writes any dockerconfigjson Secret(s) it needs through cc, sets
+	// value-path references in vals, and returns the names of Secrets it
+	// wrote (used by reconcilePullSecrets downstream to attach them to
+	// ServiceAccounts).
+	Apply(ctx context.Context, cc cluster.Client, targetNamespace string, repoInfo clusterRepoInfo, vals map[string]any) (createdSecretNames []string, err error)
+}
+
+// suseInjector preserves the historical combined-secret behavior: one
+// dockerconfigjson covering every configured registry, written into both
+// imagePullSecrets and global.imagePullSecrets.
+type suseInjector struct{ r *AIWorkloadReconciler }
+
+func (s *suseInjector) Apply(ctx context.Context, cc cluster.Client, targetNamespace string, repoInfo clusterRepoInfo, vals map[string]any) ([]string, error) {
+	name, err := s.r.ensureCombinedPullSecret(ctx, cc, targetNamespace, repoInfo)
+	if err != nil {
+		log.FromContext(ctx).Error(err, "could not create image pull secret", "namespace", targetNamespace)
+		return nil, nil
+	}
+	if name == "" {
+		return nil, nil
+	}
+	pullSecrets := []any{map[string]any{"name": name}}
+	vals["imagePullSecrets"] = pullSecrets
+	// Merge into the existing global map rather than replacing it — the blueprint
+	// may set sibling keys under global (e.g. open-webui's global.tls for the
+	// suse-private-ai cert config). Replacing global wholesale dropped those,
+	// which made open-webui render an Ingress with an empty TLS host.
+	global, _ := vals["global"].(map[string]any)
+	if global == nil {
+		global = map[string]any{}
+	}
+	global["imagePullSecrets"] = pullSecrets
+	vals["global"] = global
+	return []string{name}, nil
+}
+
+// nvidiaInjector creates the conventional ngc-secret + ngc-api in the target
+// namespace and writes both common pull-secret value paths. NVIDIA charts honor
+// either the standard k8s pod-spec list-of-objects shape (imagePullSecrets) or
+// the k8s-nim-operator flat-string shape (image.pullSecrets); writing both
+// covers the surveyed NIM chart families.
+type nvidiaInjector struct{ r *AIWorkloadReconciler }
+
+func (n *nvidiaInjector) Apply(ctx context.Context, cc cluster.Client, targetNamespace string, repoInfo clusterRepoInfo, vals map[string]any) ([]string, error) {
+	l := log.FromContext(ctx)
+
+	dockerCfg, err := n.r.buildNGCDockerConfig(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if dockerCfg == nil {
+		l.Info("nvidia injector: credentials not configured, skipping", "namespace", targetNamespace)
+		return nil, nil
+	}
+
+	var s aiplatformv1alpha1.Settings
+	if err := n.r.Get(ctx, types.NamespacedName{Namespace: n.r.OperatorNamespace, Name: operatorSettingsName}, &s); err != nil {
+		return nil, nil
+	}
+	_, token, ok, err := n.r.readRegistryCredentials(ctx, credentials.RegistryNvidia, s.Spec.Nvidia.UserSecretRef, s.Spec.Nvidia.TokenSecretRef)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, nil
+	}
+
+	pullSecret := &corev1.Secret{}
+	pullSecret.Name = nvidiaImagePullSecretName
+	pullSecret.Namespace = targetNamespace
+	pullSecret.Type = corev1.SecretTypeDockerConfigJson
+	pullSecret.Data = map[string][]byte{corev1.DockerConfigJsonKey: dockerCfg}
+	if err := cc.ApplySecret(ctx, pullSecret); err != nil {
+		return nil, fmt.Errorf("apply %s/%s: %w", targetNamespace, nvidiaImagePullSecretName, err)
+	}
+
+	apiSecret := &corev1.Secret{}
+	apiSecret.Name = nvidiaAPISecretName
+	apiSecret.Namespace = targetNamespace
+	apiSecret.Type = corev1.SecretTypeOpaque
+	apiSecret.Data = ngcAPISecretData(token)
+	if err := cc.ApplySecret(ctx, apiSecret); err != nil {
+		return nil, fmt.Errorf("apply %s/%s: %w", targetNamespace, nvidiaAPISecretName, err)
+	}
+
+	injectNvidiaPullSecretRefs(vals)
+	// NVIDIA blueprint charts (aiq-aira, nvidia-blueprint-rag, ...) commonly
+	// template their own ngc-secret / ngc-api from `imagePullSecret.password` /
+	// `ngcApiSecret.password`. Those values default to "" — and with the
+	// workload HelmOp's takeOwnership:true the chart adopts the operator's
+	// pre-delivered secret and then OVERWRITES its data with the empty
+	// template, breaking image pulls. Disable the chart's secret templating
+	// so our pre-delivered Secret survives.
+	disableChartSecretCreation(vals, "imagePullSecret", nvidiaImagePullSecretName)
+	disableChartSecretCreation(vals, "ngcApiSecret", nvidiaAPISecretName)
+	return []string{nvidiaImagePullSecretName, nvidiaAPISecretName}, nil
+}
+
+// buildNGCDockerConfig reads NVIDIA Settings + credentials from the operator
+// namespace and returns the marshaled dockerconfigjson bytes. Returns
+// (nil, nil) when credentials are not configured or unreadable — callers
+// should treat this as "no NGC secret to deliver this round" and skip.
+// Returns (nil, err) only on a hard error like JSON marshaling failure.
+func (r *AIWorkloadReconciler) buildNGCDockerConfig(ctx context.Context) ([]byte, error) {
+	var s aiplatformv1alpha1.Settings
+	if err := r.Get(ctx, types.NamespacedName{Namespace: r.OperatorNamespace, Name: operatorSettingsName}, &s); err != nil {
+		return nil, nil
+	}
+	user, token, ok, err := r.readRegistryCredentials(ctx, credentials.RegistryNvidia, s.Spec.Nvidia.UserSecretRef, s.Spec.Nvidia.TokenSecretRef)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, nil
+	}
+	host := defaultNvidiaHost
+	if s.Spec.RegistryEndpoints != nil && s.Spec.RegistryEndpoints.Nvidia != "" {
+		host = s.Spec.RegistryEndpoints.Nvidia
+	}
+	cfg, err := json.Marshal(map[string]any{
+		"auths": map[string]any{host: dockerAuthEntry(user, token)},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("marshal ngc dockerconfigjson: %w", err)
+	}
+	return cfg, nil
+}
+
+// localCC returns a cluster.Client bound to the operator's own cluster.
+// Use this at call sites that write Secrets that should live on the
+// operator's cluster (i.e., the local-only path). Task 2.x will introduce
+// per-target-cluster client selection for the cross-cluster delivery path.
+func (r *AIWorkloadReconciler) localCC() cluster.Client {
+	return cluster.NewLocalClient(r.Client, r.Scheme)
+}
+
+// injectorFor returns the secretInjector for a component vendor. Unknown or
+// empty vendors fall back to the SUSE profile defensively; the CRD default
+// fills the field in practice.
+func (r *AIWorkloadReconciler) injectorFor(vendor aiplatformv1alpha1.ComponentVendor) secretInjector {
+	switch vendor {
+	case aiplatformv1alpha1.ComponentVendorNvidia:
+		return &nvidiaInjector{r: r}
+	default:
+		return &suseInjector{r: r}
+	}
+}
 
 // ensureCombinedPullSecret creates (or updates) a single kubernetes.io/dockerconfigjson secret
 // in targetNamespace whose "auths" map covers ALL configured registries: the component's own
 // chartRepo, ApplicationCollection, and SUSERegistry from Settings. This ensures subchart
 // images pulled from a different registry than the parent chart are also authenticated.
 // Returns the secret name, or "" if no credentials are available.
-func (r *AIWorkloadReconciler) ensureCombinedPullSecret(ctx context.Context, targetNamespace string, repoInfo clusterRepoInfo) (string, error) {
+func (r *AIWorkloadReconciler) ensureCombinedPullSecret(ctx context.Context, cc cluster.Client, targetNamespace string, repoInfo clusterRepoInfo) (string, error) {
 	auths := map[string]any{}
 
-	// Component's own chartRepo credentials.
+	// Component's own chartRepo credentials. The Settings-derived registries
+	// are appended below; for the local path this gives the most complete
+	// coverage (chart-pull host + every image host the chart may reference).
 	if repoInfo.ClientSecret != "" {
 		src := &corev1.Secret{}
 		if err := r.Get(ctx, types.NamespacedName{Namespace: repoInfo.ClientSecretNS, Name: repoInfo.ClientSecret}, src); err == nil {
@@ -218,43 +418,7 @@ func (r *AIWorkloadReconciler) ensureCombinedPullSecret(ctx context.Context, tar
 		}
 	}
 
-	// All registry credentials configured in Settings.
-	var s aiplatformv1alpha1.Settings
-	if err := r.Get(ctx, types.NamespacedName{Namespace: r.OperatorNamespace, Name: operatorSettingsName}, &s); err == nil {
-		appHost := defaultAppCollectionHost
-		if s.Spec.RegistryEndpoints != nil && s.Spec.RegistryEndpoints.ApplicationCollection != "" {
-			appHost = registryurl.Host(s.Spec.RegistryEndpoints.ApplicationCollection)
-		}
-		if s.Spec.ApplicationCollection.UserSecretRef != nil && s.Spec.ApplicationCollection.TokenSecretRef != nil {
-			u, err1 := r.readSettingsSecretKey(ctx, s.Spec.ApplicationCollection.UserSecretRef)
-			p, err2 := r.readSettingsSecretKey(ctx, s.Spec.ApplicationCollection.TokenSecretRef)
-			if err1 == nil && err2 == nil && u != "" && p != "" {
-				auths[appHost] = dockerAuthEntry(u, p)
-			}
-		}
-
-		suseHost := defaultSUSERegistryHost
-		if s.Spec.RegistryEndpoints != nil && s.Spec.RegistryEndpoints.SUSERegistry != "" {
-			suseHost = registryurl.Host(s.Spec.RegistryEndpoints.SUSERegistry)
-		}
-		if s.Spec.SUSERegistry.UserSecretRef != nil && s.Spec.SUSERegistry.TokenSecretRef != nil {
-			u, err1 := r.readSettingsSecretKey(ctx, s.Spec.SUSERegistry.UserSecretRef)
-			p, err2 := r.readSettingsSecretKey(ctx, s.Spec.SUSERegistry.TokenSecretRef)
-			if err1 == nil && err2 == nil && u != "" && p != "" {
-				auths[suseHost] = dockerAuthEntry(u, p)
-			}
-		}
-
-		// NVIDIA images come from nvcr.io (connected); registryEndpoints.nvidia is the chart-repo
-		// OCI URL, not an image host, and air-gap redirection is a node-level concern.
-		if s.Spec.Nvidia.UserSecretRef != nil && s.Spec.Nvidia.TokenSecretRef != nil {
-			u, err1 := r.readSettingsSecretKey(ctx, s.Spec.Nvidia.UserSecretRef)
-			p, err2 := r.readSettingsSecretKey(ctx, s.Spec.Nvidia.TokenSecretRef)
-			if err1 == nil && err2 == nil && u != "" && p != "" {
-				auths[defaultNvidiaHost] = dockerAuthEntry(u, p)
-			}
-		}
-	}
+	r.addSUSESettingsAuths(ctx, auths)
 
 	if len(auths) == 0 {
 		return "", nil
@@ -274,16 +438,92 @@ func (r *AIWorkloadReconciler) ensureCombinedPullSecret(ctx context.Context, tar
 	}
 
 	dst := &corev1.Secret{}
-	dst.APIVersion = "v1"
-	dst.Kind = "Secret"
 	dst.Name = combinedPullSecretName
 	dst.Namespace = targetNamespace
 	dst.Type = corev1.SecretTypeDockerConfigJson
 	dst.Data = map[string][]byte{corev1.DockerConfigJsonKey: dockerCfg}
-	if err := r.Patch(ctx, dst, client.Apply, client.ForceOwnership, client.FieldOwner("aif-operator")); err != nil {
+	if err := cc.ApplySecret(ctx, dst); err != nil {
 		return "", err
 	}
 	return combinedPullSecretName, nil
+}
+
+// addSUSESettingsAuths populates an "auths" map with entries for every
+// Settings-derived registry that has credentials configured: SUSE App
+// Collection, SUSE Registry, and NVIDIA NGC. Hosts honor
+// Settings.spec.registryEndpoints overrides for air-gap mirroring. Missing
+// or partially-configured credential refs are silently skipped (matches the
+// existing per-injector lenient policy).
+//
+// Used by:
+//   - ensureCombinedPullSecret: appended after the component's own chart-repo
+//     credentials for the local-cluster write path.
+//   - buildSUSECombinedDockerConfig: sole source for the downstream-delivery
+//     path, where there is no component-specific chartRepo context.
+func (r *AIWorkloadReconciler) addSUSESettingsAuths(ctx context.Context, auths map[string]any) {
+	var s aiplatformv1alpha1.Settings
+	if err := r.Get(ctx, types.NamespacedName{Namespace: r.OperatorNamespace, Name: operatorSettingsName}, &s); err != nil {
+		return
+	}
+
+	appHost := defaultAppCollectionHost
+	if s.Spec.RegistryEndpoints != nil && s.Spec.RegistryEndpoints.ApplicationCollection != "" {
+		appHost = registryurl.Host(s.Spec.RegistryEndpoints.ApplicationCollection)
+	}
+	if u, p, ok, err := r.readRegistryCredentials(ctx, credentials.RegistryApplicationCollection, s.Spec.ApplicationCollection.UserSecretRef, s.Spec.ApplicationCollection.TokenSecretRef); err == nil && ok {
+		auths[appHost] = dockerAuthEntry(u, p)
+	}
+
+	suseHost := defaultSUSERegistryHost
+	if s.Spec.RegistryEndpoints != nil && s.Spec.RegistryEndpoints.SUSERegistry != "" {
+		suseHost = registryurl.Host(s.Spec.RegistryEndpoints.SUSERegistry)
+	}
+	if u, p, ok, err := r.readRegistryCredentials(ctx, credentials.RegistrySUSERegistry, s.Spec.SUSERegistry.UserSecretRef, s.Spec.SUSERegistry.TokenSecretRef); err == nil && ok {
+		auths[suseHost] = dockerAuthEntry(u, p)
+	}
+
+	// NVIDIA images come from nvcr.io (connected); registryEndpoints.nvidia is the chart-repo
+	// OCI URL, not an image host, and air-gap redirection is a node-level concern.
+	if u, p, ok, err := r.readRegistryCredentials(ctx, credentials.RegistryNvidia, s.Spec.Nvidia.UserSecretRef, s.Spec.Nvidia.TokenSecretRef); err == nil && ok {
+		auths[defaultNvidiaHost] = dockerAuthEntry(u, p)
+	}
+}
+
+// readRegistryCredentials resolves explicit Settings refs or well-known operator
+// secrets and returns decoded username/token values.
+func (r *AIWorkloadReconciler) readRegistryCredentials(
+	ctx context.Context,
+	registry credentials.Registry,
+	explicitUser, explicitToken *aiplatformv1alpha1.SecretKeyRef,
+) (user, token string, ok bool, err error) {
+	userRef, tokenRef := credentials.EffectiveRefs(ctx, r.Client, r.OperatorNamespace, explicitUser, explicitToken, registry)
+	return credentials.ReadPair(ctx, r.Client, r.OperatorNamespace, userRef, tokenRef)
+}
+
+// buildSUSECombinedDockerConfig returns the marshaled dockerconfigjson bytes
+// for the suseInjector's combined pull secret, sourced entirely from Settings
+// (no component-specific chartRepo context). Returns (nil, nil) when no
+// Settings credentials are configured — callers should treat this as
+// "nothing to deliver this round" and skip silently. Returns (nil, err)
+// only on a hard error like JSON marshaling failure.
+//
+// This is the downstream-delivery sibling of ensureCombinedPullSecret: the
+// suseInjector writes the secret locally during reconcile (with chart-repo
+// auth merged in), then deliverPullSecrets needs to ship an equivalent
+// payload to each target downstream cluster — minus the per-component
+// chart-repo entry, since the pull-secret authenticates IMAGE pulls (not
+// chart pulls) and the chart-repo host is not an image registry.
+func (r *AIWorkloadReconciler) buildSUSECombinedDockerConfig(ctx context.Context) ([]byte, error) {
+	auths := map[string]any{}
+	r.addSUSESettingsAuths(ctx, auths)
+	if len(auths) == 0 {
+		return nil, nil
+	}
+	cfg, err := json.Marshal(map[string]any{"auths": auths})
+	if err != nil {
+		return nil, fmt.Errorf("marshal suse combined dockerconfigjson: %w", err)
+	}
+	return cfg, nil
 }
 
 // ensureNamespace makes sure the namespace exists. It uses Server-Side Apply
@@ -399,12 +639,25 @@ func (r *AIWorkloadReconciler) ensureBlueprintGitFile(
 
 	isOCI := strings.HasPrefix(repoInfo.URL, "oci://")
 	helmSpec := map[string]any{
-		"version":     c.ChartVersion,
-		"releaseName": capReleaseName(bundleName),
+		"version": c.ChartVersion,
+		// releaseName uses the chart name (not the full bundleName) so chart
+		// sub-resources templated as `{{ .Release.Name }}-foo` fit under the
+		// 63-char DNS-label limit. bundleName already includes the workload
+		// name and component slug for uniqueness in fleet-default, so on long
+		// blueprints the bundleName-derived release name burned all the chart's
+		// remaining headroom — e.g. nvidia-blueprint-rag's `-etcd-headless`
+		// (14 chars) tipped a 52-char release past 63 and Kubernetes rejected
+		// the Service. Helm release names are unique per (cluster, namespace),
+		// and Blueprint components are addressed by chart name, so the chart
+		// name alone is the right level of granularity here.
+		"releaseName": capReleaseName(c.ChartName),
 		// Disable Fleet's ${ } value templating: we resolve all values ourselves,
 		// and upstream charts legitimately use ${ } (e.g. OTel ${env:MY_POD_IP}),
 		// which Fleet would otherwise mis-parse as a template function.
 		"disablePreProcess": true,
+		// See ensureBlueprintHelmOp for the takeOwnership rationale — same
+		// "adopt operator-delivered pull secrets" need on the GitOps path.
+		"takeOwnership": true,
 	}
 	if !isOCI {
 		helmSpec["repo"] = repoInfo.URL
@@ -413,17 +666,20 @@ func (r *AIWorkloadReconciler) ensureBlueprintGitFile(
 		helmSpec["repo"] = repoInfo.URL + "/" + c.ChartName
 	}
 
+	// Load the blueprint component's own values BEFORE injecting pull secrets —
+	// mirrors ensureBlueprintHelmOp. Omitting this dropped every component value
+	// (including open-webui's global.tls) from the GitOps git file, so the chart
+	// rendered with defaults and the open-webui Ingress got an empty TLS host.
 	vals := map[string]any{}
+	if c.Values != nil {
+		_ = json.Unmarshal(c.Values.Raw, &vals)
+	}
 	ns := componentNamespace(w, c)
-	pullSecretName, err := r.ensureCombinedPullSecret(ctx, ns, repoInfo)
+	created, err := r.injectorFor(c.Vendor).Apply(ctx, r.localCC(), ns, repoInfo, vals)
 	if err != nil {
-		log.FromContext(ctx).Error(err, "could not create image pull secret", "namespace", ns)
+		return fmt.Errorf("inject secrets for %s: %w", c.ChartName, err)
 	}
-	if pullSecretName != "" {
-		pullSecrets := []any{map[string]any{"name": pullSecretName}}
-		vals["imagePullSecrets"] = pullSecrets
-		vals["global"] = map[string]any{"imagePullSecrets": pullSecrets}
-	}
+	w.Status.PullSecretDeliveries = mergePullSecretDelivery(w.Status.PullSecretDeliveries, ns, created)
 	if len(vals) > 0 {
 		helmSpec["values"] = vals
 	}
@@ -606,11 +862,157 @@ func slugifyBP(s string) string {
 	return s
 }
 
+// truncateName caps s to max characters as a VALID DNS-1123 label. A naive
+// s[:max] can cut mid-segment and leave a trailing '-' (rejected by the API
+// server, e.g. "...-system-c-") or collapse two distinct long names onto the
+// same prefix. When truncation is needed we trim any trailing '-' and append a
+// deterministic FNV-1a/base36 suffix so the result is always valid and distinct
+// inputs stay distinct. Inputs already within the limit are returned unchanged.
+// Mirrors cluster.pullSecretBundleName.
 func truncateName(s string, max int) string {
 	if len(s) <= max {
 		return s
 	}
-	return s[:max]
+	const hashLen = 6
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(s))
+	suffix := strconv.FormatUint(uint64(h.Sum32()), 36)
+	if len(suffix) > hashLen {
+		suffix = suffix[:hashLen]
+	}
+	head := strings.TrimRight(s[:max-len(suffix)-1], "-")
+	if head == "" {
+		return suffix
+	}
+	return head + "-" + suffix
+}
+
+// injectNvidiaPullSecretRefs writes the ngc-secret reference into both common
+// pull-secret value paths used by NVIDIA charts. Merge rules:
+//   - path absent → create with [ngc-secret]
+//   - path present and ngc-secret already listed → leave unchanged
+//   - path present with other entries → prepend ngc-secret
+//   - path present with an unexpected shape → leave untouched (author intent)
+func injectNvidiaPullSecretRefs(vals map[string]any) {
+	// Top-level k8s pod-spec shape: list of objects with {"name": ...}.
+	// Covers Helm charts that respect the standard pod-spec convention at
+	// the chart root.
+	switch existing := vals["imagePullSecrets"].(type) {
+	case nil:
+		vals["imagePullSecrets"] = []any{map[string]any{"name": nvidiaImagePullSecretName}}
+	case []any:
+		if !containsObjectNamed(existing, nvidiaImagePullSecretName) {
+			vals["imagePullSecrets"] = append([]any{map[string]any{"name": nvidiaImagePullSecretName}}, existing...)
+		}
+	}
+
+	// NIM workload chart shape: image.pullSecrets is a flat string list
+	// nested under the chart's "image" map. Conservative: only create the
+	// parent map if values["image"] is absent or already a map; if it's
+	// something unexpected (string, list, etc.), leave it alone to honor
+	// the chart author's intent.
+	injectFlatPullSecretList(vals, "image", "pullSecrets")
+
+	// k8s-nim-operator chart shape: operator.image.pullSecrets is a flat
+	// string list nested two levels deep (operator -> image -> pullSecrets).
+	// Same conservative shape policy as image.pullSecrets above.
+	injectNestedFlatPullSecretList(vals, "operator", "image", "pullSecrets")
+}
+
+// injectFlatPullSecretList adds nvidiaImagePullSecretName to a flat string
+// list at vals[topKey][listKey], creating the parent map if absent. If the
+// parent at vals[topKey] exists but isn't a map, the function returns without
+// changes (preserves author intent for unexpected shapes).
+func injectFlatPullSecretList(vals map[string]any, topKey, listKey string) {
+	topRaw, present := vals[topKey]
+	if !present {
+		vals[topKey] = map[string]any{listKey: []any{nvidiaImagePullSecretName}}
+		return
+	}
+	top, ok := topRaw.(map[string]any)
+	if !ok {
+		return
+	}
+	switch existing := top[listKey].(type) {
+	case nil:
+		top[listKey] = []any{nvidiaImagePullSecretName}
+	case []any:
+		if !containsString(existing, nvidiaImagePullSecretName) {
+			top[listKey] = append([]any{nvidiaImagePullSecretName}, existing...)
+		}
+	}
+}
+
+// injectNestedFlatPullSecretList walks vals[topKey][midKey][listKey],
+// creating intermediate maps as needed. If any intermediate value exists but
+// isn't a map, the function returns without changes (preserves author intent).
+func injectNestedFlatPullSecretList(vals map[string]any, topKey, midKey, listKey string) {
+	topRaw, present := vals[topKey]
+	if !present {
+		vals[topKey] = map[string]any{midKey: map[string]any{listKey: []any{nvidiaImagePullSecretName}}}
+		return
+	}
+	top, ok := topRaw.(map[string]any)
+	if !ok {
+		return
+	}
+	midRaw, midPresent := top[midKey]
+	if !midPresent {
+		top[midKey] = map[string]any{listKey: []any{nvidiaImagePullSecretName}}
+		return
+	}
+	mid, ok := midRaw.(map[string]any)
+	if !ok {
+		return
+	}
+	switch existing := mid[listKey].(type) {
+	case nil:
+		mid[listKey] = []any{nvidiaImagePullSecretName}
+	case []any:
+		if !containsString(existing, nvidiaImagePullSecretName) {
+			mid[listKey] = append([]any{nvidiaImagePullSecretName}, existing...)
+		}
+	}
+}
+
+func containsObjectNamed(list []any, name string) bool {
+	for _, item := range list {
+		if obj, ok := item.(map[string]any); ok && obj["name"] == name {
+			return true
+		}
+	}
+	return false
+}
+
+func containsString(list []any, s string) bool {
+	for _, item := range list {
+		if v, ok := item.(string); ok && v == s {
+			return true
+		}
+	}
+	return false
+}
+
+// disableChartSecretCreation sets vals[key] = {create: false, name: <name>}
+// to instruct charts that conditionally template a Secret (NVIDIA convention:
+// {{- if .Values.<key>.create -}}) to skip rendering it, while still telling
+// the chart which existing Secret name to wire into pod specs. The operator's
+// pre-delivered Secret then survives the install/upgrade unmangled.
+//
+// Merge rules:
+//   - vals[key] absent or wrong shape → replace with {create:false, name}
+//   - vals[key] is a map → set create=false; only set name if absent (honor
+//     any explicit override from the user's values)
+func disableChartSecretCreation(vals map[string]any, key, name string) {
+	existing, ok := vals[key].(map[string]any)
+	if !ok {
+		vals[key] = map[string]any{"create": false, "name": name}
+		return
+	}
+	existing["create"] = false
+	if _, hasName := existing["name"]; !hasName {
+		existing["name"] = name
+	}
 }
 
 // componentNamespace returns the namespace a blueprint component deploys into:

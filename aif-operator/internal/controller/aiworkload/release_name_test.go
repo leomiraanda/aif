@@ -41,10 +41,10 @@ func TestCapReleaseName(t *testing.T) {
 	// trailing '-'), not just a short-enough string.
 	t.Run("pathological inputs stay valid", func(t *testing.T) {
 		cases := []string{
-			repeat('-', 54),                            // all dashes -> head empties out
-			"-" + repeat('a', 60),                      // leading dash preserved by old impl
-			repeat('a', 200),                           // very long
-			"suse-ai-" + repeat('-', 60),               // valid prefix, dash tail at the cut
+			repeat('-', 54),                              // all dashes -> head empties out
+			"-" + repeat('a', 60),                        // leading dash preserved by old impl
+			repeat('a', 200),                             // very long
+			"suse-ai-" + repeat('-', 60),                 // valid prefix, dash tail at the cut
 			repeat('a', 47) + "------------------------", // content then dash run at the cut
 		}
 		for _, in := range cases {

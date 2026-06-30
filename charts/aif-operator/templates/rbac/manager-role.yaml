@@ -18,12 +18,37 @@ rules:
     resources:
       - configmaps
       - persistentvolumeclaims
-      - pods
-      - serviceaccounts
+      - services
     verbs:
       - delete
       - get
       - list
+      # `watch` is required by installaiextension_controller's reconciler cache
+      # (kubebuilder marker on services is get;list;watch). Without it, the
+      # operator's controller-runtime informer for *v1.Service fails to start
+      # and hot-loops the kube-apiserver with rejected watch requests. Verb
+      # also applies to configmaps + PVCs in this rule, harmless — both
+      # already have list permission, so watch adds no extra read surface.
+      - watch
+  - apiGroups:
+      - ""
+    resources:
+      - pods
+    verbs:
+      - delete
+      - get
+      - list
+      - watch
+  - apiGroups:
+      - ""
+    resources:
+      - serviceaccounts
+    verbs:
+      - get
+      - list
+      - patch
+      - update
+      - watch
   - apiGroups:
       - ""
     resources:
@@ -35,15 +60,6 @@ rules:
       - list
       - patch
       - update
-      - watch
-  - apiGroups:
-      - ""
-    resources:
-      - services
-    verbs:
-      - delete
-      - get
-      - list
       - watch
   - apiGroups:
       - apps
@@ -197,9 +213,13 @@ rules:
     resources:
       - bundles
     verbs:
+      - create
       - delete
       - get
       - list
+      - patch
+      - update
+      - watch
   - apiGroups:
       - fleet.cattle.io
     resources:

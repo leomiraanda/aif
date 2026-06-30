@@ -24,6 +24,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	aiplatformv1alpha1 "github.com/SUSE/aif-operator/api/v1alpha1"
+	"github.com/SUSE/aif-operator/internal/credentials"
 )
 
 const aiWorkloadFinalizer = "ai-platform.suse.com/cleanup"
@@ -48,12 +49,14 @@ type AIWorkloadReconciler struct {
 // +kubebuilder:rbac:groups=ai-platform.suse.com,resources=aiworkloads/finalizers,verbs=update
 // +kubebuilder:rbac:groups=ai-platform.suse.com,resources=settings,verbs=get;list;watch
 // +kubebuilder:rbac:groups=fleet.cattle.io,resources=bundledeployments,verbs=get;list;watch
-// +kubebuilder:rbac:groups=fleet.cattle.io,resources=bundles,verbs=get;list;delete
 // +kubebuilder:rbac:groups=ai-platform.suse.com,resources=blueprints,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=catalog.cattle.io,resources=clusterrepos,verbs=get;list;watch
 // +kubebuilder:rbac:groups=fleet.cattle.io,resources=helmops,verbs=get;list;watch;create;patch;delete
+// +kubebuilder:rbac:groups=fleet.cattle.io,resources=bundles,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch
-// +kubebuilder:rbac:groups="",resources=pods;services;configmaps;serviceaccounts;persistentvolumeclaims,verbs=get;list;delete
+// +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch;delete
+// +kubebuilder:rbac:groups="",resources=serviceaccounts,verbs=get;list;watch;patch;update
+// +kubebuilder:rbac:groups="",resources=services;configmaps;persistentvolumeclaims,verbs=get;list;delete
 // +kubebuilder:rbac:groups=apps,resources=deployments;statefulsets;replicasets;daemonsets,verbs=get;list;delete
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=roles;rolebindings,verbs=get;list;delete
 // +kubebuilder:rbac:groups="",resources=namespaces,verbs=create;get;patch
@@ -89,6 +92,19 @@ func (r *AIWorkloadReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
+	if len(w.Status.PullSecretDeliveries) > 0 {
+		if err := r.deliverPullSecrets(ctx, &w, r.pullSecretFactory(ctx)); err != nil {
+			return ctrl.Result{}, err
+		}
+		settled, err := r.reconcilePullSecrets(ctx, &w)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		if !settled {
+			return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+		}
+	}
+
 	l.Info("reconciled AIWorkload", "phase", w.Status.Phase)
 	return ctrl.Result{}, nil
 }
@@ -97,6 +113,16 @@ func (r *AIWorkloadReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 func (r *AIWorkloadReconciler) reconcileStatus(ctx context.Context, w *aiplatformv1alpha1.AIWorkload) (ctrl.Result, error) {
 	if w.Spec.Source.SourceType == aiplatformv1alpha1.AIWorkloadSourceBlueprint {
 		return r.reconcileBlueprintStatus(ctx, w)
+	}
+	// For App-sourced workloads, run the secret injector before the
+	// strategy-specific status path. The injector only populates
+	// Status.PullSecretDeliveries (per-namespace bucket); the
+	// post-reconcile block (line ~92) drives the actual local-write +
+	// downstream Fleet Bundle + SA-merge Job.
+	if w.Spec.Source.SourceType == aiplatformv1alpha1.AIWorkloadSourceApp {
+		if err := r.reconcileAppPullSecrets(ctx, w); err != nil {
+			return ctrl.Result{}, err
+		}
 	}
 	switch w.Spec.DeployStrategy {
 	case aiplatformv1alpha1.AIWorkloadDeployHelm:
@@ -228,7 +254,7 @@ func (r *AIWorkloadReconciler) mirrorFleetStatus(ctx context.Context, w *aiplatf
 		if clusterID == "" {
 			continue
 		}
-		state, _, _   := unstructured.NestedString(bd.Object, "status", "display", "state")
+		state, _, _ := unstructured.NestedString(bd.Object, "status", "display", "state")
 		message, _, _ := unstructured.NestedString(bd.Object, "status", "display", "message")
 
 		phase := fleetStateToClusterPhase(state)
@@ -290,6 +316,13 @@ func (r *AIWorkloadReconciler) handleDeletion(ctx context.Context, w *aiplatform
 				l.Error(err, "git file deletion failed — proceeding with finalizer removal", "name", name)
 			}
 		}
+	}
+
+	if err := r.cleanupPullSecretBundles(ctx, w); err != nil {
+		return ctrl.Result{}, err
+	}
+	if err := r.pruneLocalSAImagePullSecrets(ctx, w); err != nil {
+		return ctrl.Result{}, err
 	}
 
 	controllerutil.RemoveFinalizer(w, aiWorkloadFinalizer)
@@ -426,6 +459,39 @@ func (r *AIWorkloadReconciler) helmSecretToAIWorkloads(ctx context.Context, obj 
 	return reqs
 }
 
+// credentialSecretToAIWorkloads re-enqueues every AIWorkload when a well-known
+// registry credential secret (application-collection / nvidia-registry /
+// suse-registry, including their aliases) in the operator namespace changes.
+// The operator derives dockerconfigjson pull secrets (suse-ai-pull-combined,
+// ngc-secret, ngc-api) from those source credentials and delivers them per
+// workload (local SA-merge + downstream Fleet bundles); a key rotation must
+// rebuild and re-deliver them. Without this, the SettingsReconciler refreshes
+// the basic-auth ClusterRepo mirrors but the delivered pull secrets keep the
+// old credentials. Enqueuing all workloads is safe — delivery is idempotent SSA.
+func (r *AIWorkloadReconciler) credentialSecretToAIWorkloads(ctx context.Context, obj client.Object) []reconcile.Request {
+	if obj.GetNamespace() != r.OperatorNamespace {
+		return nil
+	}
+	if !credentials.IsWellKnownSecret(obj.GetName()) {
+		return nil
+	}
+	return r.allAIWorkloadRequests(ctx)
+}
+
+func (r *AIWorkloadReconciler) allAIWorkloadRequests(ctx context.Context) []reconcile.Request {
+	var list aiplatformv1alpha1.AIWorkloadList
+	if err := r.List(ctx, &list); err != nil {
+		return nil
+	}
+	reqs := make([]reconcile.Request, 0, len(list.Items))
+	for i := range list.Items {
+		reqs = append(reqs, reconcile.Request{
+			NamespacedName: types.NamespacedName{Name: list.Items[i].Name, Namespace: list.Items[i].Namespace},
+		})
+	}
+	return reqs
+}
+
 // ── Manager setup ─────────────────────────────────────────────────────────────
 
 func (r *AIWorkloadReconciler) SetupWithManager(mgr ctrl.Manager) error {
@@ -439,11 +505,23 @@ func (r *AIWorkloadReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		return obj.GetLabels()["owner"] == "helm"
 	})
 
+	// A rotation of a well-known registry credential secret in the operator
+	// namespace must re-deliver the dockerconfigjson pull secrets the operator
+	// derives from it (suse-ai-pull-combined, ngc-secret, ngc-api), which only
+	// happens on an AIWorkload reconcile. Mirrors the SettingsReconciler's
+	// secret watch, which keeps the basic-auth ClusterRepo mirrors in lockstep
+	// on the same rotation.
+	isCredentialSecret := predicate.NewPredicateFuncs(func(obj client.Object) bool {
+		return obj.GetNamespace() == r.OperatorNamespace && credentials.IsWellKnownSecret(obj.GetName())
+	})
+
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&aiplatformv1alpha1.AIWorkload{}).
 		Watches(bd, handler.EnqueueRequestsFromMapFunc(r.bundleDeploymentToAIWorkloads)).
 		Watches(helmOp, handler.EnqueueRequestsFromMapFunc(r.helmOpToAIWorkloads)).
 		Watches(&corev1.Secret{}, handler.EnqueueRequestsFromMapFunc(r.helmSecretToAIWorkloads),
 			builder.WithPredicates(isHelmSecret)).
+		Watches(&corev1.Secret{}, handler.EnqueueRequestsFromMapFunc(r.credentialSecretToAIWorkloads),
+			builder.WithPredicates(isCredentialSecret)).
 		Complete(r)
 }
