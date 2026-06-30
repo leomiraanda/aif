@@ -40,18 +40,21 @@ const deployTypeCards = [
     header:  { title: { text: 'Fleet Bundle' } },
     image:   { icon: 'fleet' as any },
     content: { text: 'Create a Fleet Bundle; Fleet deploys to selected clusters' },
+    tooltip: t('suseai.wizard.target.deploymentStrategy.tooltips.FleetBundle', 'Creates a Fleet HelmOp bundle resource in your cluster. Fleet continuously reconciles the desired state by managing the Helm release across your target clusters. Changes to the bundle are automatically propagated.'),
   },
   {
     id:      'GitOps' as AIWorkloadDeployStrategy,
     header:  { title: { text: 'Publish to Fleet Git' } },
     image:   { icon: 'git' as any },
     content: { text: 'Commit Fleet Bundle YAML to the git repo configured in Settings' },
+    tooltip: t('suseai.wizard.target.deploymentStrategy.tooltips.GitOps', 'Commits a Fleet bundle definition to a configured Git repository. Fleet monitors the repository and reconciles the declared state to your target clusters. This enables full GitOps workflows with version history and auditability.'),
   },
   {
     id:      'Helm' as AIWorkloadDeployStrategy,
     header:  { title: { text: 'Helm' } },
     image:   { icon: 'helm' as any },
     content: { text: 'Deploy directly to each selected cluster via Helm install' },
+    tooltip: t('suseai.wizard.target.deploymentStrategy.tooltips.Helm', 'Directly installs the Helm chart on the local cluster only. Suitable for single-cluster deployments without ongoing Fleet-based lifecycle management.'),
   },
 ];
 
@@ -67,19 +70,24 @@ function onCardClick(id: AIWorkloadDeployStrategy) {
   <div class="target-step">
     <label class="lbl">{{ t('suseai.wizard.form.deploymentType', 'Deployment Type') }}</label>
     <div class="deploy-type-grid">
-      <RcItemCard
+      <div
         v-for="card in deployTypeCards"
-        :id="card.id"
         :key="card.id"
-        :header="card.header"
-        :image="card.image"
-        :content="card.content"
-        :selected="deployType === card.id"
-        :clickable="!isManageMode && !(card.id === 'Helm' && helmCardDisabled) && !(card.id === 'GitOps' && gitOpsUnconfigured)"
-        variant="small"
-        :class="{ 'card-disabled': isManageMode || (card.id === 'Helm' && helmCardDisabled) || (card.id === 'GitOps' && gitOpsUnconfigured) }"
-        @card-click="onCardClick(card.id)"
-      />
+        :title="card.tooltip"
+        class="deploy-type-card-wrapper"
+      >
+        <RcItemCard
+          :id="card.id"
+          :header="card.header"
+          :image="card.image"
+          :content="card.content"
+          :selected="deployType === card.id"
+          :clickable="!isManageMode && !(card.id === 'Helm' && helmCardDisabled) && !(card.id === 'GitOps' && gitOpsUnconfigured)"
+          variant="small"
+          :class="{ 'card-disabled': isManageMode || (card.id === 'Helm' && helmCardDisabled) || (card.id === 'GitOps' && gitOpsUnconfigured) }"
+          @card-click="onCardClick(card.id)"
+        />
+      </div>
     </div>
     <p v-if="!isManageMode && helmUnsupported" class="hint">
       Helm is not available for this installation. Use Fleet Bundle or Fleet Git.
@@ -138,6 +146,11 @@ function onCardClick(id: AIWorkloadDeployStrategy) {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
   gap: 12px;
+}
+
+.deploy-type-card-wrapper {
+  display: flex;
+  flex-direction: column;
 }
 
 .card-disabled {
