@@ -28,9 +28,9 @@ jobs:
           cache-dependency-path: operator/go.sum
 
       - name: Lint
-        uses: golangci/golangci-lint-action@v8
+        uses: golangci/golangci-lint-action@v9
         with:
-          version: v2.3.0
+          version: v2.12
           working-directory: operator
 
       - name: Build
