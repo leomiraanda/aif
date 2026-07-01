@@ -22,13 +22,13 @@ jobs:
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
 
-      - uses: actions/setup-go@d60b41a563a30c99a43c5c628e4d8bc82c7721a9  # v5.5.0
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff  # v5
         with:
           go-version-file: operator/go.mod
           cache-dependency-path: operator/go.sum
 
       # - name: Lint
-      #   uses: golangci/golangci-lint-action@aaa42aa0628b4d2980d66dc070c4f6e48a2cc0e7  # v9.1.0
+      #   uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a  # v9
       #   with:
       #     version: v2.12
       #     working-directory: operator
