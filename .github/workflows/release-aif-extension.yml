@@ -7,8 +7,8 @@ on:
 
 env:
   CHART_PATH: charts/aif-ui
-  CHART_REGISTRY: oci://ghcr.io/suse/chart
-  IMAGE_NAME: ghcr.io/suse/aif-ui
+  CHART_REGISTRY: oci://ghcr.io/leomiraanda/charts
+  IMAGE_NAME: ghcr.io/leomiraanda/aif-ui
 
 jobs:
   verify-ancestry:
@@ -162,7 +162,7 @@ jobs:
       - name: Build extension image
         run: |
           TAG="aif-ui-${{ needs.prepare.outputs.VERSION }}"
-          yarn publish-pkgs -c -i '' -r ghcr.io -o 'suse' -t "$TAG"
+          yarn publish-pkgs -c -i '' -r ghcr.io -o 'leomiraanda' -t "$TAG"
 
       - name: Rebase image onto patched BCI 15.7
         working-directory: .
@@ -216,7 +216,7 @@ jobs:
           yq -i '.appVersion = "${{ needs.prepare.outputs.VERSION }}"' $CHART_PATH/Chart.yaml
           yq -i '
             .annotations."helm.sh/images" =
-            "- image: ghcr.io/suse/aif-ui:${{ needs.prepare.outputs.VERSION }}\n  name: aif-ui"
+            "- image: ghcr.io/leomiraanda/aif-ui:${{ needs.prepare.outputs.VERSION }}\n  name: aif-ui"
           ' $CHART_PATH/Chart.yaml
           yq -i '.image.tag = "${{ needs.prepare.outputs.VERSION }}"' $CHART_PATH/values.yaml
 
