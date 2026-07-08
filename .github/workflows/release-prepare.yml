@@ -106,6 +106,20 @@ jobs:
             exit 1
           fi
 
+          # R6 — a matching release tag must not already exist (per component)
+          git fetch --tags --quiet origin
+          case "$COMPONENT" in
+            operator) tags=("aif-operator-$VERSION") ;;
+            ui)       tags=("aif-ui-$VERSION") ;;
+            both)     tags=("aif-operator-$VERSION" "aif-ui-$VERSION") ;;
+          esac
+          for t in "${tags[@]}"; do
+            if git rev-parse -q --verify "refs/tags/$t" >/dev/null; then
+              echo "::error::tag $t already exists; choose a new version"
+              exit 1
+            fi
+          done
+
           echo "Validated: version=$VERSION kind=$kind target=$TARGET component=$COMPONENT (from $current)"
 
       - name: Bump version files
