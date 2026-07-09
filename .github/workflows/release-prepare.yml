@@ -181,7 +181,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          git checkout -b "$branch"
+          git checkout -B "$branch"
           git add \
             operator/VERSION \
             charts/aif-operator/Chart.yaml \
@@ -192,10 +192,29 @@ jobs:
             ui/pkg/aif-ui/package.json \
             ui/pkg/aif-ui/package-lock.json
           git commit -m "chore: release $VERSION"
-          git push -u origin "$branch"
+          git push --force origin "$branch"
 
-          gh pr create \
-            --base "$TARGET" \
-            --head "$branch" \
-            --title "chore: release $VERSION" \
-            --body "$(printf '## Release %s\n\n- **Version:** %s\n- **Component:** %s\n- **Target:** %s\n\nAutomated version bump by the release-prepare workflow. Review and merge to make the version official; then run release-publish to tag.\n' "$VERSION" "$VERSION" "$COMPONENT" "$TARGET")"
+          # If a PR is already open for this branch, the push above refreshed it.
+          if url="$(gh pr view "$branch" --json url --jq .url 2>/dev/null)"; then
+            echo "PR already open, updated in place: $url"
+            echo "Release PR (updated): $url" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          # Otherwise open it. gh pr create fails if the org blocks Actions from
+          # creating PRs; fall back to emitting the compare URL so the run still
+          # succeeds and a human can open the PR with one click.
+          body="$(printf '## Release %s\n\n- **Version:** %s\n- **Component:** %s\n- **Target:** %s\n\nAutomated version bump by the release-prepare workflow. Review and merge to make the version official; then run release-publish to tag.\n' "$VERSION" "$VERSION" "$COMPONENT" "$TARGET")"
+          if url="$(gh pr create --base "$TARGET" --head "$branch" --title "chore: release $VERSION" --body "$body" 2>/dev/null)"; then
+            echo "Opened PR: $url"
+            echo "Release PR: $url" >> "$GITHUB_STEP_SUMMARY"
+          else
+            compare="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/compare/${TARGET}...${branch}?expand=1"
+            echo "::warning::Could not auto-create the PR (Actions may be blocked from creating PRs). Open it here: $compare"
+            {
+              echo "### Release PR not auto-created"
+              echo "GitHub Actions is not permitted to create PRs in this repo, so open it manually:"
+              echo ""
+              echo "[Open the release PR for $VERSION]($compare)"
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
