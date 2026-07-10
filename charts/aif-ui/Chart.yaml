@@ -1,6 +1,6 @@
 annotations:
   helm.sh/images: |
-    - image: ghcr.io/suse/aif-ui:0.3.0-rc.2
+    - image: ghcr.io/leomiraanda/aif-ui:0.3.0-rc.2
       name: aif-ui
 apiVersion: v2
 name: aif-ui
