@@ -90,7 +90,7 @@ manager:
 
   image:
     registry: ghcr.io
-    repository: suse/aif-operator
+    repository: leomiraanda/aif-operator
     tag: "2.2.0-dev.3"
     pullPolicy: IfNotPresent
 
@@ -177,7 +177,7 @@ aiExtension:
   source:
     kind: Helm
     helm:
-      chartURL: "oci://ghcr.io/suse/chart/aif-ui"
+      chartURL: "oci://ghcr.io/leomiraanda/chart/aif-ui"
       version: "2.2.0-dev.3"
       # values are merged onto the aif-ui chart's default values. Useful for
       # overriding the UI image during development:
