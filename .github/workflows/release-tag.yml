@@ -1,0 +1,115 @@
+name: Release Tag
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version to tag, e.g. 2.3.0 or 2.3.0-rc.4 (must match operator/VERSION on branch)"
+        required: true
+        type: string
+      branch:
+        description: "Branch to tag: main (dev/rc) or an existing release-X.Y (rc/prod)"
+        required: true
+        type: string
+        default: main
+
+concurrency:
+  group: release-tag-${{ inputs.branch }}-${{ inputs.version }}
+  cancel-in-progress: false
+
+jobs:
+  tag:
+    runs-on: ubuntu-latest
+    environment: release-tag
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ inputs.version }}
+      BRANCH: ${{ inputs.branch }}
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.branch }}
+          fetch-depth: 0
+
+      - name: Validate inputs
+        id: validate
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # R1 — semver format with optional -rc.N / -dev.N suffix
+          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-(rc|dev)\.[0-9]+)?$ ]]; then
+            echo "::error::version '$VERSION' is not valid semver (X.Y.Z with optional -rc.N / -dev.N)"
+            exit 1
+          fi
+
+          # R5 — branch must be main or a release-* branch
+          if [[ "$BRANCH" != "main" && ! "$BRANCH" =~ ^release-.+ ]]; then
+            echo "::error::branch '$BRANCH' must be 'main' or a 'release-*' branch"
+            exit 1
+          fi
+
+          # Determine release kind from the suffix, same rule as release-prepare
+          if [[ "$VERSION" == *-dev.* ]]; then
+            kind=dev
+          elif [[ "$VERSION" == *-rc.* ]]; then
+            kind=rc
+          else
+            kind=prod
+          fi
+
+          # R3 — suffix <-> branch
+          if [[ "$kind" == "dev" && "$BRANCH" != "main" ]]; then
+            echo "::error::dev versions (-dev.N) must be tagged from main, not '$BRANCH'"
+            exit 1
+          fi
+          if [[ "$kind" == "prod" && "$BRANCH" == "main" ]]; then
+            echo "::error::prod versions must be tagged from a release-X.Y branch, not main"
+            exit 1
+          fi
+
+          # R4 — line <-> branch (release-X.Y accepts only X.Y.*)
+          if [[ "$BRANCH" =~ ^release-.+ ]]; then
+            line="${BRANCH#release-}"
+            if [[ "$VERSION" != "$line".* ]]; then
+              echo "::error::version '$VERSION' does not match release branch line '$line' (expected $line.*)"
+              exit 1
+            fi
+          fi
+
+          # Dependency check — the real signal that the release-prepare PR
+          # merged into $BRANCH is the version file, not whether the
+          # release-prepare workflow ran (that only means a PR was opened).
+          current="$(cat operator/VERSION)"
+          if [[ "$current" != "$VERSION" ]]; then
+            echo "::error::operator/VERSION on '$BRANCH' is '$current', not '$VERSION' — the release-prepare PR for $VERSION hasn't merged into $BRANCH yet"
+            exit 1
+          fi
+
+          # R6 — matching release tags must not already exist
+          git fetch --tags --quiet origin
+          tags=("aif-operator-$VERSION" "aif-ui-$VERSION")
+          for t in "${tags[@]}"; do
+            if git rev-parse -q --verify "refs/tags/$t" >/dev/null; then
+              echo "::error::tag $t already exists; nothing to do"
+              exit 1
+            fi
+          done
+
+          echo "Validated: version=$VERSION kind=$kind branch=$BRANCH @ $(git rev-parse HEAD)"
+
+      - name: Push release tags
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          sha="$(git rev-parse HEAD)"
+          git push origin "HEAD:refs/tags/aif-operator-$VERSION" "HEAD:refs/tags/aif-ui-$VERSION"
+
+          {
+            echo "### Tagged release $VERSION"
+            echo "- **Branch:** $BRANCH @ $sha"
+            echo "- **Tags:** aif-operator-$VERSION, aif-ui-$VERSION"
+          } >> "$GITHUB_STEP_SUMMARY"
