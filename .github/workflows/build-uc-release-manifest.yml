@@ -1,37 +1,37 @@
-# ---
-# name: Build UC Release Manifest Container Image
+---
+name: Build UC Release Manifest Container Image
 
-# 'on':
-#   push:
-#     branches:
-#       - 'main'
-#       - 'release-*'
-#     paths:
-#       - 'uc-release-manifest/**'
-#       - '.github/workflows/build-uc-release-manifest.yml'
-#   workflow_dispatch:
+'on':
+  push:
+    branches:
+      - 'main'
+      - 'release-*'
+    paths:
+      - 'uc-release-manifest/**'
+      - '.github/workflows/build-uc-release-manifest.yml'
+  workflow_dispatch:
 
-# permissions:
-#   contents: read
-#   packages: write
+permissions:
+  contents: read
+  packages: write
 
-# concurrency:
-#   group: ${{ github.workflow }}-${{ github.ref }}
-#   cancel-in-progress: false
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
 
-# env:
-#   IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/aif-uc-release-manifest
+env:
+  IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/aif-uc-release-manifest
 
-# jobs:
-#   build-and-push:
-#     # Manual runs are limited to main and release branches so that arbitrary
-#     # branch names don't end up as image tags in GHCR
-#     if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release-')
-#     runs-on: ubuntu-latest
-#     timeout-minutes: 20
-#     steps:
-#       - name: Checkout
-#         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+jobs:
+  build-and-push:
+    # Manual runs are limited to main and release branches so that arbitrary
+    # branch names don't end up as image tags in GHCR
+    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release-')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
 #       - name: Read release manifest version
 #         id: manifest
