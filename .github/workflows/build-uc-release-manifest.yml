@@ -1,4 +1,3 @@
----
 name: Build UC Release Manifest Container Image
 
 'on':
