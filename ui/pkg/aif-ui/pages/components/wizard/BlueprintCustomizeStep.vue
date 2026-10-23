@@ -62,6 +62,7 @@ import { Banner } from '@components/Banner';
 import { Checkbox } from '@components/Form/Checkbox';
 import ValuesStep from './ValuesStep.vue';
 import { seedComponentValues, seedComponentEnabled, diffComponentOverrides, customizedComponentNames, resolveInitialFormState } from '../../../utils/blueprint-customize';
+import { applyFallbackQuestions } from '../../../utils/fallback-questions';
 import type { BlueprintComponent } from '../../../types/blueprint-types';
 import type { ComponentValueOverride } from '../../../types/aiworkload-types';
 
@@ -158,9 +159,10 @@ async function loadChartInfo(chartName: string, chartRepo: string, chartVersion:
   questionsLoadingMap.value = { ...questionsLoadingMap.value, [chartName]: true };
   try {
     await store.dispatch('catalog/load');
-    const info = await store.dispatch('catalog/getVersionInfo', {
+    const rawInfo = await store.dispatch('catalog/getVersionInfo', {
       repoType: 'cluster', repoName: chartRepo, chartName, versionName: chartVersion,
     });
+    const info = applyFallbackQuestions(rawInfo, chartName);
     versionInfoMap.value = { ...versionInfoMap.value, [chartName]: info };
   } catch {
     // Form view falls back to YAML when questions can't be loaded.

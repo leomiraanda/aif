@@ -34,6 +34,7 @@ import { isChartArchiveOversized } from '../../services/chart-values';
 import { createAIWorkload, updateAIWorkload, listAIWorkloads, getRegistryCredentials } from '../../utils/operator-api';
 import { useFleetGitConfigured } from '../../composables/useFleetGitConfigured';
 import { useClusterDisplayNames } from '../../composables/useClusterDisplayNames';
+import { applyFallbackQuestions } from '../../utils/fallback-questions';
 import { createFleetBundle, buildBundleName, buildBundleNameForCluster, ensureAppCollectionPullSecrets, injectNvidiaPullSecretRefs, disableNvidiaChartSecrets } from '../../services/fleet-bundle';
 import { publishToFleetGit }                          from '../../services/git-publish';
 import { crNameForCluster } from '../../utils/workload-name';
@@ -646,12 +647,13 @@ async function ensureVersionInfoLoaded() {
   questionsLoading.value = true;
   try {
     await store.dispatch('catalog/load');
-    const info = await store.dispatch('catalog/getVersionInfo', {
+    const rawInfo = await store.dispatch('catalog/getVersionInfo', {
       repoType:    'cluster',
       repoName:    repo,
       chartName:   chart,
       versionName: version
     });
+    const info = applyFallbackQuestions(rawInfo, chart);
 
     versionInfo.value = info;
     versionInfoKey.value = key;

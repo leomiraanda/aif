@@ -44,6 +44,7 @@ import { useT } from '../../../composables/useT';
 import yaml from 'js-yaml';
 import ValuesStep from './ValuesStep.vue';
 import { fetchChartDefaultValues } from '../../../services/rancher-apps';
+import { applyFallbackQuestions } from '../../../utils/fallback-questions';
 import type { BlueprintComponent } from '../../../types/blueprint-types';
 
 interface Props { components: BlueprintComponent[] }
@@ -95,12 +96,13 @@ async function loadChartInfo(chartName: string, chartRepo: string, chartVersion:
 
   try {
     await store.dispatch('catalog/load');
-    const info = await store.dispatch('catalog/getVersionInfo', {
+    const rawInfo = await store.dispatch('catalog/getVersionInfo', {
       repoType:    'cluster',
       repoName:    chartRepo,
       chartName,
       versionName: chartVersion,
     });
+    const info = applyFallbackQuestions(rawInfo, chartName);
     versionInfoMap.value = { ...versionInfoMap.value, [chartName]: info };
     questionsLoadingMap.value = { ...questionsLoadingMap.value, [chartName]: false };
 
