@@ -20,11 +20,11 @@
           :chart-repo="comp.chartRepo"
           :chart-name="comp.chartName"
           :chart-version="comp.chartVersion"
-          :loading-values="!!loadingMap[comp.chartName]"
+          :loading-values="!!loadingMap[chartInfoKey(comp)]"
           :version-dirty="false"
-          :has-questions="!!(versionInfoMap[comp.chartName]?.questions)"
-          :questions-source="versionInfoMap[comp.chartName] || null"
-          :questions-loading="!!questionsLoadingMap[comp.chartName]"
+          :has-questions="!!(versionInfoMap[chartInfoKey(comp)]?.questions)"
+          :questions-source="versionInfoMap[chartInfoKey(comp)] || null"
+          :questions-loading="!!questionsLoadingMap[chartInfoKey(comp)]"
           :ignore-variables="[]"
           :target-namespace="''"
           mode="install"
@@ -68,6 +68,14 @@ const compValues = ref<Record<string, Record<string, any>>>(
   Object.fromEntries(props.components.map(c => [c.chartName, { ...(c.values || {}) }]))
 );
 
+// Chart-info (versionInfoMap/loadingMap/questionsLoadingMap) is cached per chart
+// version, not just per chart name — otherwise bumping a component's chart
+// version while its panel is already expanded would reuse the stale entry and
+// never refetch.
+function chartInfoKey(comp: { chartName: string; chartVersion: string }): string {
+  return `${comp.chartName}@${comp.chartVersion}`;
+}
+
 // Load info for the first panel on mount.
 if (props.components.length > 0) {
   const first = props.components[0];
@@ -81,7 +89,7 @@ function togglePanel(idx: number) {
   } else {
     next.add(idx);
     const comp = props.components[idx];
-    if (comp && !versionInfoMap.value[comp.chartName]) {
+    if (comp && !versionInfoMap.value[chartInfoKey(comp)]) {
       loadChartInfo(comp.chartName, comp.chartRepo, comp.chartVersion);
     }
   }
@@ -89,10 +97,11 @@ function togglePanel(idx: number) {
 }
 
 async function loadChartInfo(chartName: string, chartRepo: string, chartVersion: string) {
-  if (loadingMap.value[chartName]) return;
+  const key = `${chartName}@${chartVersion}`;
+  if (loadingMap.value[key]) return;
 
-  loadingMap.value        = { ...loadingMap.value,        [chartName]: true };
-  questionsLoadingMap.value = { ...questionsLoadingMap.value, [chartName]: true };
+  loadingMap.value        = { ...loadingMap.value,        [key]: true };
+  questionsLoadingMap.value = { ...questionsLoadingMap.value, [key]: true };
 
   try {
     await store.dispatch('catalog/load');
@@ -103,29 +112,30 @@ async function loadChartInfo(chartName: string, chartRepo: string, chartVersion:
       versionName: chartVersion,
     });
     const info = applyFallbackQuestions(rawInfo, chartName);
-    versionInfoMap.value = { ...versionInfoMap.value, [chartName]: info };
-    questionsLoadingMap.value = { ...questionsLoadingMap.value, [chartName]: false };
+    versionInfoMap.value = { ...versionInfoMap.value, [key]: info };
+    questionsLoadingMap.value = { ...questionsLoadingMap.value, [key]: false };
 
     // Populate initial values only if not already set.
     if (!Object.keys(compValues.value[chartName] || {}).length) {
       await applyDefaults(chartName, chartRepo, chartVersion, info);
     }
   } catch {
-    questionsLoadingMap.value = { ...questionsLoadingMap.value, [chartName]: false };
+    questionsLoadingMap.value = { ...questionsLoadingMap.value, [key]: false };
   } finally {
-    loadingMap.value = { ...loadingMap.value, [chartName]: false };
+    loadingMap.value = { ...loadingMap.value, [key]: false };
   }
 }
 
 // Called by the "Load defaults" button — always reloads values.
 async function reloadDefaults(chartName: string, chartRepo: string, chartVersion: string) {
-  if (loadingMap.value[chartName]) return;
-  loadingMap.value = { ...loadingMap.value, [chartName]: true };
+  const key = `${chartName}@${chartVersion}`;
+  if (loadingMap.value[key]) return;
+  loadingMap.value = { ...loadingMap.value, [key]: true };
   try {
-    const info = versionInfoMap.value[chartName];
+    const info = versionInfoMap.value[key];
     await applyDefaults(chartName, chartRepo, chartVersion, info);
   } finally {
-    loadingMap.value = { ...loadingMap.value, [chartName]: false };
+    loadingMap.value = { ...loadingMap.value, [key]: false };
   }
 }
 

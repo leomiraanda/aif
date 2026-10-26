@@ -38,11 +38,11 @@
           :chart-repo="comp.chartRepo"
           :chart-name="comp.chartName"
           :chart-version="comp.chartVersion"
-          :loading-values="!!loadingMap[comp.chartName]"
+          :loading-values="!!loadingMap[chartInfoKey(comp)]"
           :version-dirty="false"
-          :has-questions="!!(versionInfoMap[comp.chartName]?.questions)"
-          :questions-source="versionInfoMap[comp.chartName] || null"
-          :questions-loading="!!questionsLoadingMap[comp.chartName]"
+          :has-questions="!!(versionInfoMap[chartInfoKey(comp)]?.questions)"
+          :questions-source="versionInfoMap[chartInfoKey(comp)] || null"
+          :questions-loading="!!questionsLoadingMap[chartInfoKey(comp)]"
           :ignore-variables="[]"
           :target-namespace="''"
           :mode="mode"
@@ -134,6 +134,14 @@ const allDisabled = computed(() => props.components.length > 0 && props.componen
 
 watch(allDisabled, (v) => emit('update:valid', !v), { immediate: true });
 
+// Chart-info (versionInfoMap/loadingMap/questionsLoadingMap) is cached per chart
+// version, not just per chart name — otherwise bumping a component's chart
+// version while its panel is already expanded would reuse the stale entry and
+// never refetch.
+function chartInfoKey(comp: { chartName: string; chartVersion: string }): string {
+  return `${comp.chartName}@${comp.chartVersion}`;
+}
+
 if (props.components.length > 0) {
   const first = props.components[0];
   loadChartInfo(first.chartName, first.chartRepo, first.chartVersion);
@@ -146,7 +154,7 @@ function togglePanel(idx: number) {
   } else {
     next.add(idx);
     const comp = props.components[idx];
-    if (comp && !versionInfoMap.value[comp.chartName]) {
+    if (comp && !versionInfoMap.value[chartInfoKey(comp)]) {
       loadChartInfo(comp.chartName, comp.chartRepo, comp.chartVersion);
     }
   }
@@ -154,21 +162,22 @@ function togglePanel(idx: number) {
 }
 
 async function loadChartInfo(chartName: string, chartRepo: string, chartVersion: string) {
-  if (loadingMap.value[chartName]) return;
-  loadingMap.value          = { ...loadingMap.value, [chartName]: true };
-  questionsLoadingMap.value = { ...questionsLoadingMap.value, [chartName]: true };
+  const key = `${chartName}@${chartVersion}`;
+  if (loadingMap.value[key]) return;
+  loadingMap.value          = { ...loadingMap.value, [key]: true };
+  questionsLoadingMap.value = { ...questionsLoadingMap.value, [key]: true };
   try {
     await store.dispatch('catalog/load');
     const rawInfo = await store.dispatch('catalog/getVersionInfo', {
       repoType: 'cluster', repoName: chartRepo, chartName, versionName: chartVersion,
     });
     const info = applyFallbackQuestions(rawInfo, chartName);
-    versionInfoMap.value = { ...versionInfoMap.value, [chartName]: info };
+    versionInfoMap.value = { ...versionInfoMap.value, [key]: info };
   } catch {
     // Form view falls back to YAML when questions can't be loaded.
   } finally {
-    loadingMap.value          = { ...loadingMap.value, [chartName]: false };
-    questionsLoadingMap.value = { ...questionsLoadingMap.value, [chartName]: false };
+    loadingMap.value          = { ...loadingMap.value, [key]: false };
+    questionsLoadingMap.value = { ...questionsLoadingMap.value, [key]: false };
   }
 }
 
