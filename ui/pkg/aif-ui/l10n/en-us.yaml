@@ -515,6 +515,7 @@ suseai:
       addCondition: + Add condition
       clear: Clear
     questionsEditor:
+      buildFormAffordance: + Build a configuration form
       addQuestion: + Add question
       addSubquestion: + Add subquestion
       deleteQuestion: Delete question

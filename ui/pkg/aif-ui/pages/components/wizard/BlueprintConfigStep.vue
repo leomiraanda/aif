@@ -33,6 +33,44 @@
           @load-defaults="reloadDefaults(comp.chartName, comp.chartRepo, comp.chartVersion)"
           @values-edited="() => onValuesUpdate(comp.chartName, compValues[comp.chartName] || {})"
         />
+
+        <div v-if="!(versionInfoMap[chartInfoKey(comp)]?.questions?.length)" class="questions-authoring-affordance">
+          <button
+            v-if="!authoringPanels.has(idx)"
+            type="button"
+            class="btn-build-questions-form"
+            data-testid="build-questions-form"
+            @click="openAuthoring(idx, comp)"
+          >
+            {{ t('suseai.wizard.questionsEditor.buildFormAffordance', '+ Build a configuration form') }}
+          </button>
+
+          <div v-else class="questions-authoring-panel" data-testid="questions-authoring-panel">
+            <QuestionsAuthoringEditor
+              :model-value="authoringQuestions[idx] || []"
+              :preview-values="compValues[comp.chartName] || {}"
+              @update:model-value="(v) => (authoringQuestions = { ...authoringQuestions, [idx]: v })"
+            />
+            <div class="questions-authoring-actions">
+              <button
+                type="button"
+                class="btn-save-questions-form"
+                data-testid="save-questions-form"
+                @click="saveAuthoring(idx)"
+              >
+                {{ t('suseai.common.actions.save', 'Save') }}
+              </button>
+              <button
+                type="button"
+                class="btn-cancel-questions-form"
+                data-testid="cancel-questions-form"
+                @click="closeAuthoring(idx)"
+              >
+                {{ t('suseai.common.actions.cancel', 'Cancel') }}
+              </button>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   </div>
@@ -43,8 +81,11 @@ import { ref, getCurrentInstance } from 'vue';
 import { useT } from '../../../composables/useT';
 import yaml from 'js-yaml';
 import ValuesStep from './ValuesStep.vue';
+import QuestionsAuthoringEditor from './QuestionsAuthoringEditor.vue';
 import { fetchChartDefaultValues } from '../../../services/rancher-apps';
 import { resolveComponentQuestions } from '../../../utils/blueprint-questions-resolve';
+import { fromStoredQuestions, toStoredQuestions } from '../../../utils/blueprint-questions-schema';
+import type { AuthoredQuestion } from '../../../utils/blueprint-questions-schema';
 import type { BlueprintComponent } from '../../../types/blueprint-types';
 
 interface Props { components: BlueprintComponent[] }
@@ -63,6 +104,12 @@ const loadingMap        = ref<Record<string, boolean>>({});
 const questionsLoadingMap = ref<Record<string, boolean>>({});
 const versionInfoMap    = ref<Record<string, any>>({});
 const valuesKeys        = ref<Record<string, number>>({});
+
+// Tracks which panels (by index) currently show the QuestionsAuthoringEditor
+// in place of the "Build a configuration form" affordance button, and the
+// in-progress AuthoredQuestion[] each one is editing.
+const authoringPanels    = ref(new Set<number>());
+const authoringQuestions = ref<Record<number, AuthoredQuestion[]>>({});
 
 const compValues = ref<Record<string, Record<string, any>>>(
   Object.fromEntries(props.components.map(c => [c.chartName, { ...(c.values || {}) }]))
@@ -184,6 +231,35 @@ function onValuesUpdate(chartName: string, newValues: Record<string, any>) {
   emitComponents();
 }
 
+// Opens the authoring editor for panel `idx`, seeded with the component's
+// currently-stored authored questions (empty when it has none yet).
+function openAuthoring(idx: number, comp: BlueprintComponent) {
+  authoringQuestions.value = { ...authoringQuestions.value, [idx]: fromStoredQuestions(comp.questions || []) };
+  const next = new Set(authoringPanels.value);
+  next.add(idx);
+  authoringPanels.value = next;
+}
+
+function closeAuthoring(idx: number) {
+  const next = new Set(authoringPanels.value);
+  next.delete(idx);
+  authoringPanels.value = next;
+}
+
+// Serializes the in-progress AuthoredQuestion[] back to QuestionDef[] and
+// emits it as that one component's `questions`, leaving every other field
+// (values, targetNamespace, etc.) untouched. `undefined` — not `[]` — when
+// the result is empty, matching the CRD's `omitempty` field.
+function saveAuthoring(idx: number) {
+  const stored = toStoredQuestions(authoringQuestions.value[idx] || []);
+
+  emit('update:components', props.components.map((c, i) => (i === idx
+    ? { ...c, questions: stored.length ? stored : undefined }
+    : c)));
+
+  closeAuthoring(idx);
+}
+
 function emitComponents() {
   emit('update:components', props.components.map(c => ({
     ...c,
@@ -210,4 +286,12 @@ function emitComponents() {
 .panel-title { font-weight: 600; font-size: 14px; flex: 1; }
 .panel-meta  { font-size: 12px; color: var(--muted); }
 .accordion-body { padding: 16px; }
+.questions-authoring-affordance { margin-top: 16px; }
+.btn-build-questions-form {
+  background: none; border: none; cursor: pointer; color: var(--primary); font-size: 13px; padding: 0;
+}
+.questions-authoring-panel {
+  border-top: 1px solid var(--border); margin-top: 16px; padding-top: 16px;
+}
+.questions-authoring-actions { display: flex; gap: 12px; margin-top: 12px; }
 </style>
