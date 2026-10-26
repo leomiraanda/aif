@@ -40,7 +40,7 @@ describe('BlueprintCustomizeStep - chart-info cache key', () => {
 
     const wrapper = mount(BlueprintCustomizeStep, {
       props: { components: [makeComponent('1.0.0')], mode: 'install' },
-      global: { config: { globalProperties: { $store: store } } },
+      global: { config: { globalProperties: { $store: store } as any } },
     });
     await flushPromises();
 
@@ -84,13 +84,37 @@ describe('BlueprintCustomizeStep - questions precedence', () => {
 
     const wrapper = mount(BlueprintCustomizeStep, {
       props: { components: [component], mode: 'install' },
-      global: { config: { globalProperties: { $store: store } } },
+      global: { config: { globalProperties: { $store: store } as any } },
     });
     await flushPromises();
 
     const valuesStep = wrapper.findComponent({ name: 'ValuesStep' });
     expect(valuesStep.props('hasQuestions')).toBe(true);
-    expect(valuesStep.props('questionsSource').questions).toEqual(authoredQuestions);
+    expect(valuesStep.props('questionsSource').questions).toEqual({ questions: authoredQuestions });
+
+    wrapper.unmount();
+  });
+
+  it('native { questions: [...] } from the chart wins over an authored definition', async () => {
+    const nativeDocument = { questions: [{ variable: 'native', label: 'Native', type: 'string' }] };
+    const dispatch = vi.fn((action: string) => {
+      if (action === 'catalog/load') return Promise.resolve();
+      if (action === 'catalog/getVersionInfo') return Promise.resolve({ values: {}, questions: nativeDocument });
+      return Promise.resolve();
+    });
+    const store = { getters: {}, dispatch };
+
+    const component = makeComponent('1.0.0', { questions: [{ variable: 'authored', label: 'Authored', type: 'string' }] });
+
+    const wrapper = mount(BlueprintCustomizeStep, {
+      props: { components: [component], mode: 'install' },
+      global: { config: { globalProperties: { $store: store } as any } },
+    });
+    await flushPromises();
+
+    const valuesStep = wrapper.findComponent({ name: 'ValuesStep' });
+    expect(valuesStep.props('hasQuestions')).toBe(true);
+    expect(valuesStep.props('questionsSource').questions).toEqual(nativeDocument);
 
     wrapper.unmount();
   });

@@ -15,7 +15,7 @@
 
       <div v-if="expandedPanels.has(idx)" class="accordion-body">
         <Banner
-          v-if="comp.questions?.length && props.authoredQuestionsVersion[comp.chartName] !== comp.chartVersion"
+          v-if="needsVersionReview(comp)"
           color="warning"
           data-testid="questions-version-review-banner"
           class="mb-20"
@@ -31,8 +31,8 @@
           :chart-version="comp.chartVersion"
           :loading-values="!!loadingMap[chartInfoKey(comp)]"
           :version-dirty="false"
-          :has-questions="!!(resolvedInfoFor(comp)?.questions)"
-          :questions-source="resolvedInfoFor(comp) || null"
+          :has-questions="!!(resolvedInfoMap[chartInfoKey(comp)]?.questions)"
+          :questions-source="resolvedInfoMap[chartInfoKey(comp)] || null"
           :questions-loading="!!questionsLoadingMap[chartInfoKey(comp)]"
           :ignore-variables="[]"
           :target-namespace="''"
@@ -43,7 +43,10 @@
           @values-edited="() => onValuesUpdate(comp.chartName, compValues[comp.chartName] || {})"
         />
 
-        <div v-if="!(versionInfoMap[chartInfoKey(comp)]?.questions?.length)" class="questions-authoring-affordance">
+        <div
+          v-if="!loadingMap[chartInfoKey(comp)] && !hasNativeQuestions(versionInfoMap[chartInfoKey(comp)])"
+          class="questions-authoring-affordance"
+        >
           <button
             v-if="!authoringPanels.has(idx)"
             type="button"
@@ -51,7 +54,9 @@
             data-testid="build-questions-form"
             @click="openAuthoring(idx, comp)"
           >
-            {{ t('suseai.wizard.questionsEditor.buildFormAffordance', '+ Build a configuration form') }}
+            {{ comp.questions?.length
+              ? t('suseai.wizard.questionsEditor.editFormAffordance', 'Edit configuration form')
+              : t('suseai.wizard.questionsEditor.buildFormAffordance', '+ Build a configuration form') }}
           </button>
 
           <div v-else class="questions-authoring-panel" data-testid="questions-authoring-panel">
@@ -65,6 +70,7 @@
                 type="button"
                 class="btn-save-questions-form"
                 data-testid="save-questions-form"
+                :disabled="authoringHasIssues(idx)"
                 @click="saveAuthoring(idx)"
               >
                 {{ t('suseai.common.actions.save', 'Save') }}
@@ -86,15 +92,17 @@
 </template>
 
 <script lang="ts" setup>
-import { ref, getCurrentInstance } from 'vue';
+import {
+  ref, computed, watch, onBeforeUnmount, getCurrentInstance,
+} from 'vue';
 import { useT } from '../../../composables/useT';
 import yaml from 'js-yaml';
 import { Banner } from '@components/Banner';
 import ValuesStep from './ValuesStep.vue';
 import QuestionsAuthoringEditor from './QuestionsAuthoringEditor.vue';
 import { fetchChartDefaultValues } from '../../../services/rancher-apps';
-import { resolveComponentQuestions } from '../../../utils/blueprint-questions-resolve';
-import { fromStoredQuestions, toStoredQuestions } from '../../../utils/blueprint-questions-schema';
+import { hasNativeQuestions, resolveComponentQuestions } from '../../../utils/blueprint-questions-resolve';
+import { fromStoredQuestions, toStoredQuestions, validateAuthoredQuestions } from '../../../utils/blueprint-questions-schema';
 import type { AuthoredQuestion } from '../../../utils/blueprint-questions-schema';
 import type { BlueprintComponent } from '../../../types/blueprint-types';
 
@@ -105,6 +113,9 @@ interface Props {
 interface Emits {
   (e: 'update:components', v: BlueprintComponent[]): void;
   (e: 'update:authoredQuestionsVersion', v: Record<string, string>): void;
+  // True while any authoring editor holds changes that were not yet saved —
+  // the wizard blocks leaving this step until they are saved or cancelled.
+  (e: 'update:hasUnsavedQuestions', v: boolean): void;
 }
 
 const props = withDefaults(defineProps<Props>(), { authoredQuestionsVersion: () => ({}) });
@@ -126,6 +137,10 @@ const valuesKeys        = ref<Record<string, number>>({});
 // in-progress AuthoredQuestion[] each one is editing.
 const authoringPanels    = ref(new Set<number>());
 const authoringQuestions = ref<Record<number, AuthoredQuestion[]>>({});
+// Serialized toStoredQuestions() of what each editor was seeded with, so
+// "unsaved changes" compares like with like (a hand-edited CR whose show_if
+// the parser can't read would otherwise look dirty the moment it opens).
+const authoringBaseline  = ref<Record<number, string>>({});
 
 const compValues = ref<Record<string, Record<string, any>>>(
   Object.fromEntries(props.components.map(c => [c.chartName, { ...(c.values || {}) }]))
@@ -144,21 +159,45 @@ function chartInfoKey(comp: { chartName: string; chartVersion: string }): string
 // versionInfoMap, so the cache itself always holds the untouched
 // catalog/getVersionInfo response — needed to tell "chart shipped native
 // questions" apart from "an author supplied them on the Blueprint CR".
-function resolvedInfoFor(comp: BlueprintComponent): any {
-  const rawInfo = versionInfoMap.value[chartInfoKey(comp)];
-  if (!rawInfo) return rawInfo;
+//
+// rawInfo.questions is the parsed questions.yaml *document* ({ questions: [...] }),
+// and Questions reads source.questions.questions — resolveComponentQuestions
+// returns that same document shape. Authored questions are deep-cloned
+// because Questions annotates the question objects it renders (depth/group),
+// which must never leak back into comp.questions and onto the CR.
+const resolvedInfoMap = computed<Record<string, any>>(() => Object.fromEntries(props.components.map((comp) => {
+  const key = chartInfoKey(comp);
+  const rawInfo = versionInfoMap.value[key];
 
-  return {
+  if (!rawInfo) return [key, rawInfo];
+
+  const authored = comp.questions?.length ? JSON.parse(JSON.stringify(comp.questions)) : undefined;
+
+  return [key, {
     ...rawInfo,
-    questions: resolveComponentQuestions(rawInfo.questions, comp.questions, comp.chartName, rawInfo.values),
-  };
+    questions: resolveComponentQuestions(rawInfo.questions, authored, comp.chartName, rawInfo.values),
+  }];
+})));
+
+function needsVersionReview(comp: BlueprintComponent): boolean {
+  return !!comp.questions?.length && props.authoredQuestionsVersion[comp.chartName] !== comp.chartVersion;
 }
 
-// Load info for the first panel on mount.
-if (props.components.length > 0) {
-  const first = props.components[0];
-  loadChartInfo(first.chartName, first.chartRepo, first.chartVersion);
-}
+// Load info for the first panel on mount. Any component whose authored form
+// was written against a different chart version is also forced open — panel
+// expanded and editor opened — so the review banner can't go unseen behind a
+// collapsed panel.
+props.components.forEach((comp, idx) => {
+  if (idx !== 0 && !needsVersionReview(comp)) return;
+
+  if (idx !== 0) {
+    expandedPanels.value = new Set([...expandedPanels.value, idx]);
+  }
+  if (needsVersionReview(comp)) {
+    openAuthoring(idx, comp);
+  }
+  loadChartInfo(comp.chartName, comp.chartRepo, comp.chartVersion);
+});
 
 function togglePanel(idx: number) {
   const next = new Set(expandedPanels.value);
@@ -175,7 +214,7 @@ function togglePanel(idx: number) {
 }
 
 async function loadChartInfo(chartName: string, chartRepo: string, chartVersion: string) {
-  const key = `${chartName}@${chartVersion}`;
+  const key = chartInfoKey({ chartName, chartVersion });
   if (loadingMap.value[key]) return;
 
   loadingMap.value        = { ...loadingMap.value,        [key]: true };
@@ -205,7 +244,7 @@ async function loadChartInfo(chartName: string, chartRepo: string, chartVersion:
 
 // Called by the "Load defaults" button — always reloads values.
 async function reloadDefaults(chartName: string, chartRepo: string, chartVersion: string) {
-  const key = `${chartName}@${chartVersion}`;
+  const key = chartInfoKey({ chartName, chartVersion });
   if (loadingMap.value[key]) return;
   loadingMap.value = { ...loadingMap.value, [key]: true };
   try {
@@ -250,7 +289,10 @@ function onValuesUpdate(chartName: string, newValues: Record<string, any>) {
 // Opens the authoring editor for panel `idx`, seeded with the component's
 // currently-stored authored questions (empty when it has none yet).
 function openAuthoring(idx: number, comp: BlueprintComponent) {
-  authoringQuestions.value = { ...authoringQuestions.value, [idx]: fromStoredQuestions(comp.questions || []) };
+  const seeded = fromStoredQuestions(comp.questions || []);
+
+  authoringQuestions.value = { ...authoringQuestions.value, [idx]: seeded };
+  authoringBaseline.value = { ...authoringBaseline.value, [idx]: JSON.stringify(toStoredQuestions(seeded)) };
   const next = new Set(authoringPanels.value);
   next.add(idx);
   authoringPanels.value = next;
@@ -266,7 +308,21 @@ function closeAuthoring(idx: number) {
 // emits it as that one component's `questions`, leaving every other field
 // (values, targetNamespace, etc.) untouched. `undefined` — not `[]` — when
 // the result is empty, matching the CRD's `omitempty` field.
+function authoringHasIssues(idx: number): boolean {
+  return validateAuthoredQuestions(authoringQuestions.value[idx] || []).length > 0;
+}
+
+const hasUnsavedQuestions = computed(() => [...authoringPanels.value].some((idx) => JSON.stringify(toStoredQuestions(authoringQuestions.value[idx] || [])) !== authoringBaseline.value[idx]
+));
+
+watch(hasUnsavedQuestions, (dirty) => emit('update:hasUnsavedQuestions', dirty), { immediate: true });
+onBeforeUnmount(() => emit('update:hasUnsavedQuestions', false));
+
 function saveAuthoring(idx: number) {
+  // Never write a form that would corrupt deployed values (blank/duplicate
+  // variables etc.) — the button is disabled too; this guards direct calls.
+  if (authoringHasIssues(idx)) return;
+
   const stored = toStoredQuestions(authoringQuestions.value[idx] || []);
   const comp = props.components[idx];
 

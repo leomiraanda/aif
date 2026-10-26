@@ -524,6 +524,14 @@ suseai:
       blockedDelete: 'Cannot delete — still referenced by: {labels}'
       preview: Preview
       versionReviewBanner: This chart version changed — review your custom fields.
+      editFormAffordance: Edit configuration form
+      unsavedChanges: You have unsaved changes to a configuration form. Save or cancel them before leaving this step.
+      untitledQuestion: Untitled question
+      issues:
+        emptyVariable: '{name}: variable is required'
+        duplicateVariable: '{name}: variable "{variable}" is used by more than one question'
+        emptyLabel: '{name}: label is required'
+        emptyOption: '{name}: enum options cannot be blank'
     errors:
       allComponentsDisabled: At least one component must remain enabled.
     warnings:

@@ -55,6 +55,12 @@ const authoredQuestionsVersion = ref<Record<string, string>>(
   Object.fromEntries((props.prefill?.components || []).filter(c => c.questions?.length).map(c => [c.chartName, c.chartVersion]))
 );
 
+// Set by BlueprintConfigStep while an authoring editor holds unsaved changes.
+// That editor state lives only inside the step, so leaving step 2 would
+// silently discard it — navigation away is blocked until Save or Cancel.
+const hasUnsavedQuestions = ref(false);
+const leaveBlocked = computed(() => currentStep.value === 2 && hasUnsavedQuestions.value);
+
 const namespacesValid = computed(() => components.value.every((c) => {
   const ns = c.targetNamespace?.trim();
   return !ns || (ns.length <= 63 && DNS_LABEL_PATTERN.test(ns));
@@ -97,14 +103,17 @@ const wizardSteps = computed(() => [
 ]);
 
 function nextStep() {
+  if (leaveBlocked.value) return;
   if (currentStep.value < 3 && wizardSteps.value[currentStep.value + 1]?.ready) currentStep.value++;
 }
 
 function previousStep() {
+  if (leaveBlocked.value) return;
   if (currentStep.value > 0) currentStep.value--;
 }
 
 function goToStep(i: number) {
+  if (i !== currentStep.value && leaveBlocked.value) return;
   if (i <= currentStep.value || wizardSteps.value[i].ready) currentStep.value = i;
 }
 
@@ -173,6 +182,9 @@ const reviewForm = computed<BlueprintSpec>(() => buildBlueprintSpec(basicInfo.va
 
     <div class="wizard-content-wrapper">
       <Banner v-if="error" color="error" class="mb-20">{{ error }}</Banner>
+      <Banner v-if="leaveBlocked" color="warning" class="mb-20" data-testid="unsaved-questions-banner">
+        {{ t('suseai.wizard.questionsEditor.unsavedChanges', 'You have unsaved changes to a configuration form. Save or cancel them before leaving this step.') }}
+      </Banner>
 
       <div class="wizard-content">
         <BlueprintBasicInfoStep
@@ -192,6 +204,7 @@ const reviewForm = computed<BlueprintSpec>(() => buildBlueprintSpec(basicInfo.va
           :authored-questions-version="authoredQuestionsVersion"
           @update:components="components = $event"
           @update:authored-questions-version="authoredQuestionsVersion = $event"
+          @update:has-unsaved-questions="hasUnsavedQuestions = $event"
         />
         <BlueprintReviewCreateStep
           v-else-if="currentStep === 3"
@@ -202,13 +215,13 @@ const reviewForm = computed<BlueprintSpec>(() => buildBlueprintSpec(basicInfo.va
     </div>
 
     <div class="wizard-buttons-fixed">
-      <button v-if="currentStep > 0" class="btn role-secondary" @click="previousStep">Previous</button>
+      <button v-if="currentStep > 0" class="btn role-secondary" :disabled="leaveBlocked" @click="previousStep">Previous</button>
       <div class="flex-spacer" />
       <button class="btn role-secondary mr-10" @click="onCancel">Cancel</button>
       <button
         v-if="currentStep < 3"
         class="btn role-primary"
-        :disabled="!wizardSteps[currentStep + 1]?.ready"
+        :disabled="leaveBlocked || !wizardSteps[currentStep + 1]?.ready"
         @click="nextStep"
       >
         Next

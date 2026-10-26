@@ -4,6 +4,7 @@ import {
   toStoredQuestions,
   fromStoredQuestions,
   canDeleteQuestion,
+  validateAuthoredQuestions,
 } from '../blueprint-questions-schema';
 
 describe('toStoredQuestions / fromStoredQuestions round-trip', () => {
@@ -225,5 +226,123 @@ describe('canDeleteQuestion', () => {
 
     expect(result.allowed).toBe(false);
     expect(result.dependents).toEqual([nestedDependent]);
+  });
+
+  it('blocks deleting a parent whose nested subquestion is referenced from outside the subtree', () => {
+    const outsideDependent: AuthoredQuestion = {
+      id: 'd',
+      variable: 'd',
+      label: 'D',
+      type: 'string',
+      showIf: { combinator: '&&', rules: [{ fieldId: 'c', operator: '=', value: 'x' }] },
+    };
+    const questions: AuthoredQuestion[] = [
+      {
+        id: 'a',
+        variable: 'a',
+        label: 'A',
+        type: 'boolean',
+        subquestions: [{
+          id: 'c', variable: 'c', label: 'C', type: 'string',
+        }],
+      },
+      outsideDependent,
+    ];
+
+    const result = canDeleteQuestion(questions, 'a');
+
+    expect(result.allowed).toBe(false);
+    expect(result.dependents).toEqual([outsideDependent]);
+  });
+
+  it('ignores references that originate inside the subtree being deleted', () => {
+    const questions: AuthoredQuestion[] = [
+      {
+        id: 'a',
+        variable: 'a',
+        label: 'A',
+        type: 'boolean',
+        subquestions: [
+          {
+            id: 'b', variable: 'b', label: 'B', type: 'string',
+          },
+          {
+            id: 'c',
+            variable: 'c',
+            label: 'C',
+            type: 'string',
+            showIf: { combinator: '&&', rules: [{ fieldId: 'b', operator: '=', value: 'x' }] },
+          },
+        ],
+      },
+    ];
+
+    expect(canDeleteQuestion(questions, 'a')).toEqual({ allowed: true, dependents: [] });
+  });
+
+  it('allows deleting a question whose only reference is its own self-referencing subquestions_if', () => {
+    const questions: AuthoredQuestion[] = [
+      {
+        id: 'a',
+        variable: 'ingress.enabled',
+        label: 'Ingress',
+        type: 'boolean',
+        subquestionsIf: { combinator: '&&', rules: [{ fieldId: 'a', operator: '=', value: 'true' }] },
+        subquestions: [{
+          id: 'b', variable: 'ingress.host', label: 'Host', type: 'string',
+        }],
+      },
+    ];
+
+    expect(canDeleteQuestion(questions, 'a')).toEqual({ allowed: true, dependents: [] });
+  });
+});
+
+describe('validateAuthoredQuestions', () => {
+  it('returns no issues for a well-formed tree', () => {
+    const questions: AuthoredQuestion[] = [
+      {
+        id: 'a',
+        variable: 'mode',
+        label: 'Mode',
+        type: 'enum',
+        options: ['x', 'y'],
+        subquestions: [{
+          id: 'b', variable: 'mode.extra', label: 'Extra', type: 'string',
+        }],
+      },
+    ];
+
+    expect(validateAuthoredQuestions(questions)).toEqual([]);
+  });
+
+  it('flags blank variables, blank labels, duplicate variables at any depth, and blank enum options', () => {
+    const questions: AuthoredQuestion[] = [
+      {
+        id: 'blank', variable: '  ', label: '', type: 'string',
+      },
+      {
+        id: 'dup1',
+        variable: 'shared',
+        label: 'Shared 1',
+        type: 'string',
+        subquestions: [{
+          id: 'dup2', variable: 'shared', label: 'Shared 2', type: 'string',
+        }],
+      },
+      {
+        id: 'enum', variable: 'choice', label: 'Choice', type: 'enum', options: ['ok', ''],
+      },
+    ];
+
+    const issues = validateAuthoredQuestions(questions).map((issue) => `${ issue.id }:${ issue.kind }`);
+
+    expect(issues).toEqual([
+      'blank:emptyVariable',
+      'blank:emptyLabel',
+      'dup1:duplicateVariable',
+      'dup2:duplicateVariable',
+      'enum:emptyOption',
+    ]);
   });
 });

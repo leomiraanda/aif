@@ -30,7 +30,7 @@ vi.mock('@shell/components/form/LabeledSelect', () => ({
 vi.mock('@shell/components/Questions', () => ({
   default: {
     name:  'Questions',
-    props: ['source', 'value', 'mode'],
+    props: ['source', 'value', 'mode', 'tabbed', 'targetNamespace'],
     template: '<div data-testid="questions-preview-stub" />',
   },
 }));
@@ -106,7 +106,7 @@ describe('QuestionsAuthoringEditor', () => {
     expect(banner.text()).toContain('Certificate Path');
   });
 
-  it('the live preview receives toStoredQuestions(modelValue) as its source', () => {
+  it('the live preview receives toStoredQuestions(modelValue) nested as source.questions.questions, untabbed', () => {
     const questions = [
       makeQuestion({ id: 'q-1', variable: 'enableTls', label: 'Enable TLS', type: 'boolean' }),
     ];
@@ -114,8 +114,103 @@ describe('QuestionsAuthoringEditor', () => {
 
     const preview = wrapper.findComponent({ name: 'Questions' });
     expect(preview.exists()).toBe(true);
-    expect(preview.props('source')).toEqual({ questions: toStoredQuestions(questions) });
+    // Questions reads source.questions.questions (the chart-info shape).
+    expect(preview.props('source')).toEqual({ questions: { questions: toStoredQuestions(questions) } });
     expect(preview.props('value')).toEqual({ enableTls: true });
+    // No <Tabbed> ancestor here, so tabbed mode would throw on mount.
+    expect(preview.props('tabbed')).toBe('never');
+    expect(preview.props('targetNamespace')).toBe('');
+  });
+
+  it('the live preview edits a private copy of previewValues, never the caller\'s object', async () => {
+    const previewValues = { enableTls: true, nested: { a: 1 } };
+    const wrapper = mountEditor([makeQuestion()], previewValues);
+
+    const preview = wrapper.findComponent({ name: 'Questions' });
+    const value = preview.props('value') as Record<string, any>;
+    expect(value).not.toBe(previewValues);
+    expect(value.nested).not.toBe(previewValues.nested);
+
+    // Simulate what Questions.update()/shownQuestions do to its value prop.
+    value.enableTls = false;
+    delete value.nested;
+    expect(previewValues).toEqual({ enableTls: true, nested: { a: 1 } });
+
+    // A new values object from the parent refreshes the copy.
+    await wrapper.setProps({ previewValues: { enableTls: false } });
+    expect(wrapper.findComponent({ name: 'Questions' }).props('value')).toEqual({ enableTls: false });
+  });
+
+  it('deleting a parent is blocked when a subquestion in its subtree is referenced from outside', async () => {
+    const child = makeQuestion({ id: 'q-c', variable: 'cVar', label: 'C Label' });
+    const parent = makeQuestion({
+      id: 'q-a', variable: 'aVar', label: 'A Label', subquestions: [child],
+    });
+    const dependent = makeQuestion({
+      id:      'q-d',
+      variable: 'dVar',
+      label:   'Dependent Label',
+      showIf:  { combinator: '&&', rules: [{ fieldId: 'q-c', operator: '=', value: 'x' }] },
+    });
+    const wrapper = mountEditor([parent, dependent]);
+
+    // DOM order: A, C (nested), D — index 0 is the parent A.
+    await wrapper.findAll('[data-testid="delete-question"]')[0].trigger('click');
+
+    expect(wrapper.emitted('update:modelValue')).toBeFalsy();
+    expect(wrapper.get('[data-testid="blocked-delete-banner"]').text()).toContain('Dependent Label');
+  });
+
+  it('deleting a question whose subquestions_if references itself is allowed', async () => {
+    const parent = makeQuestion({
+      id:             'q-a',
+      variable:       'ingress.enabled',
+      label:          'Ingress',
+      type:           'boolean',
+      subquestionsIf: { combinator: '&&', rules: [{ fieldId: 'q-a', operator: '=', value: 'true' }] },
+      subquestions:   [makeQuestion({ id: 'q-b', variable: 'ingress.host', label: 'Host' })],
+    });
+    const wrapper = mountEditor([parent]);
+
+    await wrapper.findAll('[data-testid="delete-question"]')[0].trigger('click');
+
+    const emitted = wrapper.emitted('update:modelValue');
+    expect(emitted).toBeTruthy();
+    expect(emitted![0][0]).toEqual([]);
+  });
+
+  it('the "show subquestions if" builder offers the parent question itself; the "show if" builder does not', () => {
+    const parent = makeQuestion({
+      id: 'q-a', variable: 'ingress.enabled', label: 'Ingress', type: 'boolean',
+      subquestions: [makeQuestion({ id: 'q-b', variable: 'ingress.host', label: 'Host' })],
+    });
+    const wrapper = mountEditor([parent]);
+
+    const builders = wrapper.findAllComponents({ name: 'ShowIfRuleBuilder' });
+    // Order: A's show_if, A's subquestions_if, B's show_if.
+    const subquestionsIfBuilder = builders.find((b) => b.attributes('data-testid') === 'subquestions-if-builder');
+    expect(subquestionsIfBuilder).toBeTruthy();
+    expect((subquestionsIfBuilder!.props('availableFields') as AuthoredQuestion[]).map((f) => f.id)).toContain('q-a');
+    expect((builders[0].props('availableFields') as AuthoredQuestion[]).map((f) => f.id)).not.toContain('q-a');
+  });
+
+  it('lists validation issues for blank and duplicate variables', () => {
+    const wrapper = mountEditor([
+      makeQuestion({ id: 'q-1', variable: '', label: 'Blank Var' }),
+      makeQuestion({ id: 'q-2', variable: 'dup', label: 'Dup One' }),
+      makeQuestion({ id: 'q-3', variable: 'dup', label: 'Dup Two' }),
+    ]);
+
+    const banner = wrapper.get('[data-testid="questions-validation-banner"]');
+    expect(banner.text()).toContain('Blank Var: variable is required');
+    expect(banner.text()).toContain('Dup One: variable "dup" is used by more than one question');
+    expect(banner.text()).toContain('Dup Two');
+  });
+
+  it('shows no validation banner for a well-formed form', () => {
+    const wrapper = mountEditor([makeQuestion()]);
+
+    expect(wrapper.find('[data-testid="questions-validation-banner"]').exists()).toBe(false);
   });
 
   // A -> subquestions: [B] -> subquestions: [C]. Depth-2 nesting exercises the

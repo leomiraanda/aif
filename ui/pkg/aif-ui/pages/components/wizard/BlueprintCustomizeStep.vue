@@ -40,8 +40,8 @@
           :chart-version="comp.chartVersion"
           :loading-values="!!loadingMap[chartInfoKey(comp)]"
           :version-dirty="false"
-          :has-questions="!!(resolvedInfoFor(comp)?.questions)"
-          :questions-source="resolvedInfoFor(comp) || null"
+          :has-questions="!!(resolvedInfoMap[chartInfoKey(comp)]?.questions)"
+          :questions-source="resolvedInfoMap[chartInfoKey(comp)] || null"
           :questions-loading="!!questionsLoadingMap[chartInfoKey(comp)]"
           :ignore-variables="[]"
           :target-namespace="''"
@@ -147,15 +147,24 @@ function chartInfoKey(comp: { chartName: string; chartVersion: string }): string
 // versionInfoMap, so the cache itself always holds the untouched
 // catalog/getVersionInfo response — needed to tell "chart shipped native
 // questions" apart from "an author supplied them on the Blueprint CR".
-function resolvedInfoFor(comp: BlueprintComponent): any {
-  const rawInfo = versionInfoMap.value[chartInfoKey(comp)];
-  if (!rawInfo) return rawInfo;
+//
+// rawInfo.questions is the parsed questions.yaml *document* ({ questions: [...] }),
+// and Questions reads source.questions.questions — resolveComponentQuestions
+// returns that same document shape. Authored questions are deep-cloned
+// because Questions annotates the question objects it renders (depth/group).
+const resolvedInfoMap = computed<Record<string, any>>(() => Object.fromEntries(props.components.map((comp) => {
+  const key = chartInfoKey(comp);
+  const rawInfo = versionInfoMap.value[key];
 
-  return {
+  if (!rawInfo) return [key, rawInfo];
+
+  const authored = comp.questions?.length ? JSON.parse(JSON.stringify(comp.questions)) : undefined;
+
+  return [key, {
     ...rawInfo,
-    questions: resolveComponentQuestions(rawInfo.questions, comp.questions, comp.chartName, rawInfo.values),
-  };
-}
+    questions: resolveComponentQuestions(rawInfo.questions, authored, comp.chartName, rawInfo.values),
+  }];
+})));
 
 if (props.components.length > 0) {
   const first = props.components[0];
@@ -177,7 +186,7 @@ function togglePanel(idx: number) {
 }
 
 async function loadChartInfo(chartName: string, chartRepo: string, chartVersion: string) {
-  const key = `${chartName}@${chartVersion}`;
+  const key = chartInfoKey({ chartName, chartVersion });
   if (loadingMap.value[key]) return;
   loadingMap.value          = { ...loadingMap.value, [key]: true };
   questionsLoadingMap.value = { ...questionsLoadingMap.value, [key]: true };

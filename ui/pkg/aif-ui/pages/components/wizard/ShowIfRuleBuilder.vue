@@ -127,7 +127,9 @@ const combinator = computed(() => props.modelValue?.combinator ?? '&&');
 // The GUI-level guard against dangling show_if references: the field <select>
 // is only ever populated from availableFields, so there is no way to type an
 // arbitrary field name into a rule.
-const fieldOptions = computed(() => props.availableFields.map((field) => ({ label: field.label, value: field.id })));
+// Falls back to the variable name so a not-yet-labelled field is still
+// identifiable in the dropdown.
+const fieldOptions = computed(() => props.availableFields.map((field) => ({ label: field.label || field.variable, value: field.id })));
 
 function emitRules(newRules: ShowIfRule[]) {
   if (newRules.length === 0) {

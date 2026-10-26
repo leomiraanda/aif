@@ -11,6 +11,21 @@
       {{ blockedDeleteMessage }}
     </Banner>
 
+    <Banner
+      v-if="issueMessages.length"
+      color="error"
+      data-testid="questions-validation-banner"
+    >
+      <ul class="validation-issues">
+        <li
+          v-for="message in issueMessages"
+          :key="message"
+        >
+          {{ message }}
+        </li>
+      </ul>
+    </Banner>
+
     <div
       v-for="question in modelValue"
       :key="question.id"
@@ -39,9 +54,13 @@
       data-testid="questions-preview"
     >
       <h4>{{ t('suseai.wizard.questionsEditor.preview', 'Preview') }}</h4>
+      <!-- tabbed="never": outside a <Tabbed> ancestor, Questions' default
+           tabbed mode renders <Tab>s whose mount hook throws. -->
       <Questions
         :source="previewSource"
-        :value="previewValues"
+        :value="previewValuesLocal"
+        tabbed="never"
+        target-namespace=""
         mode="create"
       />
     </div>
@@ -49,7 +68,9 @@
 </template>
 
 <script lang="ts" setup>
-import { computed, defineComponent, h, ref } from 'vue';
+import {
+  computed, defineComponent, h, ref, watch,
+} from 'vue';
 import type { PropType } from 'vue';
 import { Banner } from '@components/Banner';
 import Questions from '@shell/components/Questions';
@@ -60,8 +81,9 @@ import {
   canDeleteQuestion,
   createQuestionId,
   toStoredQuestions,
+  validateAuthoredQuestions,
 } from '../../../utils/blueprint-questions-schema';
-import type { AuthoredQuestion, ShowIfExpression } from '../../../utils/blueprint-questions-schema';
+import type { AuthoredQuestion, QuestionIssueKind, ShowIfExpression } from '../../../utils/blueprint-questions-schema';
 
 interface Props {
   modelValue: AuthoredQuestion[];
@@ -95,7 +117,37 @@ function removeQuestionById(questions: AuthoredQuestion[], id: string): Authored
 
 const availableFields = computed(() => flattenQuestions(props.modelValue));
 
-const previewSource = computed(() => ({ questions: toStoredQuestions(props.modelValue) }));
+// Questions reads `source.questions.questions` — the same nesting as a
+// chart-info's parsed questions.yaml document — so wrap the array twice.
+const previewSource = computed(() => ({ questions: { questions: toStoredQuestions(props.modelValue) } }));
+
+// Questions writes into (and, when a field becomes hidden, deletes from) the
+// `value` object it is handed. The preview must never touch the Blueprint's
+// real default values, so it gets its own deep copy, refreshed only when the
+// parent hands over a different values object.
+function cloneValues(values: Record<string, any> | undefined): Record<string, any> {
+  return JSON.parse(JSON.stringify(values || {}));
+}
+
+const previewValuesLocal = ref<Record<string, any>>(cloneValues(props.previewValues));
+
+watch(() => props.previewValues, (values) => {
+  previewValuesLocal.value = cloneValues(values);
+});
+
+const ISSUE_MESSAGES: Record<QuestionIssueKind, [string, string]> = {
+  emptyVariable:     ['suseai.wizard.questionsEditor.issues.emptyVariable', '{name}: variable is required'],
+  duplicateVariable: ['suseai.wizard.questionsEditor.issues.duplicateVariable', '{name}: variable "{variable}" is used by more than one question'],
+  emptyLabel:        ['suseai.wizard.questionsEditor.issues.emptyLabel', '{name}: label is required'],
+  emptyOption:       ['suseai.wizard.questionsEditor.issues.emptyOption', '{name}: enum options cannot be blank'],
+};
+
+const issueMessages = computed(() => validateAuthoredQuestions(props.modelValue).map((issue) => {
+  const [key, fallback] = ISSUE_MESSAGES[issue.kind];
+  const name = issue.label.trim() || issue.variable.trim() || t('suseai.wizard.questionsEditor.untitledQuestion', 'Untitled question');
+
+  return t(key, fallback, { name, variable: issue.variable });
+}));
 
 const blockedDependents = ref<AuthoredQuestion[]>([]);
 
@@ -158,9 +210,11 @@ const QuestionNode = defineComponent({
       nodeEmit('update:modelValue', { ...nodeProps.modelValue, ...patch });
     }
 
-    // A rule referencing its own question would be a no-op the builder can't
-    // usefully express — exclude self from the field choices offered to it.
-    const fieldOptions = computed(() => nodeProps.availableFields.filter((field) => field.id !== nodeProps.modelValue.id));
+    // A show_if referencing its own question would be a no-op the builder
+    // can't usefully express — exclude self from its field choices. The
+    // subquestions_if builder keeps self: "show my subquestions when I am
+    // true" (e.g. `ingress.enabled=true`) is the canonical Rancher pattern.
+    const showIfFieldOptions = computed(() => nodeProps.availableFields.filter((field) => field.id !== nodeProps.modelValue.id));
 
     function addSubquestion() {
       const fresh: AuthoredQuestion = {
@@ -191,7 +245,7 @@ const QuestionNode = defineComponent({
           h('label', { class: 'section-label' }, nodeT('suseai.wizard.questionsEditor.showIf', 'Show if')),
           h(ShowIfRuleBuilder, {
             modelValue:            question.showIf,
-            availableFields:       fieldOptions.value,
+            availableFields:       showIfFieldOptions.value,
             'onUpdate:modelValue': (value: ShowIfExpression | undefined) => update({ showIf: value }),
           }),
         ]),
@@ -218,7 +272,8 @@ const QuestionNode = defineComponent({
             h('label', { class: 'section-label' }, nodeT('suseai.wizard.questionsEditor.subquestionsIf', 'Show subquestions if')),
             h(ShowIfRuleBuilder, {
               modelValue:            question.subquestionsIf,
-              availableFields:       fieldOptions.value,
+              availableFields:       nodeProps.availableFields,
+              'data-testid':         'subquestions-if-builder',
               'onUpdate:modelValue': (value: ShowIfExpression | undefined) => update({ subquestionsIf: value }),
             }),
           ]),
@@ -257,6 +312,10 @@ const QuestionNode = defineComponent({
     font-size: 13px;
     padding: 0;
     margin-bottom: 20px;
+  }
+  .validation-issues {
+    margin: 0;
+    padding-left: 18px;
   }
   .questions-preview {
     border-top: 1px solid var(--border);

@@ -47,6 +47,18 @@ describe('ShowIfRuleBuilder', () => {
     expect(options.map((o) => o.text())).toEqual(['Enable TLS', 'Replica Count']);
   });
 
+  it('field dropdown falls back to the variable name for a field with no label yet', () => {
+    const modelValue: ShowIfExpression = {
+      combinator: '&&',
+      rules:      [{ fieldId: 'q-1', operator: '=', value: 'true' }],
+    };
+    const wrapper = mountBuilder(modelValue, [
+      { id: 'q-1', variable: 'enableTls', label: '', type: 'boolean' },
+    ]);
+
+    expect(wrapper.get('[data-testid="show-if-field"]').findAll('option').map((o) => o.text())).toEqual(['enableTls']);
+  });
+
   it('adding a rule with no prior rules emits a single-rule expression with no combinator needed', async () => {
     const wrapper = mountBuilder(undefined);
 
