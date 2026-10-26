@@ -73,6 +73,12 @@ spec:
                       description: ChartVersion is the semver chart version.
                       minLength: 1
                       type: string
+                    questions:
+                      description: |-
+                        Questions is an author-defined questions.yaml-equivalent for this
+                        component, used by the deploy wizard only when the chart itself (via
+                        ChartName/ChartVersion) ships no questions.yaml of its own.
+                      x-kubernetes-preserve-unknown-fields: true
                     releaseName:
                       description: |-
                         ReleaseName optionally pins this component's Helm release name.

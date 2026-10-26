@@ -87,6 +87,11 @@ type BlueprintComponent struct {
 	// Values are the Helm values for this component.
 	// +optional
 	Values *apixv1.JSON `json:"values,omitempty"`
+	// Questions is an author-defined questions.yaml-equivalent for this
+	// component, used by the deploy wizard only when the chart itself (via
+	// ChartName/ChartVersion) ships no questions.yaml of its own.
+	// +optional
+	Questions *apixv1.JSON `json:"questions,omitempty"`
 	// TargetNamespace optionally pins this component to a fixed namespace.
 	// When empty, the AIWorkload's targetNamespace (from the install wizard) is used.
 	// Must be a valid DNS-1123 label (lowercase alphanumerics and '-', starting

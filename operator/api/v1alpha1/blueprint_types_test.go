@@ -19,6 +19,8 @@ package v1alpha1
 import (
 	"encoding/json"
 	"testing"
+
+	apixv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 )
 
 func TestBlueprintTypesCompile(t *testing.T) {
@@ -62,6 +64,31 @@ func TestBlueprintComponentTargetNamespaceJSON(t *testing.T) {
 	empty, _ := json.Marshal(BlueprintComponent{ChartRepo: "r", ChartName: "n", ChartVersion: "1.0.0"})
 	if string(empty) == "" || jsonHasKey(empty, "targetNamespace") {
 		t.Errorf("expected targetNamespace omitted when empty, got %s", empty)
+	}
+}
+
+func TestBlueprintComponentQuestionsJSON(t *testing.T) {
+	// Set value round-trips through JSON under the "questions" key.
+	in := BlueprintComponent{ChartRepo: "r", ChartName: "n", ChartVersion: "1.0.0", Questions: &apixv1.JSON{Raw: []byte(`[{"variable":"replicaCount","label":"Replicas","type":"int"}]`)}}
+	b, err := json.Marshal(in)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if !json.Valid(b) {
+		t.Fatalf("invalid json: %s", b)
+	}
+	var out BlueprintComponent
+	if err := json.Unmarshal(b, &out); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if out.Questions == nil || string(out.Questions.Raw) != `[{"variable":"replicaCount","label":"Replicas","type":"int"}]` {
+		t.Errorf("expected questions round-trip, got %v from %s", out.Questions, b)
+	}
+
+	// Empty value is omitted from JSON (omitempty).
+	empty, _ := json.Marshal(BlueprintComponent{ChartRepo: "r", ChartName: "n", ChartVersion: "1.0.0"})
+	if string(empty) == "" || jsonHasKey(empty, "questions") {
+		t.Errorf("expected questions omitted when empty, got %s", empty)
 	}
 }
 
