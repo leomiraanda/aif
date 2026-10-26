@@ -8,11 +8,21 @@ import type { BlueprintComponent } from '../../../../types/blueprint-types';
 // irrelevant to the chart-info caching logic under test here — stub it the
 // same way Apps.test.ts stubs heavy child components.
 vi.mock('../ValuesStep.vue', () => ({
-  default: { name: 'ValuesStep', template: '<div class="values-step-stub" />' },
+  default: {
+    name:  'ValuesStep',
+    props: [
+      'values', 'chartRepo', 'chartName', 'chartVersion', 'loadingValues', 'versionDirty',
+      'hasQuestions', 'questionsSource', 'questionsLoading', 'ignoreVariables', 'targetNamespace',
+      'mode', 'inStore',
+    ],
+    template: '<div class="values-step-stub" />',
+  },
 }));
 
-function makeComponent(chartVersion: string): BlueprintComponent {
-  return { chartRepo: 'repo-a', chartName: 'chart-a', chartVersion };
+function makeComponent(chartVersion: string, overrides: Partial<BlueprintComponent> = {}): BlueprintComponent {
+  return {
+    chartRepo: 'repo-a', chartName: 'chart-a', chartVersion, ...overrides,
+  };
 }
 
 function getVersionInfoCalls(dispatch: ReturnType<typeof vi.fn>) {
@@ -55,6 +65,32 @@ describe('BlueprintConfigStep - chart-info cache key', () => {
 
     expect(getVersionInfoCalls(dispatch)).toHaveLength(2);
     expect(getVersionInfoCalls(dispatch)[1][1]).toMatchObject({ versionName: '2.0.0' });
+
+    wrapper.unmount();
+  });
+});
+
+describe('BlueprintConfigStep - questions precedence', () => {
+  it('uses the Blueprint-authored questions when the chart has no native questions.yaml', async () => {
+    const dispatch = vi.fn((action: string) => {
+      if (action === 'catalog/load') return Promise.resolve();
+      if (action === 'catalog/getVersionInfo') return Promise.resolve({ values: { replicas: 1 } });
+      return Promise.resolve();
+    });
+    const store = { getters: {}, dispatch };
+
+    const authoredQuestions = [{ variable: 'authored', label: 'Authored', type: 'string' }];
+    const component = makeComponent('1.0.0', { questions: authoredQuestions });
+
+    const wrapper = mount(BlueprintConfigStep, {
+      props: { components: [component] },
+      global: { config: { globalProperties: { $store: store } } },
+    });
+    await flushPromises();
+
+    const valuesStep = wrapper.findComponent({ name: 'ValuesStep' });
+    expect(valuesStep.props('hasQuestions')).toBe(true);
+    expect(valuesStep.props('questionsSource').questions).toEqual(authoredQuestions);
 
     wrapper.unmount();
   });

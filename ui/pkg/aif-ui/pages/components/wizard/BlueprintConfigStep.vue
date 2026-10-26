@@ -22,8 +22,8 @@
           :chart-version="comp.chartVersion"
           :loading-values="!!loadingMap[chartInfoKey(comp)]"
           :version-dirty="false"
-          :has-questions="!!(versionInfoMap[chartInfoKey(comp)]?.questions)"
-          :questions-source="versionInfoMap[chartInfoKey(comp)] || null"
+          :has-questions="!!(resolvedInfoFor(comp)?.questions)"
+          :questions-source="resolvedInfoFor(comp) || null"
           :questions-loading="!!questionsLoadingMap[chartInfoKey(comp)]"
           :ignore-variables="[]"
           :target-namespace="''"
@@ -44,7 +44,7 @@ import { useT } from '../../../composables/useT';
 import yaml from 'js-yaml';
 import ValuesStep from './ValuesStep.vue';
 import { fetchChartDefaultValues } from '../../../services/rancher-apps';
-import { applyFallbackQuestions } from '../../../utils/fallback-questions';
+import { resolveComponentQuestions } from '../../../utils/blueprint-questions-resolve';
 import type { BlueprintComponent } from '../../../types/blueprint-types';
 
 interface Props { components: BlueprintComponent[] }
@@ -74,6 +74,21 @@ const compValues = ref<Record<string, Record<string, any>>>(
 // never refetch.
 function chartInfoKey(comp: { chartName: string; chartVersion: string }): string {
   return `${comp.chartName}@${comp.chartVersion}`;
+}
+
+// Applies the native/authored/fallback questions precedence (see
+// blueprint-questions-resolve.ts) on top of the raw chart-info cached in
+// versionInfoMap, so the cache itself always holds the untouched
+// catalog/getVersionInfo response — needed to tell "chart shipped native
+// questions" apart from "an author supplied them on the Blueprint CR".
+function resolvedInfoFor(comp: BlueprintComponent): any {
+  const rawInfo = versionInfoMap.value[chartInfoKey(comp)];
+  if (!rawInfo) return rawInfo;
+
+  return {
+    ...rawInfo,
+    questions: resolveComponentQuestions(rawInfo.questions, comp.questions, comp.chartName, rawInfo.values),
+  };
 }
 
 // Load info for the first panel on mount.
@@ -111,13 +126,12 @@ async function loadChartInfo(chartName: string, chartRepo: string, chartVersion:
       chartName,
       versionName: chartVersion,
     });
-    const info = applyFallbackQuestions(rawInfo, chartName);
-    versionInfoMap.value = { ...versionInfoMap.value, [key]: info };
+    versionInfoMap.value = { ...versionInfoMap.value, [key]: rawInfo };
     questionsLoadingMap.value = { ...questionsLoadingMap.value, [key]: false };
 
     // Populate initial values only if not already set.
     if (!Object.keys(compValues.value[chartName] || {}).length) {
-      await applyDefaults(chartName, chartRepo, chartVersion, info);
+      await applyDefaults(chartName, chartRepo, chartVersion, rawInfo);
     }
   } catch {
     questionsLoadingMap.value = { ...questionsLoadingMap.value, [key]: false };

@@ -40,8 +40,8 @@
           :chart-version="comp.chartVersion"
           :loading-values="!!loadingMap[chartInfoKey(comp)]"
           :version-dirty="false"
-          :has-questions="!!(versionInfoMap[chartInfoKey(comp)]?.questions)"
-          :questions-source="versionInfoMap[chartInfoKey(comp)] || null"
+          :has-questions="!!(resolvedInfoFor(comp)?.questions)"
+          :questions-source="resolvedInfoFor(comp) || null"
           :questions-loading="!!questionsLoadingMap[chartInfoKey(comp)]"
           :ignore-variables="[]"
           :target-namespace="''"
@@ -62,7 +62,7 @@ import { Banner } from '@components/Banner';
 import { Checkbox } from '@components/Form/Checkbox';
 import ValuesStep from './ValuesStep.vue';
 import { seedComponentValues, seedComponentEnabled, diffComponentOverrides, customizedComponentNames, resolveInitialFormState } from '../../../utils/blueprint-customize';
-import { applyFallbackQuestions } from '../../../utils/fallback-questions';
+import { resolveComponentQuestions } from '../../../utils/blueprint-questions-resolve';
 import type { BlueprintComponent } from '../../../types/blueprint-types';
 import type { ComponentValueOverride } from '../../../types/aiworkload-types';
 
@@ -142,6 +142,21 @@ function chartInfoKey(comp: { chartName: string; chartVersion: string }): string
   return `${comp.chartName}@${comp.chartVersion}`;
 }
 
+// Applies the native/authored/fallback questions precedence (see
+// blueprint-questions-resolve.ts) on top of the raw chart-info cached in
+// versionInfoMap, so the cache itself always holds the untouched
+// catalog/getVersionInfo response — needed to tell "chart shipped native
+// questions" apart from "an author supplied them on the Blueprint CR".
+function resolvedInfoFor(comp: BlueprintComponent): any {
+  const rawInfo = versionInfoMap.value[chartInfoKey(comp)];
+  if (!rawInfo) return rawInfo;
+
+  return {
+    ...rawInfo,
+    questions: resolveComponentQuestions(rawInfo.questions, comp.questions, comp.chartName, rawInfo.values),
+  };
+}
+
 if (props.components.length > 0) {
   const first = props.components[0];
   loadChartInfo(first.chartName, first.chartRepo, first.chartVersion);
@@ -171,8 +186,7 @@ async function loadChartInfo(chartName: string, chartRepo: string, chartVersion:
     const rawInfo = await store.dispatch('catalog/getVersionInfo', {
       repoType: 'cluster', repoName: chartRepo, chartName, versionName: chartVersion,
     });
-    const info = applyFallbackQuestions(rawInfo, chartName);
-    versionInfoMap.value = { ...versionInfoMap.value, [key]: info };
+    versionInfoMap.value = { ...versionInfoMap.value, [key]: rawInfo };
   } catch {
     // Form view falls back to YAML when questions can't be loaded.
   } finally {
