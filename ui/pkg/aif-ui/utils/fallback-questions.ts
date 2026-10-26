@@ -1,13 +1,4 @@
-// Standard Helm questions.yaml shape (the subset @shell/components/Questions reads).
-export interface QuestionDef {
-  variable:     string;
-  label:        string;
-  type:         string;
-  default?:     any;
-  description?: string;
-  group?:       string;
-  show_if?:     string;
-}
+import type { QuestionDef } from './blueprint-questions-schema';
 
 // Hand-curated forms for charts AIF bundles into its own blueprints but that ship
 // without their own questions.yaml. Fields are drawn from the defaults baked into

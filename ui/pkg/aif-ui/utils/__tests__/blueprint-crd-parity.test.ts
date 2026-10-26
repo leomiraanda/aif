@@ -5,7 +5,9 @@ import yaml from 'js-yaml';
 import { browserSafeBlueprintIcon } from '../catalog-logo';
 import { BLUEPRINT_ORIGINS, BlueprintComponent } from '../../types/blueprint-types';
 
-const sample: BlueprintComponent = { chartRepo: 'r', chartName: 'n', chartVersion: '1.0.0', questions: [{ foo: 'bar' }] };
+const sample: BlueprintComponent = {
+  chartRepo: 'r', chartName: 'n', chartVersion: '1.0.0', questions: [{ variable: 'foo', label: 'Foo', type: 'string' }],
+};
 
 // The UI must never render an icon the API server would reject, and the CRD
 // must reject what the UI treats as unsafe at the scheme level. The UI adds

@@ -1,3 +1,5 @@
+import type { QuestionDef } from '../utils/blueprint-questions-schema';
+
 export type BlueprintComponentVendor = 'suse' | 'nvidia';
 
 export interface BlueprintComponent {
@@ -6,7 +8,7 @@ export interface BlueprintComponent {
   chartVersion:     string;
   vendor?:          BlueprintComponentVendor;
   values?:          Record<string, any>;
-  questions?:       Record<string, any>[];
+  questions?:       QuestionDef[];
   targetNamespace?: string;
   releaseName?:     string;
 }
