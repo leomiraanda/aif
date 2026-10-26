@@ -514,6 +514,14 @@ suseai:
       removeRule: Remove condition
       addCondition: + Add condition
       clear: Clear
+    questionsEditor:
+      addQuestion: + Add question
+      addSubquestion: + Add subquestion
+      deleteQuestion: Delete question
+      showIf: Show if
+      subquestionsIf: Show subquestions if
+      blockedDelete: 'Cannot delete — still referenced by: {labels}'
+      preview: Preview
     errors:
       allComponentsDisabled: At least one component must remain enabled.
     warnings:
