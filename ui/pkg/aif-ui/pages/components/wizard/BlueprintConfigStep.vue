@@ -14,6 +14,15 @@
       </div>
 
       <div v-if="expandedPanels.has(idx)" class="accordion-body">
+        <Banner
+          v-if="comp.questions?.length && props.authoredQuestionsVersion[comp.chartName] !== comp.chartVersion"
+          color="warning"
+          data-testid="questions-version-review-banner"
+          class="mb-20"
+        >
+          {{ t('suseai.wizard.questionsEditor.versionReviewBanner', 'This chart version changed — review your custom fields.') }}
+        </Banner>
+
         <ValuesStep
           :key="`${comp.chartName}-${valuesKeys[comp.chartName] || 0}`"
           :values="compValues[comp.chartName] || {}"
@@ -80,6 +89,7 @@
 import { ref, getCurrentInstance } from 'vue';
 import { useT } from '../../../composables/useT';
 import yaml from 'js-yaml';
+import { Banner } from '@components/Banner';
 import ValuesStep from './ValuesStep.vue';
 import QuestionsAuthoringEditor from './QuestionsAuthoringEditor.vue';
 import { fetchChartDefaultValues } from '../../../services/rancher-apps';
@@ -88,10 +98,16 @@ import { fromStoredQuestions, toStoredQuestions } from '../../../utils/blueprint
 import type { AuthoredQuestion } from '../../../utils/blueprint-questions-schema';
 import type { BlueprintComponent } from '../../../types/blueprint-types';
 
-interface Props { components: BlueprintComponent[] }
-interface Emits { (e: 'update:components', v: BlueprintComponent[]): void }
+interface Props {
+  components: BlueprintComponent[];
+  authoredQuestionsVersion?: Record<string, string>;
+}
+interface Emits {
+  (e: 'update:components', v: BlueprintComponent[]): void;
+  (e: 'update:authoredQuestionsVersion', v: Record<string, string>): void;
+}
 
-const props = defineProps<Props>();
+const props = withDefaults(defineProps<Props>(), { authoredQuestionsVersion: () => ({}) });
 const emit  = defineEmits<Emits>();
 
 const vm    = getCurrentInstance()!.proxy as any;
@@ -252,10 +268,15 @@ function closeAuthoring(idx: number) {
 // the result is empty, matching the CRD's `omitempty` field.
 function saveAuthoring(idx: number) {
   const stored = toStoredQuestions(authoringQuestions.value[idx] || []);
+  const comp = props.components[idx];
 
   emit('update:components', props.components.map((c, i) => (i === idx
     ? { ...c, questions: stored.length ? stored : undefined }
     : c)));
+
+  if (comp) {
+    emit('update:authoredQuestionsVersion', { ...props.authoredQuestionsVersion, [comp.chartName]: comp.chartVersion });
+  }
 
   closeAuthoring(idx);
 }

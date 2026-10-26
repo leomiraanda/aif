@@ -523,6 +523,7 @@ suseai:
       subquestionsIf: Show subquestions if
       blockedDelete: 'Cannot delete — still referenced by: {labels}'
       preview: Preview
+      versionReviewBanner: This chart version changed — review your custom fields.
     errors:
       allComponentsDisabled: At least one component must remain enabled.
     warnings:

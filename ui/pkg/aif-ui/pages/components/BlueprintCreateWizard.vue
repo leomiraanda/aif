@@ -46,6 +46,15 @@ const components = ref(
   props.prefill?.components?.map(c => ({ ...c })) || []
 );
 
+// Tracks, per chartName, the chartVersion that was current when that
+// component's `questions` were last authored/saved — so BlueprintConfigStep
+// can flag a review banner if a sibling step later bumps chartVersion out
+// from under an already-authored config form. Seeded from prefill so a
+// freshly-loaded edit/copy never starts flagged.
+const authoredQuestionsVersion = ref<Record<string, string>>(
+  Object.fromEntries((props.prefill?.components || []).filter(c => c.questions?.length).map(c => [c.chartName, c.chartVersion]))
+);
+
 const namespacesValid = computed(() => components.value.every((c) => {
   const ns = c.targetNamespace?.trim();
   return !ns || (ns.length <= 63 && DNS_LABEL_PATTERN.test(ns));
@@ -180,7 +189,9 @@ const reviewForm = computed<BlueprintSpec>(() => buildBlueprintSpec(basicInfo.va
         <BlueprintConfigStep
           v-else-if="currentStep === 2"
           :components="components"
+          :authored-questions-version="authoredQuestionsVersion"
           @update:components="components = $event"
+          @update:authored-questions-version="authoredQuestionsVersion = $event"
         />
         <BlueprintReviewCreateStep
           v-else-if="currentStep === 3"

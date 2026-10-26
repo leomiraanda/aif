@@ -46,6 +46,20 @@ function getVersionInfoCalls(dispatch: ReturnType<typeof vi.fn>) {
   return dispatch.mock.calls.filter(([action]) => action === 'catalog/getVersionInfo');
 }
 
+function mountWithRawInfo(rawInfo: Record<string, any>, component: BlueprintComponent, authoredQuestionsVersion: Record<string, string> = {}) {
+  const dispatch = vi.fn((action: string) => {
+    if (action === 'catalog/load') return Promise.resolve();
+    if (action === 'catalog/getVersionInfo') return Promise.resolve(rawInfo);
+    return Promise.resolve();
+  });
+  const store = { getters: {}, dispatch };
+
+  return mount(BlueprintConfigStep, {
+    props: { components: [component], authoredQuestionsVersion },
+    global: { config: { globalProperties: { $store: store } } },
+  });
+}
+
 describe('BlueprintConfigStep - chart-info cache key', () => {
   it('refetches catalog/getVersionInfo when a component\'s chart version changes while its panel is re-expanded', async () => {
     const dispatch = vi.fn((action: string) => {
@@ -114,20 +128,6 @@ describe('BlueprintConfigStep - questions precedence', () => {
 });
 
 describe('BlueprintConfigStep - questions authoring affordance', () => {
-  function mountWithRawInfo(rawInfo: Record<string, any>, component: BlueprintComponent) {
-    const dispatch = vi.fn((action: string) => {
-      if (action === 'catalog/load') return Promise.resolve();
-      if (action === 'catalog/getVersionInfo') return Promise.resolve(rawInfo);
-      return Promise.resolve();
-    });
-    const store = { getters: {}, dispatch };
-
-    return mount(BlueprintConfigStep, {
-      props: { components: [component] },
-      global: { config: { globalProperties: { $store: store } } },
-    });
-  }
-
   it('shows a "Build a configuration form" affordance when the chart has no native questions', async () => {
     const wrapper = mountWithRawInfo({ values: { replicas: 1 } }, makeComponent('1.0.0'));
     await flushPromises();
@@ -185,6 +185,52 @@ describe('BlueprintConfigStep - questions authoring affordance', () => {
     expect(emitted).toBeTruthy();
     const payload = emitted![emitted!.length - 1][0] as BlueprintComponent[];
     expect(payload[0].questions).toEqual(toStoredQuestions(authored));
+
+    wrapper.unmount();
+  });
+});
+
+describe('BlueprintConfigStep - version-bump review banner', () => {
+  it('shows a review banner when chartVersion differs from authoredQuestionsVersion for a component with authored questions', async () => {
+    const authoredQuestions = [{ variable: 'authored', label: 'Authored', type: 'string' }];
+    const component = makeComponent('2.0.0', { questions: authoredQuestions });
+    const wrapper = mountWithRawInfo({ values: {} }, component, { 'chart-a': '1.0.0' });
+    await flushPromises();
+
+    expect(wrapper.find('[data-testid="questions-version-review-banner"]').exists()).toBe(true);
+
+    wrapper.unmount();
+  });
+
+  it('does not show the banner for a component with no authored questions, regardless of version', async () => {
+    const component = makeComponent('2.0.0');
+    const wrapper = mountWithRawInfo({ values: {} }, component, { 'chart-a': '1.0.0' });
+    await flushPromises();
+
+    expect(wrapper.find('[data-testid="questions-version-review-banner"]').exists()).toBe(false);
+
+    wrapper.unmount();
+  });
+
+  it('saving from the authoring editor updates authoredQuestionsVersion to the current chartVersion', async () => {
+    const component = makeComponent('1.0.0');
+    const wrapper = mountWithRawInfo({ values: {} }, component, {});
+    await flushPromises();
+
+    await wrapper.get('[data-testid="build-questions-form"]').trigger('click');
+
+    const editor = wrapper.findComponent({ name: 'QuestionsAuthoringEditor' });
+    const authored: AuthoredQuestion[] = [
+      { id: 'q-1', variable: 'newVar', label: 'New Var', type: 'string' },
+    ];
+    await editor.vm.$emit('update:modelValue', authored);
+
+    await wrapper.get('[data-testid="save-questions-form"]').trigger('click');
+
+    const emitted = wrapper.emitted('update:authoredQuestionsVersion');
+    expect(emitted).toBeTruthy();
+    const payload = emitted![emitted!.length - 1][0] as Record<string, string>;
+    expect(payload).toEqual({ 'chart-a': '1.0.0' });
 
     wrapper.unmount();
   });
