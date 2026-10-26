@@ -506,6 +506,14 @@ suseai:
       options: Options
       addOption: + Add option
       removeOption: Remove option
+    showIf:
+      field: Field
+      operator: Operator
+      value: Value
+      combinator: Match
+      removeRule: Remove condition
+      addCondition: + Add condition
+      clear: Clear
     errors:
       allComponentsDisabled: At least one component must remain enabled.
     warnings:
