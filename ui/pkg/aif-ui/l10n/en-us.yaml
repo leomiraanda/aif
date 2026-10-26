@@ -496,6 +496,16 @@ suseai:
       includeComponent: Include
       componentExcluded: Excluded — this component will not be deployed.
       excluded: Excluded
+    questionRow:
+      variable: Variable
+      label: Label
+      type: Type
+      description: Description
+      group: Group
+      default: Default value
+      options: Options
+      addOption: + Add option
+      removeOption: Remove option
     errors:
       allComponentsDisabled: At least one component must remain enabled.
     warnings:
