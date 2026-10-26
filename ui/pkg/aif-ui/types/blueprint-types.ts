@@ -6,6 +6,7 @@ export interface BlueprintComponent {
   chartVersion:     string;
   vendor?:          BlueprintComponentVendor;
   values?:          Record<string, any>;
+  questions?:       Record<string, any>[];
   targetNamespace?: string;
   releaseName?:     string;
 }

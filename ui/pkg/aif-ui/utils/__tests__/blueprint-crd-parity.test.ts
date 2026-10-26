@@ -3,7 +3,9 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import yaml from 'js-yaml';
 import { browserSafeBlueprintIcon } from '../catalog-logo';
-import { BLUEPRINT_ORIGINS } from '../../types/blueprint-types';
+import { BLUEPRINT_ORIGINS, BlueprintComponent } from '../../types/blueprint-types';
+
+const sample: BlueprintComponent = { chartRepo: 'r', chartName: 'n', chartVersion: '1.0.0', questions: [{ foo: 'bar' }] };
 
 // The UI must never render an icon the API server would reject, and the CRD
 // must reject what the UI treats as unsafe at the scheme level. The UI adds
@@ -34,6 +36,10 @@ const corpus = [
 ];
 
 describe('blueprint icon CRD parity', () => {
+  it('sample BlueprintComponent is valid', () => {
+    expect(sample.chartName).toBe('n');
+  });
+
   it('limits icon size to 16 KB', () => {
     expect(iconSchema.maxLength).toBe(16384);
   });
@@ -56,5 +62,11 @@ describe('blueprint icon CRD parity', () => {
 describe('blueprint source CRD parity', () => {
   it('matches the CRD source enum', () => {
     expect([...BLUEPRINT_ORIGINS].sort()).toEqual([...specProps.source.enum].sort());
+  });
+});
+
+describe('blueprint component CRD parity', () => {
+  it('questions field exists in CRD', () => {
+    expect(specProps.components.items.properties.questions).toBeDefined();
   });
 });
