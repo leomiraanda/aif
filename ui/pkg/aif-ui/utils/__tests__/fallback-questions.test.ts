@@ -1,51 +1,18 @@
 import { describe, it, expect } from 'vitest';
 import { getFallbackQuestions, applyFallbackQuestions } from '../fallback-questions';
 
-describe('getFallbackQuestions — curated charts', () => {
-  it('returns curated questions for ollama, ignoring any values passed in', () => {
-    const result = getFallbackQuestions('ollama', { replicaCount: 7 });
-
-    expect(result).not.toBeNull();
-    const variables = result!.questions.map((q) => q.variable);
-    expect(variables).toContain('replicaCount');
-    expect(variables).toContain('ollama.models.pull');
-    expect(variables).toContain('persistentVolume.size');
-
-    const replicaCount = result!.questions.find((q) => q.variable === 'replicaCount');
-    expect(replicaCount).toMatchObject({ type: 'int', default: 1 });
-  });
-
-  it('returns curated questions for open-webui', () => {
-    const result = getFallbackQuestions('open-webui', undefined);
-
-    expect(result).not.toBeNull();
-    const ingressHost = result!.questions.find((q) => q.variable === 'ingress.host');
-    expect(ingressHost).toMatchObject({ type: 'string', show_if: 'ingress.enabled=true' });
-  });
-
-  it('returns curated questions for open-webui-mcpo', () => {
-    const result = getFallbackQuestions('open-webui-mcpo', undefined);
-
-    expect(result).not.toBeNull();
-    const variables = result!.questions.map((q) => q.variable);
-    expect(variables).toContain('config.mcpServers');
-  });
-});
-
-describe('getFallbackQuestions — generic fallback for uncurated charts', () => {
-  it('returns null when there is no curated entry and no values to derive from', () => {
+describe('getFallbackQuestions — generic fallback', () => {
+  it('returns null when there are no values to derive from', () => {
     expect(getFallbackQuestions('some-nvidia-chart', undefined)).toBeNull();
     expect(getFallbackQuestions('some-nvidia-chart', {})).toBeNull();
   });
 
-  it('infers one question per top-level key, typed from the JS value', () => {
+  it('infers one question per top-level primitive key, typed and defaulted from the JS value', () => {
     const result = getFallbackQuestions('some-nvidia-chart', {
       enabled:      true,
       replicaCount: 3,
       cpuLimit:     0.5,
       name:         'foo',
-      tags:         ['a', 'b'],
-      resources:    { limits: {} },
     });
 
     expect(result).not.toBeNull();
@@ -55,8 +22,6 @@ describe('getFallbackQuestions — generic fallback for uncurated charts', () =>
     expect(byVariable.replicaCount).toMatchObject({ type: 'int', default: 3 });
     expect(byVariable.cpuLimit).toMatchObject({ type: 'float', default: 0.5 });
     expect(byVariable.name).toMatchObject({ type: 'string', default: 'foo' });
-    expect(byVariable.tags).toMatchObject({ type: 'yaml' });
-    expect(byVariable.resources).toMatchObject({ type: 'yaml' });
   });
 
   it('humanizes camelCase keys into labels', () => {
@@ -64,34 +29,62 @@ describe('getFallbackQuestions — generic fallback for uncurated charts', () =>
 
     expect(result!.questions[0]).toMatchObject({ variable: 'storageClassName', label: 'Storage Class Name' });
   });
+
+  it('flattens a nested object into one question per leaf, keyed by dot-path', () => {
+    const result = getFallbackQuestions('some-nvidia-chart', {
+      ingress: { enabled: true, host: 'example.com' },
+    });
+
+    expect(result).not.toBeNull();
+    const byVariable = Object.fromEntries(result!.questions.map((q) => [q.variable, q]));
+
+    expect(byVariable['ingress.enabled']).toMatchObject({ type: 'boolean', default: true, label: 'Ingress Enabled' });
+    expect(byVariable['ingress.host']).toMatchObject({ type: 'string', default: 'example.com', label: 'Ingress Host' });
+  });
+
+  it('recurses through arbitrarily deep nesting', () => {
+    const result = getFallbackQuestions('some-nvidia-chart', {
+      websocket: { redis: { service: { port: 6379 } } },
+    });
+
+    expect(result!.questions).toMatchObject([
+      { variable: 'websocket.redis.service.port', label: 'Websocket Redis Service Port', type: 'int', default: 6379 },
+    ]);
+  });
+
+  it('produces no question for an object with no primitive leaves', () => {
+    const result = getFallbackQuestions('some-nvidia-chart', { affinity: {} });
+
+    expect(result!.questions).toEqual([]);
+  });
+
+  it('turns an array into a single yaml-typed question, regardless of item shape', () => {
+    const result = getFallbackQuestions('some-nvidia-chart', {
+      tags:         ['a', 'b'],
+      extraEnvVars: [{ name: 'X', value: 'Y' }],
+    });
+
+    const byVariable = Object.fromEntries(result!.questions.map((q) => [q.variable, q]));
+
+    expect(byVariable.tags).toMatchObject({ type: 'yaml', default: ['a', 'b'] });
+    expect(byVariable.extraEnvVars).toMatchObject({ type: 'yaml', default: [{ name: 'X', value: 'Y' }] });
+  });
+
+  it('groups generated questions using the existing keyword-based grouping', () => {
+    const result = getFallbackQuestions('some-nvidia-chart', {
+      ingress: { host: 'example.com' },
+    });
+
+    expect(result!.questions[0]).toMatchObject({ group: 'Networking' });
+  });
 });
 
 describe('applyFallbackQuestions', () => {
-  it('leaves chart-info untouched when it already has its own questions', () => {
-    const info = { values: { a: 1 }, questions: [{ variable: 'a', label: 'A', type: 'int' }] };
+  it('always leaves chart-info untouched — fallback generation is Blueprint-builder-only, not for standard chart installs', () => {
+    const withNativeQuestions = { values: { a: 1 }, questions: [{ variable: 'a', label: 'A', type: 'int' }] };
+    const withoutNativeQuestions = { values: { enabled: true } };
 
-    expect(applyFallbackQuestions(info, 'ollama')).toBe(info);
-  });
-
-  it('splices in the curated questions when the chart has none of its own', () => {
-    const info = { values: {} };
-
-    const result = applyFallbackQuestions(info, 'ollama');
-
-    expect(result.questions?.map((q: any) => q.variable)).toContain('replicaCount');
-  });
-
-  it('splices in generic questions derived from values when there is no curated entry', () => {
-    const info = { values: { enabled: true } };
-
-    const result = applyFallbackQuestions(info, 'some-nvidia-chart');
-
-    expect(result.questions).toMatchObject([{ variable: 'enabled', type: 'boolean' }]);
-  });
-
-  it('leaves chart-info untouched when there is neither a curated nor a generic fallback', () => {
-    const info = { values: {} };
-
-    expect(applyFallbackQuestions(info, 'some-nvidia-chart')).toBe(info);
+    expect(applyFallbackQuestions(withNativeQuestions, 'ollama')).toBe(withNativeQuestions);
+    expect(applyFallbackQuestions(withoutNativeQuestions, 'some-nvidia-chart')).toBe(withoutNativeQuestions);
   });
 });

@@ -42,7 +42,7 @@
 
     <button
       type="button"
-      class="btn-add-question"
+      class="btn role-tertiary add mb-20"
       data-testid="add-question"
       @click="addQuestion"
     >
@@ -133,7 +133,7 @@ const previewValuesLocal = ref<Record<string, any>>(cloneValues(props.previewVal
 
 watch(() => props.previewValues, (values) => {
   previewValuesLocal.value = cloneValues(values);
-});
+}, { deep: true });
 
 const ISSUE_MESSAGES: Record<QuestionIssueKind, [string, string]> = {
   emptyVariable:     ['suseai.wizard.questionsEditor.issues.emptyVariable', '{name}: variable is required'],
@@ -252,13 +252,13 @@ const QuestionNode = defineComponent({
         h('div', { class: 'question-node-actions' }, [
           h('button', {
             type: 'button',
-            class: 'btn-add-subquestion',
+            class: 'btn role-tertiary add',
             'data-testid': 'add-subquestion',
             onClick: addSubquestion,
           }, nodeT('suseai.wizard.questionsEditor.addSubquestion', '+ Add subquestion')),
           h('button', {
             type: 'button',
-            class: 'btn-delete-question',
+            class: 'btn role-link text-error',
             'data-testid': 'delete-question',
             'aria-label': nodeT('suseai.wizard.questionsEditor.deleteQuestion', 'Delete question'),
             onClick: () => nodeEmit('delete', question.id),
@@ -304,15 +304,6 @@ const QuestionNode = defineComponent({
     padding: 12px;
     margin-bottom: 12px;
   }
-  .btn-add-question {
-    background: none;
-    border: none;
-    cursor: pointer;
-    color: var(--primary);
-    font-size: 13px;
-    padding: 0;
-    margin-bottom: 20px;
-  }
   .validation-issues {
     margin: 0;
     padding-left: 18px;
@@ -334,20 +325,6 @@ const QuestionNode = defineComponent({
     display: flex;
     gap: 12px;
     margin-top: 10px;
-  }
-  .btn-add-subquestion,
-  .btn-delete-question {
-    background: none;
-    border: none;
-    cursor: pointer;
-    font-size: 13px;
-    padding: 0;
-  }
-  .btn-add-subquestion {
-    color: var(--primary);
-  }
-  .btn-delete-question {
-    color: var(--error);
   }
   .subquestions-list {
     margin-left: 20px;

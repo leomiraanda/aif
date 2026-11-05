@@ -4,7 +4,7 @@
 annotations:
   licenses: Apache-2.0
   helm.sh/images: |
-    - image: ghcr.io/suse/aif-ui:2.3.1-rc.1
+    - image: ghcr.io/leomiraanda/aif-ui:2.3.1-rc.1
       name: aif-ui
   catalog.cattle.io/display-name: SUSE AI Factory
   catalog.cattle.io/namespace: cattle-ui-plugin-system
