@@ -131,9 +131,9 @@ jobs:
             .version = strenv(VERSION) |
             .appVersion = strenv(VERSION) |
             .annotations."helm.sh/images" =
-              "- image: ghcr.io/suse/aif-operator:" + strenv(VERSION) +
+              "- image: ghcr.io/leomiraanda/aif-operator:" + strenv(VERSION) +
               "\n  name: aif-operator" +
-              "\n- image: ghcr.io/suse/aif-ui:" + strenv(VERSION) +
+              "\n- image: ghcr.io/leomiraanda/aif-ui:" + strenv(VERSION) +
               "\n  name: aif-ui" +
               "\n- image: " + strenv(KUBECTL_IMAGE) +
               "\n  name: kubectl\n"
@@ -154,7 +154,7 @@ jobs:
           yq -i '
             .version = strenv(VERSION) |
             .appVersion = strenv(VERSION) |
-            .annotations."helm.sh/images" = "- image: ghcr.io/suse/aif-ui:" + strenv(VERSION) + "\n  name: aif-ui\n"
+            .annotations."helm.sh/images" = "- image: ghcr.io/leomiraanda/aif-ui:" + strenv(VERSION) + "\n  name: aif-ui\n"
           ' charts/aif-ui/Chart.yaml
 
           # update BuildTag in Chart.yaml
