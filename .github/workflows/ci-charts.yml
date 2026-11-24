@@ -67,7 +67,7 @@ jobs:
           appVersion=$(yq -r '.appVersion' charts/aif-ui/Chart.yaml)
           annotated=$(yq -r '.annotations."helm.sh/images"' charts/aif-ui/Chart.yaml \
                         | yq -r '.[0].image')
-          expected="ghcr.io/suse/aif-ui:${appVersion}"
+          expected="ghcr.io/leomiraanda/aif-ui:${appVersion}"
           if [ "$annotated" != "$expected" ]; then
             echo "::error::helm.sh/images annotation is '${annotated}' but appVersion implies '${expected}'"
             exit 1
